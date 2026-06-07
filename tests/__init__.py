@@ -1,0 +1,2 @@
+"""Smoke tests for collectors."""
+

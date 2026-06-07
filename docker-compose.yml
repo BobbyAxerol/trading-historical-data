@@ -1,0 +1,73 @@
+name: get_data
+
+x-get-data-service: &get-data-service
+  image: get_data-collectors:latest
+  restart: unless-stopped
+  volumes:
+    - ./storage:/app/storage
+    - ./state:/app/state
+    - ./logs:/app/logs
+
+services:
+  crypto-1m-live:
+    <<: *get-data-service
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    command: ["python", "-m", "collectors.crypto_1m", "--mode", "live"]
+    environment:
+      TZ: UTC
+      DATA_ROOT: /app/storage
+      STATE_ROOT: /app/state
+      LOG_ROOT: /app/logs
+
+  vn-daily:
+    <<: *get-data-service
+    command: ["python", "-m", "collectors.vn_daily", "--mode", "live", "--schedule", "16:30"]
+    environment:
+      TZ: Asia/Ho_Chi_Minh
+      DATA_ROOT: /app/storage
+      STATE_ROOT: /app/state
+      LOG_ROOT: /app/logs
+      VNSTOCK_API_KEY: ${VNSTOCK_API_KEY:-}
+
+  vn-intraday-stocks:
+    <<: *get-data-service
+    command: ["python", "-m", "collectors.vn_intraday_vnstock", "--mode", "live"]
+    environment:
+      TZ: Asia/Ho_Chi_Minh
+      DATA_ROOT: /app/storage
+      STATE_ROOT: /app/state
+      LOG_ROOT: /app/logs
+      VNSTOCK_API_KEY: ${VNSTOCK_API_KEY:-}
+
+  vn30f1m-dnse:
+    <<: *get-data-service
+    command: ["python", "-m", "collectors.vn_intraday_dnse", "--mode", "live", "--symbols", "VN30F1M"]
+    environment:
+      TZ: Asia/Ho_Chi_Minh
+      DATA_ROOT: /app/storage
+      STATE_ROOT: /app/state
+      LOG_ROOT: /app/logs
+      DNSE_API_KEY: ${DNSE_API_KEY:-}
+      DNSE_API_SECRET_KEY: ${DNSE_API_SECRET_KEY:-}
+
+  options-binance-5m:
+    <<: *get-data-service
+    command: ["python", "-m", "collectors.binance_options_snapshot", "--mode", "live", "--interval-minutes", "5"]
+    environment:
+      TZ: UTC
+      DATA_ROOT: /app/storage
+      STATE_ROOT: /app/state
+      LOG_ROOT: /app/logs
+
+  seed-existing-history:
+    <<: *get-data-service
+    profiles: ["bootstrap"]
+    restart: "no"
+    command: ["python", "-m", "collectors.seed_storage_from_existing", "--dataset", "all"]
+    environment:
+      TZ: UTC
+      DATA_ROOT: /app/storage
+      STATE_ROOT: /app/state
+      LOG_ROOT: /app/logs
