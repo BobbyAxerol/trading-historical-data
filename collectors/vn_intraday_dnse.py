@@ -199,12 +199,21 @@ def run_symbol(symbol: str, *, start_default: str, limiter: SlidingWindowRateLim
     logger.info("%s DNSE wrote %s rows latest=%s", symbol, result["rows_written"], result["latest_time"])
 
 
+def should_run(schedule_hhmm: str, last_run_date: str | None) -> bool:
+    now = vn_now()
+    if last_run_date == now.strftime("%Y-%m-%d"):
+        return False
+    hh, mm = [int(x) for x in schedule_hhmm.split(":")]
+    return now.hour > hh or (now.hour == hh and now.minute >= mm)
+
+
 def main() -> None:
     load_environment()
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=["once", "live"], default="once")
     parser.add_argument("--symbols", default="VN30F1M")
     parser.add_argument("--backfill-start", default=None)
+    parser.add_argument("--schedule", default=None)
     args = parser.parse_args()
 
     config = load_yaml("symbols.vn_intraday.yml")
@@ -213,8 +222,25 @@ def main() -> None:
     logger = setup_logging(DATASET)
     heartbeat = Heartbeat(DATASET)
     limiter = SlidingWindowRateLimiter(max_calls=config.get("dnse_max_calls_per_hour", 900), period_seconds=3600)
+    last_run_date: str | None = None
 
     while True:
+        if args.schedule:
+            if should_run(args.schedule, last_run_date):
+                for symbol in symbols:
+                    try:
+                        run_symbol(symbol, start_default=start_default, limiter=limiter, logger=logger)
+                        heartbeat.beat(symbol=symbol)
+                    except Exception as exc:
+                        Manifest(DATASET).update_symbol(symbol, last_error=str(exc), last_failed_at=utc_now_iso())
+                        logger.exception("%s DNSE failed", symbol)
+                        heartbeat.beat(status="error", symbol=symbol, error=str(exc))
+                last_run_date = vn_now().strftime("%Y-%m-%d")
+            if args.mode != "live":
+                break
+            time.sleep(300)
+            continue
+
         if args.mode == "live" and not is_derivative_session(vn_now()):
             sleep_for = seconds_until_next_session(derivative=True)
             logger.info("VN derivatives market closed, sleeping %ss", sleep_for)
@@ -232,6 +258,7 @@ def main() -> None:
         if args.mode != "live":
             break
         time.sleep(65 + random.randint(0, 5))
+
 
 
 if __name__ == "__main__":

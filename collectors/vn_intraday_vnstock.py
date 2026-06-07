@@ -147,6 +147,14 @@ def run_symbol(symbol: str, *, source: str, start_default: str, limiter: Sliding
     logger.info("%s 1m wrote %s rows latest=%s", symbol, result["rows_written"], result["latest_time"])
 
 
+def should_run(schedule_hhmm: str, last_run_date: str | None) -> bool:
+    now = vn_now()
+    if last_run_date == now.strftime("%Y-%m-%d"):
+        return False
+    hh, mm = [int(x) for x in schedule_hhmm.split(":")]
+    return now.hour > hh or (now.hour == hh and now.minute >= mm)
+
+
 def main() -> None:
     load_environment()
     parser = argparse.ArgumentParser()
@@ -155,6 +163,7 @@ def main() -> None:
     parser.add_argument("--source", default="KBS")
     parser.add_argument("--max-symbols", type=int, default=0)
     parser.add_argument("--backfill-start", default=None)
+    parser.add_argument("--schedule", default=None)
     args = parser.parse_args()
 
     config = load_yaml("symbols.vn_intraday.yml")
@@ -166,8 +175,25 @@ def main() -> None:
     heartbeat = Heartbeat(DATASET)
     limiter = SlidingWindowRateLimiter(max_calls=config.get("vnstock_max_calls_per_minute", 18), period_seconds=60)
     authenticate()
+    last_run_date: str | None = None
 
     while True:
+        if args.schedule:
+            if should_run(args.schedule, last_run_date):
+                for symbol in symbols:
+                    try:
+                        run_symbol(symbol.strip().upper(), source=args.source, start_default=start_default, limiter=limiter, logger=logger)
+                        heartbeat.beat(symbol=symbol)
+                    except Exception as exc:
+                        Manifest(DATASET).update_symbol(symbol, last_error=str(exc), last_failed_at=utc_now_iso())
+                        logger.exception("%s 1m failed", symbol)
+                        heartbeat.beat(status="error", symbol=symbol, error=str(exc))
+                last_run_date = vn_now().strftime("%Y-%m-%d")
+            if args.mode != "live":
+                break
+            time.sleep(300)
+            continue
+
         if args.mode == "live" and not is_stock_session(vn_now()):
             sleep_for = seconds_until_next_session()
             logger.info("VN stock market closed, sleeping %ss", sleep_for)
@@ -186,6 +212,7 @@ def main() -> None:
         if args.mode != "live":
             break
         time.sleep(60)
+
 
 
 if __name__ == "__main__":
