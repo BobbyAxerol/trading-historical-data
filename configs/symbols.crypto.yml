@@ -1,0 +1,8 @@
+backfill_start: "2020-01-01"
+symbols:
+  - BTCUSDT
+  - ETHUSDT
+  - SOLUSDT
+  - BNBUSDT
+  - DOGEUSDT
+

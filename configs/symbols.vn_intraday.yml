@@ -1,0 +1,28 @@
+backfill_start: "2020-01-01"
+futures_backfill_start: "2024-05-01"
+vnstock_max_calls_per_minute: 18
+dnse_max_calls_per_hour: 900
+stocks:
+  - FPT
+  - ACB
+  - TCB
+  - BID
+  - CTG
+  - VCB
+  - HDB
+  - MBB
+  - TPB
+  - STB
+  - VIB
+  - VHM
+  - VIC
+  - VRE
+  - POW
+  - DIG
+  - HPG
+  - HSG
+  - PDR
+  - DGC
+futures:
+  - VN30F1M
+

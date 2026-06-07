@@ -1,0 +1,7 @@
+underlyings:
+  - BTC
+  - ETH
+max_expiries: 4
+min_abs_delta: 0.15
+max_abs_delta: 0.9
+

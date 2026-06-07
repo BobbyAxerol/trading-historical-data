@@ -1,0 +1,26 @@
+# Data storage
+storage/
+crypto_1m_data/
+data_stock/
+
+# Secrets / local configuration
+.env
+
+# Legacy scripts & notebooks
+legacy/
+
+# Logs and heartbeat states
+logs/
+state/
+
+# Python caching & build artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Temporary files
+*.corrupt
+*.tmp
