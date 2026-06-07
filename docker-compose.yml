@@ -33,7 +33,7 @@ services:
 
   vn-intraday-stocks:
     <<: *get-data-service
-    command: ["python", "-m", "collectors.vn_intraday_vnstock", "--mode", "live"]
+    command: ["python", "-m", "collectors.vn_intraday_vnstock", "--mode", "live", "--schedule", "16:30"]
     environment:
       TZ: Asia/Ho_Chi_Minh
       DATA_ROOT: /app/storage
@@ -43,7 +43,7 @@ services:
 
   vn30f1m-dnse:
     <<: *get-data-service
-    command: ["python", "-m", "collectors.vn_intraday_dnse", "--mode", "live", "--symbols", "VN30F1M"]
+    command: ["python", "-m", "collectors.vn_intraday_dnse", "--mode", "live", "--symbols", "VN30F1M", "--schedule", "16:30"]
     environment:
       TZ: Asia/Ho_Chi_Minh
       DATA_ROOT: /app/storage
@@ -55,6 +55,15 @@ services:
   options-binance-5m:
     <<: *get-data-service
     command: ["python", "-m", "collectors.binance_options_snapshot", "--mode", "live", "--interval-minutes", "5"]
+    environment:
+      TZ: UTC
+      DATA_ROOT: /app/storage
+      STATE_ROOT: /app/state
+      LOG_ROOT: /app/logs
+
+  binance-daily-matrix:
+    <<: *get-data-service
+    command: ["python", "-m", "collectors.binance_daily_matrix", "--mode", "live", "--schedule", "01:00"]
     environment:
       TZ: UTC
       DATA_ROOT: /app/storage
