@@ -150,8 +150,124 @@ PYTHONPATH=. python -m collectors.binance_daily_matrix --mode once --backfill-st
 
 ## 5. Tổ chức mã nguồn
 
+- **`data_loader.py`**: Module bộ nạp dữ liệu thống nhất (Unified Data Loader) cho các Alpha hoặc hệ thống khác import và gọi nạp dữ liệu.
 - **`collectors/`**: Chứa mã nguồn của các services chính.
 - **`collectors/common/`**: Thư viện dùng chung quản lý lịch, phân vùng lưu trữ, ghi tệp tin an toàn (atomic write), lock chống tranh chấp, retry và manifest.
 - **`configs/`**: Tệp tin cấu hình YAML chứa danh sách symbol cần chạy.
-- **`tests/`**: Các script kiểm thử nguồn kết nối và định dạng lưu trữ.
+- **`tests/`**: Các script kiểm thử (bao gồm unit tests cho data loader và smoke tests cho nguồn dữ liệu).
 - **`legacy/`**: Thư mục chứa các script và notebook kiểm thử cũ đã ngừng hoạt động (được cấu hình loại trừ trong `.gitignore`).
+
+---
+
+## 6. Bộ nạp dữ liệu SDK thống nhất (Unified Data Loader SDK)
+
+Để thuận tiện cho các mô hình Alpha hoặc các dự án khác sử dụng dữ liệu trực tiếp mà không cần tự xử lý cấu trúc phân vùng phức tạp hoặc cấu trúc ma trận xoay của storage mới, hệ thống cung cấp một SDK nạp dữ liệu thống nhất **[`data_loader.py`](data_loader.py)** tại thư mục gốc.
+
+Các lớp trong SDK tự động định tuyến (route) đường dẫn, ghép nối các tệp phân vùng, loại bỏ dữ liệu trùng, sắp xếp theo trình tự thời gian và thực hiện ép kiểu/chuẩn hoá timezone về naive datetime tương ứng.
+
+---
+
+### 6.1 Hướng dẫn Bind Mount & Import từ Thư mục Khác
+
+Khi chạy mô hình Alpha ở một thư mục độc lập khác trên hệ thống (hoặc trong một container khác), bạn thực hiện cấu hình theo các bước sau:
+
+#### Bước 1: Bind Mount Thư mục `_get_data`
+Cấu hình trong `docker-compose.yml` của dự án Alpha của bạn hoặc chạy lệnh docker run để mount thư mục `/root/bobby/pool_alpha/alphas_storage/_get_data` vào một đường dẫn bên trong container (ví dụ: `/app/market_data_sdk`):
+
+```yaml
+# docker-compose.yml của dự án Alpha
+services:
+  my-alpha-model:
+    image: my-alpha-image:latest
+    volumes:
+      - /root/bobby/pool_alpha/alphas_storage/_get_data:/app/market_data_sdk
+      # (Gắn thêm các thư mục code hoặc data khác của Alpha...)
+```
+
+#### Bước 2: Import SDK trong Python
+Bất kể bạn gọi file python từ đâu, bạn có thể nạp động SDK này vào `sys.path` hoặc sử dụng biến môi trường `PYTHONPATH`.
+
+```python
+import sys
+from pathlib import Path
+
+# Thêm đường dẫn mount của SDK vào đầu sys.path
+sys.path.insert(0, "/app/market_data_sdk")
+
+# Giờ bạn có thể import các Class Loader trực tiếp
+from data_loader import VnStock1m, CryptoDailyMatrix, load_data
+```
+
+Vì SDK sử dụng `Path(__file__).parent` để tự động định vị các tệp tin lưu trữ vật lý, việc định vị file sẽ tự động hoạt động chính xác tại thư mục được mount.
+
+---
+
+### 6.2 Các Class Loader Endpoints & Cách Sử Dụng
+
+SDK cung cấp các Class Reader chuyên biệt cho từng nguồn dữ liệu:
+
+| Lớp (Reader Class) | Dataset Target | Múi giờ Timezone (Naive Datetime) |
+| :--- | :--- | :--- |
+| `VnStock1m` | Dữ liệu nến 1m cổ phiếu Việt Nam | Múi giờ Việt Nam `Asia/Ho_Chi_Minh` |
+| `VnStockDaily` | Dữ liệu nến 1d (daily) cổ phiếu Việt Nam | Múi giờ Việt Nam `Asia/Ho_Chi_Minh` |
+| `VnFutures1m` | Dữ liệu nến 1m phái sinh Việt Nam | Múi giờ Việt Nam `Asia/Ho_Chi_Minh` |
+| `CryptoBinance1m` | Dữ liệu nến 1m Binance Futures | Múi giờ quốc tế `UTC` |
+| `CryptoDailyMatrix` | Dữ liệu Matrix xoay ngày Binance | Múi giờ quốc tế `UTC` |
+| `BinanceOptions5m` | Dữ liệu snapshot option 5m Binance | Múi giờ quốc tế `UTC` |
+
+#### Ví dụ gọi các Endpoint cụ thể:
+
+```python
+from data_loader import VnStock1m, VnStockDaily, CryptoDailyMatrix
+
+# 1. Gọi dữ liệu nến 1m của FPT & ACB trong 1 khoảng thời gian, giới hạn 1000 dòng
+df_1m = VnStock1m().load(
+    symbols=["FPT", "ACB"],
+    start_date="2026-06-01",
+    end_date="2026-06-07",
+    limit=1000,
+    check_val=True
+)
+
+# 2. Gọi dữ liệu Daily Stock của tất cả các mã Việt Nam
+df_daily_all = VnStockDaily().load(symbols=None)
+
+# 3. Gọi dữ liệu Matrix xoay đóng cửa (Close Price) của Top 400 Crypto
+# CryptoDailyMatrix trả về index=time, columns=symbols
+df_matrix = CryptoDailyMatrix().load(
+    feature="close",
+    symbols=["BTCUSDT", "ETHUSDT"],
+    start_date="2026-06-01",
+    limit=100
+)
+```
+
+**Các tham số chung hỗ trợ:**
+- `symbols`: Mã hoặc danh sách mã (ví dụ: `"FPT"`, `["FPT", "ACB"]`). Truyền `None` để tự động quét và tải toàn bộ mã hiện có.
+- `start_date` / `end_date`: Lọc khoảng thời gian (định dạng `YYYY-MM-DD` hoặc `YYYY-MM-DD HH:MM:SS`).
+- `limit`: Giới hạn tối đa số dòng trả về (lấy `N` dòng đầu tiên từ kết quả đã sắp xếp).
+- `check_val`: Mặc định `True`, tự động chạy hàm kiểm tra tính hợp lệ và cảnh báo lỗi logic dữ liệu.
+
+---
+
+### 6.3 Hàm Kiểm Tra & Validate dữ liệu (`validate_data`)
+
+Module cung cấp hàm `validate_data(df, dataset)` được tích hợp sẵn để kiểm tra tính toàn vẹn và hợp lệ:
+
+```python
+from data_loader import VnStock1m, validate_data
+
+df = VnStock1m().load("FPT")
+report = validate_data(df, "vn_stock_1m")
+
+print("Valid:", report["valid"])
+print("Tổng số dòng:", report["row_count"])
+if not report["valid"]:
+    print("Danh sách lỗi phát hiện:", report["errors"])
+```
+
+**Các kiểm tra được thực hiện:**
+- Tính đầy đủ của các cột bắt buộc (`time`, `symbol`, `open`, `high`, `low`, `close`, `volume`).
+- Phát hiện các giá trị âm hoặc null không hợp lệ.
+- Kiểm tra tính logic của nến: `high >= open`, `high >= close`, `low <= open`, `low <= close`.
+- Đảm bảo thời gian tăng dần liên tục (monotonic) và không bị trùng lặp thời gian trên mỗi symbol.
