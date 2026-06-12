@@ -499,6 +499,33 @@ def validate_data(df: pd.DataFrame, dataset: str) -> dict[str, Any]:
     report["info"]["min_time"] = str(df["time"].min())
     report["info"]["max_time"] = str(df["time"].max())
 
+    expected_gap = None
+    if dataset == "crypto_1m":
+        expected_gap = pd.Timedelta(minutes=1)
+
+    if expected_gap is not None:
+        continuity_errors = []
+        total_gap_count = 0
+        max_gap = None
+        for sym, group in df.groupby("symbol"):
+            times = group["time"].dropna().sort_values().drop_duplicates().reset_index(drop=True)
+            diffs = times.diff().dropna()
+            gaps = diffs[diffs > expected_gap]
+            if gaps.empty:
+                continue
+            total_gap_count += len(gaps)
+            local_max = gaps.max()
+            max_gap = local_max if max_gap is None or local_max > max_gap else max_gap
+            first_idx = gaps.index[0]
+            continuity_errors.append(
+                f"{sym}: {len(gaps)} gaps, first {times.iloc[first_idx - 1]} -> {times.iloc[first_idx]} ({times.iloc[first_idx] - times.iloc[first_idx - 1]})"
+            )
+        report["info"]["continuity_gap_count"] = int(total_gap_count)
+        report["info"]["max_continuity_gap"] = str(max_gap) if max_gap is not None else None
+        if continuity_errors:
+            report["valid"] = False
+            report["errors"].append(f"Continuity gaps detected for expected step {expected_gap}: {continuity_errors[:5]}")
+
     return report
 
 

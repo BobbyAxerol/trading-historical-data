@@ -10,6 +10,15 @@ from collectors.common.discovery import latest_time_from_files
 from collectors.common.env import GET_DATA_ROOT, data_root, load_environment
 
 
+DATASET_PATHS = {
+    "crypto": ("crypto", "binance_futures", "1m"),
+    "vn-daily": ("vn", "equity", "1d"),
+    "vn-intraday": ("vn", "equity", "1m"),
+    "vn-futures": ("vn", "futures", "1m"),
+    "options": ("options", "binance", "snapshot_5m"),
+}
+
+
 def _paths(patterns: list[Path]) -> list[Path]:
     found: list[Path] = []
     for pattern in patterns:
@@ -51,6 +60,18 @@ def _read_times(path: Path, time_cols: list[str]) -> pd.Series:
         raise ValueError(f"none of time columns found: {time_cols}")
 
 
+def _discover_symbols(root: Path, dataset: str) -> list[str]:
+    dataset_root = root.joinpath(*DATASET_PATHS[dataset])
+    if not dataset_root.exists():
+        return []
+    prefix = "underlying=" if dataset == "options" else "symbol="
+    symbols = []
+    for path in dataset_root.iterdir():
+        if path.is_dir() and path.name.startswith(prefix):
+            symbols.append(path.name.split("=", 1)[1])
+    return sorted(symbols)
+
+
 def audit_symbol(name: str, paths: list[Path], time_cols: list[str], expected: pd.Timedelta | None) -> bool:
     files = [p for p in paths if p.exists()]
     if not files:
@@ -58,9 +79,7 @@ def audit_symbol(name: str, paths: list[Path], time_cols: list[str], expected: p
         return False
 
     latest = latest_time_from_files(files, time_cols)
-    first = None
-    max_gap = None
-    gap_count = 0
+    all_times: list[pd.Series] = []
 
     for path in files:
         try:
@@ -68,20 +87,33 @@ def audit_symbol(name: str, paths: list[Path], time_cols: list[str], expected: p
         except Exception as exc:
             print(f"{name}: read_fail {path}: {exc}")
             return False
-        if times.empty:
-            continue
-        current_first = times.min()
-        first = current_first if first is None or current_first < first else first
-        if expected is not None:
-            diffs = times.diff().dropna()
-            big = diffs[diffs > expected]
-            gap_count += len(big)
-            if not big.empty:
-                local_max = big.max()
-                max_gap = local_max if max_gap is None or local_max > max_gap else max_gap
+        if not times.empty:
+            all_times.append(times)
 
-    print(f"{name}: files={len(files)} first={first} latest={latest} gaps>{expected}={gap_count} max_gap={max_gap}")
-    return True
+    if not all_times:
+        print(f"{name}: files={len(files)} empty")
+        return False
+
+    combined = pd.concat(all_times, ignore_index=True).dropna().sort_values().drop_duplicates().reset_index(drop=True)
+    first = combined.min()
+    max_gap = None
+    gap_count = 0
+    examples: list[str] = []
+
+    if expected is not None:
+        diffs = combined.diff().dropna()
+        big = diffs[diffs > expected]
+        gap_count = len(big)
+        if not big.empty:
+            max_gap = big.max()
+            for idx in big.index[:5]:
+                prev_time = combined.iloc[idx - 1]
+                next_time = combined.iloc[idx]
+                examples.append(f"{prev_time} -> {next_time} ({next_time - prev_time})")
+
+    suffix = f" examples={examples}" if examples else ""
+    print(f"{name}: files={len(files)} rows={len(combined)} first={first} latest={latest} gaps>{expected}={gap_count} max_gap={max_gap}{suffix}")
+    return gap_count == 0
 
 
 def main() -> None:
@@ -90,10 +122,11 @@ def main() -> None:
     parser.add_argument("--symbol", action="append", default=[])
     parser.add_argument("--dataset", choices=["crypto", "vn-daily", "vn-intraday", "vn-futures", "options"], required=True)
     parser.add_argument("--include-existing-files", action="store_true")
+    parser.add_argument("--all-symbols", action="store_true")
     args = parser.parse_args()
 
     root = data_root()
-    symbols = args.symbol or ["BTCUSDT", "ETHUSDT", "FPT", "VN30F1M", "BTC"]
+    symbols = _discover_symbols(root, args.dataset) if args.all_symbols else args.symbol or ["BTCUSDT", "ETHUSDT", "FPT", "VN30F1M", "BTC"]
     ok = True
     for symbol in symbols:
         if args.dataset == "crypto":
