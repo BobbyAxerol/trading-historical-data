@@ -146,6 +146,23 @@ PYTHONPATH=. python -m collectors.vn_intraday_dnse --mode once --symbols VN30F1M
 PYTHONPATH=. python -m collectors.binance_daily_matrix --mode once --backfill-start 2026-06-01
 ```
 
+### 4.4 Audit continuity & repair crypto gaps
+
+Với crypto 1m, audit phải nối toàn bộ partition của từng symbol rồi mới kiểm tra gap. Không được chỉ kiểm tra từng `part.csv.gz` riêng lẻ vì sẽ bỏ sót gap giữa các partition.
+
+```bash
+# Quét toàn bộ symbols crypto trong storage
+PYTHONPATH=. python -m collectors.audit_continuity --dataset crypto --all-symbols
+
+# Dry-run: chỉ in các đoạn thiếu, chưa gọi Binance
+PYTHONPATH=. python -m collectors.fill_crypto_gaps --dry-run
+
+# Repair: gọi Binance đúng các đoạn thiếu và append/dedupe vào storage
+PYTHONPATH=. python -m collectors.fill_crypto_gaps
+```
+
+Chi tiết incident gap `2026-05-01 -> 2026-06-06` và kết quả repair được ghi tại [`CONTINUITY_REPAIR_2026-06-12.md`](CONTINUITY_REPAIR_2026-06-12.md).
+
 ---
 
 ## 5. Tổ chức mã nguồn
