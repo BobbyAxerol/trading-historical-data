@@ -31,6 +31,12 @@ storage/
 │   │   │   └── symbol=FPT/
 │   │   │       └── year=2026/
 │   │   │           └── part.csv.gz
+│   │   ├── daily_matrix/
+│   │   │   ├── open.csv.gz
+│   │   │   ├── high.csv.gz
+│   │   │   ├── low.csv.gz
+│   │   │   ├── close.csv.gz
+│   │   │   └── volume.csv.gz
 │   │   └── 1m/
 │   │       └── symbol=FPT/
 │   │           └── year=2026/
@@ -81,7 +87,13 @@ Dữ liệu Binance Daily Matrix được lưu trữ tại `storage/crypto/binan
 - **Columns (Cột)**: Danh sách các symbol futures của Binance (ví dụ: `BTCUSDT`, `ETHUSDT`, ...).
 - **Trị số**: Giá trị số thực (`float64`) hoặc số nguyên (`int64` đối với volume).
 
-Danh sách symbol được theo dõi lưu trong tệp trạng thái `state/binance_daily_matrix_symbols.json`, tự động cập nhật hàng tháng bằng cách lấy Top 400 symbol giao dịch nhiều nhất (quoteVolume) từ sàn Binance USD-M Futures, đảm bảo chỉ thêm mới và không loại bỏ các symbol cũ trừ khi symbol đó bị delist hoàn toàn khỏi sàn.
+Danh sách symbol được theo dõi lưu trong tệp trạng thái `state/binance_daily_matrix_symbols.json`, tự động cập nhật hàng tháng từ Binance USD-M Futures nhưng chỉ nhận **crypto coin perpetual** hợp lệ: `contractType=PERPETUAL`, `underlyingType=COIN`, `quoteAsset=USDT`, `marginAsset=USDT`, loại `Alpha/Index/TradFi`, và mặc định yêu cầu tối thiểu `365` ngày history. Thứ tự cột ưu tiên nhóm core big/liquid symbols (`BTCUSDT`, `ETHUSDT`, `BNBUSDT`, `SOLUSDT`, ...) trước, sau đó mới tới phần mở rộng xếp theo score: `50%` rank `24h quoteVolume`, `30%` rank tuổi listing, `20%` rank độ ổn định volume 180 ngày. Policy là **chỉ thêm, không bớt** trong universe hợp lệ; symbol sai schema như equity/pre-market/commodity/index sẽ bị reject khỏi daily crypto matrix.
+
+### 1.4 Cấu trúc Ma trận Dữ liệu Ngày VN (VN Daily Matrix)
+
+VN Daily Matrix được build từ canonical storage `storage/vn/equity/1d/` sang `storage/vn/equity/daily_matrix/`, gồm 5 ma trận `open/high/low/close/volume` cùng schema pivot: index là ngày giao dịch, columns là mã cổ phiếu.
+
+Universe nằm tại `configs/symbols.vn_daily.yml`, hiện là curated large/liquid seed từ legacy HOSE/VN30/VN100/VN200-style universe. Thứ tự cột ưu tiên nhóm VN30/large-cap ở đầu. Matrix builder không tạo cột rỗng: mã nào vendor/storage chưa có dữ liệu sẽ được ghi vào `state/vn_daily_matrix_symbols.json` trong `missing_symbols`.
 
 ---
 
@@ -113,7 +125,7 @@ Hệ thống ghi nhận trạng thái liên tục tại thư mục `state/` đ�
 
 Để tránh bị giới hạn hoặc khoá API Key/IP từ các nhà cung cấp dữ liệu, hệ thống được cấu hình chạy định kỳ cuối ngày thay vì cập nhật liên tục trong phiên giao dịch:
 - **VN Intraday Stocks & Futures**: Chạy hàng ngày lúc **16:30** (Giờ Việt Nam `Asia/Ho_Chi_Minh`). Khi khởi động lại hoặc đến giờ chạy, hệ thống tự động kiểm tra và thực hiện tải bù dữ liệu thiếu theo ngày (incremental catch-up) cho mục đích lưu trữ lịch sử để backtest.
-- **Binance Daily Matrix**: Chạy hàng ngày lúc **01:00** (Giờ UTC).
+- **Binance Daily Matrix**: Chạy hàng ngày lúc **00:05** (Giờ UTC), chỉ ghi nến daily đã đóng hoàn toàn. Khi file hiện có bị thiếu phần đầu hoặc có gap nội bộ, service sẽ đọc matrix hiện tại, xác định điểm cần backfill theo từng symbol, fetch bù từ mốc thiếu rồi merge/dedupe vào storage.
 - **Crypto 1m Live**: Chạy cập nhật liên tục mỗi phút để thu thập nến crypto thời gian thực.
 - **Options Binance 5m**: Chạy cập nhật Snapshot tùy chọn Binance mỗi 5 phút.
 
@@ -142,8 +154,8 @@ PYTHONPATH=. python -m collectors.vn_intraday_vnstock --mode once --symbols FPT 
 # Chạy một lần để lấy dữ liệu VN30F1M (DNSE) từ ngày 2026-06-01
 PYTHONPATH=. python -m collectors.vn_intraday_dnse --mode once --symbols VN30F1M --backfill-start 2026-06-01
 
-# Chạy một lần để cập nhật ma trận Binance Daily từ ngày 2026-06-01
-PYTHONPATH=. python -m collectors.binance_daily_matrix --mode once --backfill-start 2026-06-01
+# Chạy một lần để backfill/cập nhật ma trận Binance Daily từ 2020-01-01
+PYTHONPATH=. python -m collectors.binance_daily_matrix --mode once --backfill-start 2020-01-01
 ```
 
 ### 4.4 Audit continuity & repair crypto gaps
@@ -162,6 +174,8 @@ PYTHONPATH=. python -m collectors.fill_crypto_gaps
 ```
 
 Chi tiết incident gap `2026-05-01 -> 2026-06-06` và kết quả repair được ghi tại [`CONTINUITY_REPAIR_2026-06-12.md`](CONTINUITY_REPAIR_2026-06-12.md).
+
+Chi tiết incident Binance Daily Matrix chỉ có dữ liệu từ `2026-06-01` và kết quả backfill lại từ `2020-01-01` được ghi tại [`BINANCE_DAILY_MATRIX_REPAIR_2026-06-16.md`](BINANCE_DAILY_MATRIX_REPAIR_2026-06-16.md).
 
 ---
 
@@ -227,6 +241,7 @@ SDK cung cấp các Class Reader chuyên biệt cho từng nguồn dữ liệu:
 | :--- | :--- | :--- |
 | `VnStock1m` | Dữ liệu nến 1m cổ phiếu Việt Nam | Múi giờ Việt Nam `Asia/Ho_Chi_Minh` |
 | `VnStockDaily` | Dữ liệu nến 1d (daily) cổ phiếu Việt Nam | Múi giờ Việt Nam `Asia/Ho_Chi_Minh` |
+| `VNDailyMatrix` | Dữ liệu Matrix xoay ngày cổ phiếu Việt Nam | Múi giờ Việt Nam `Asia/Ho_Chi_Minh` |
 | `VnFutures1m` | Dữ liệu nến 1m phái sinh Việt Nam | Múi giờ Việt Nam `Asia/Ho_Chi_Minh` |
 | `CryptoBinance1m` | Dữ liệu nến 1m Binance Futures | Múi giờ quốc tế `UTC` |
 | `CryptoDailyMatrix` | Dữ liệu Matrix xoay ngày Binance | Múi giờ quốc tế `UTC` |
@@ -235,7 +250,7 @@ SDK cung cấp các Class Reader chuyên biệt cho từng nguồn dữ liệu:
 #### Ví dụ gọi các Endpoint cụ thể:
 
 ```python
-from data_loader import VnStock1m, VnStockDaily, CryptoDailyMatrix
+from data_loader import VnStock1m, VnStockDaily, VNDailyMatrix, CryptoDailyMatrix
 
 # 1. Gọi dữ liệu nến 1m của FPT & ACB trong 1 khoảng thời gian, giới hạn 1000 dòng
 df_1m = VnStock1m().load(
@@ -254,8 +269,30 @@ df_daily_all = VnStockDaily().load(symbols=None)
 df_matrix = CryptoDailyMatrix().load(
     feature="close",
     symbols=["BTCUSDT", "ETHUSDT"],
-    start_date="2026-06-01",
+    start_date="2020-01-01",
     limit=100
+)
+
+# 4. Gọi thẳng format data_dict tương thích pipeline chiến lược cũ
+# data_dict["BTCUSDT"] => DataFrame index=datetime, columns=open/high/low/close/volume
+data_dict = CryptoDailyMatrix().load_ohlcv(
+    symbols=None,
+    start_date="2020-01-01",
+    check_val=True,
+)
+
+# 5. Gọi VN daily matrix theo feature
+vn_close = VNDailyMatrix().load(
+    feature="close",
+    symbols=["FPT", "VCB", "HPG"],
+    start_date="2016-01-01",
+)
+
+# 6. Gọi VN daily theo format data_dict tương thích pipeline chiến lược
+vn_data_dict = VNDailyMatrix().load_ohlcv(
+    symbols=None,
+    start_date="2016-01-01",
+    check_val=True,
 )
 ```
 

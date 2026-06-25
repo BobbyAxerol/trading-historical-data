@@ -10,9 +10,10 @@ from collectors.common.config import load_yaml
 from collectors.common.discovery import latest_time_from_files, max_timestamp
 from collectors.common.env import GET_DATA_ROOT, load_environment
 from collectors.common.logging import setup_logging
-from collectors.common.manifest import Heartbeat, Manifest, utc_now_iso
+from collectors.common.manifest import Heartbeat, JsonState, Manifest, utc_now_iso
 from collectors.common.retry import SlidingWindowRateLimiter, retry_sync
 from collectors.common.storage import PartitionedCsvGzStore
+from collectors.vn_daily_matrix import build_matrix
 
 DATASET = "vn_equity_1d"
 
@@ -41,8 +42,22 @@ def fetch_symbol(symbol: str, start: str, end: str) -> pd.DataFrame:
     if df is None or df.empty:
         return pd.DataFrame()
     df = df.copy()
+    start_ts = pd.to_datetime(start, errors="coerce").normalize()
+    end_ts = pd.to_datetime(end, errors="coerce").normalize()
     df["time"] = pd.to_datetime(df["time"], errors="coerce")
     df = df.dropna(subset=["time"]).sort_values("time")
+    df["time"] = df["time"].dt.normalize()
+    if pd.notna(start_ts):
+        df = df[df["time"] >= start_ts]
+    if pd.notna(end_ts):
+        df = df[df["time"] <= end_ts]
+    if df.empty:
+        return pd.DataFrame()
+    for col in ["open", "high", "low", "close", "volume"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    prices = df[["open", "high", "low", "close"]]
+    df["high"] = prices.max(axis=1, skipna=False)
+    df["low"] = prices.min(axis=1, skipna=False)
     df["symbol"] = symbol
     df["source"] = "vnstock_vci"
     df["ingested_at"] = utc_now_iso()
@@ -131,7 +146,9 @@ def main() -> None:
     logger = setup_logging(DATASET)
     heartbeat = Heartbeat(DATASET)
     limiter = SlidingWindowRateLimiter(max_calls=config.get("max_calls_per_minute", 18), period_seconds=60)
-    last_run_date: str | None = None
+    schedule_state = JsonState("vn_daily_schedule.json")
+    schedule = schedule_state.read()
+    last_run_date: str | None = schedule.get("last_run_date")
 
     while True:
         if args.mode == "once" or should_run(args.schedule, last_run_date):
@@ -144,7 +161,17 @@ def main() -> None:
                     Manifest(DATASET).update_symbol(symbol, last_error=str(exc), last_failed_at=utc_now_iso())
                     logger.exception("%s daily failed", symbol)
                     heartbeat.beat(status="error", symbol=symbol, error=str(exc))
+            try:
+                build_matrix(symbols=[s.strip().upper() for s in symbols], logger=logger)
+            except Exception as exc:
+                logger.exception("VN daily matrix build failed")
+                heartbeat.beat(status="error", error=f"matrix_build_failed: {exc}")
             last_run_date = datetime.now().strftime("%Y-%m-%d")
+            schedule_state.write({
+                "last_run_date": last_run_date,
+                "updated_at": utc_now_iso(),
+                "symbols_count": len(symbols),
+            })
         if args.mode != "live":
             break
         time.sleep(300)

@@ -9,6 +9,7 @@ from data_loader import (
     validate_data,
     VnStock1m,
     VnStockDaily,
+    VNDailyMatrix,
     VnFutures1m,
     CryptoBinance1m,
     CryptoDailyMatrix,
@@ -59,6 +60,39 @@ class TestDataLoaderClasses(unittest.TestCase):
         df_filtered = CryptoDailyMatrix().load(feature="close", symbols=["BTCUSDT", "ETHUSDT"])
         self.assertEqual(list(df_filtered.columns), ["BTCUSDT", "ETHUSDT"])
 
+        # Strategy-friendly OHLCV dict format
+        data_dict = CryptoDailyMatrix().load_ohlcv(symbols=["BTCUSDT", "ETHUSDT"], limit=5)
+        self.assertIn("BTCUSDT", data_dict)
+        self.assertEqual(list(data_dict["BTCUSDT"].columns), ["open", "high", "low", "close", "volume"])
+        self.assertIsNone(data_dict["BTCUSDT"].index.tz)
+        self.assertTrue(data_dict["BTCUSDT"].index.is_monotonic_increasing)
+
+        long_df = CryptoDailyMatrix().load_ohlcv_frame(symbols="BTCUSDT", limit=3)
+        self.assertEqual(list(long_df.columns), ["time", "symbol", "open", "high", "low", "close", "volume"])
+        self.assertEqual(len(long_df), 3)
+
+    def test_vn_daily_matrix_class(self):
+        df = VNDailyMatrix().load(feature="close", symbols=["FPT", "VCB"])
+        self.assertFalse(df.empty, "VN close matrix should not be empty")
+        self.assertEqual(list(df.columns), ["FPT", "VCB"])
+        self.assertIsNone(df.index.tz)
+
+        data_dict = VNDailyMatrix().load_ohlcv(symbols=["FPT", "VCB"], start_date="2016-01-04", limit=5)
+        self.assertIn("FPT", data_dict)
+        self.assertEqual(list(data_dict["FPT"].columns), ["open", "high", "low", "close", "volume"])
+        self.assertTrue(data_dict["FPT"].index.is_monotonic_increasing)
+
+        for df_symbol in data_dict.values():
+            self.assertTrue((df_symbol["high"] >= df_symbol[["open", "close", "low"]].max(axis=1)).all())
+            self.assertTrue((df_symbol["low"] <= df_symbol[["open", "close", "high"]].min(axis=1)).all())
+
+        malformed = pd.DataFrame({
+            "open": [10.0], "high": [9.0], "low": [11.0], "close": [12.0], "volume": [100],
+        })
+        repaired = VNDailyMatrix()._normalize_ohlcv(malformed)
+        self.assertEqual(repaired.loc[0, "high"], 12.0)
+        self.assertEqual(repaired.loc[0, "low"], 9.0)
+
     def test_date_range_and_limit(self):
         # Check limit logic on daily matrix
         df = CryptoDailyMatrix().load(feature="close", limit=3)
@@ -81,6 +115,9 @@ class TestDataLoaderClasses(unittest.TestCase):
         # Routing to daily matrix
         df2 = load_data("binance_daily_matrix", feature="close", limit=2)
         self.assertEqual(len(df2), 2)
+
+        df3 = load_data("vn_daily_matrix", feature="close", symbols="FPT", limit=2)
+        self.assertEqual(len(df3), 2)
 
 
 if __name__ == "__main__":
