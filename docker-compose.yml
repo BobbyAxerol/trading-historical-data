@@ -63,7 +63,7 @@ services:
 
   binance-daily-matrix:
     <<: *get-data-service
-    command: ["python", "-m", "collectors.binance_daily_matrix", "--mode", "live", "--schedule", "01:00"]
+    command: ["python", "-m", "collectors.binance_daily_matrix", "--mode", "live", "--schedule", "00:05", "--backfill-start", "2020-01-01", "--min-history-days", "365"]
     environment:
       TZ: UTC
       DATA_ROOT: /app/storage

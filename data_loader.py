@@ -269,10 +269,15 @@ class CryptoDailyMatrix:
     """Loads pivoted daily matrices (open, high, low, close, volume) for top 400 Binance futures."""
 
     DATASET_NAME = "binance_daily_matrix"
+    OHLCV_DATASET_NAME = "crypto_daily_ohlcv"
     TZ_INFO = "UTC"
+    FEATURES = ("open", "high", "low", "close", "volume")
 
     def _get_path(self, feature: str) -> Path:
         return STORAGE_DIR / "crypto" / "binance_daily_matrix" / f"{feature.lower()}.csv.gz"
+
+    def _normalize_ohlcv(self, df: pd.DataFrame) -> pd.DataFrame:
+        return df
 
     def load(
         self,
@@ -302,7 +307,7 @@ class CryptoDailyMatrix:
             If True, perform matrix checks.
         """
         feature = feature.lower()
-        valid_features = {"open", "high", "low", "close", "volume"}
+        valid_features = set(self.FEATURES)
         if feature not in valid_features:
             raise ValueError(f"Invalid feature '{feature}'. Supported features: {valid_features}")
 
@@ -353,6 +358,154 @@ class CryptoDailyMatrix:
 
         return df
 
+    def load_features(
+        self,
+        features: list[str] | tuple[str, ...] | None = None,
+        symbols: str | list[str] | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        limit: int | None = None,
+        check_val: bool = True,
+    ) -> dict[str, pd.DataFrame]:
+        """Load multiple feature matrices keyed by feature name."""
+        selected = list(features or self.FEATURES)
+        matrices: dict[str, pd.DataFrame] = {}
+        for feature in selected:
+            matrices[feature.lower()] = self.load(
+                feature=feature,
+                symbols=symbols,
+                start_date=start_date,
+                end_date=end_date,
+                limit=limit,
+                check_val=check_val,
+            )
+        return matrices
+
+    def load_ohlcv(
+        self,
+        symbols: str | list[str] | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        limit: int | None = None,
+        check_val: bool = True,
+        dropna: bool = True,
+    ) -> dict[str, pd.DataFrame]:
+        """Load OHLCV as the strategy-friendly ``dict[symbol, DataFrame]`` format.
+
+        Each returned DataFrame is indexed by daily UTC-naive datetime and has
+        columns: ``open``, ``high``, ``low``, ``close``, ``volume``.
+        """
+        matrices = self.load_features(
+            features=list(self.FEATURES),
+            symbols=symbols,
+            start_date=start_date,
+            end_date=end_date,
+            limit=limit,
+            check_val=False,
+        )
+        if any(df.empty for df in matrices.values()):
+            return {}
+
+        common_symbols = set(matrices["close"].columns)
+        for feature in self.FEATURES:
+            common_symbols &= set(matrices[feature].columns)
+
+        if symbols is not None:
+            requested = [symbols] if isinstance(symbols, str) else list(symbols)
+            requested = [symbol.strip().upper() for symbol in requested]
+            ordered_symbols = [symbol for symbol in requested if symbol in common_symbols]
+        else:
+            ordered_symbols = [symbol for symbol in matrices["close"].columns if symbol in common_symbols]
+
+        data_dict: dict[str, pd.DataFrame] = {}
+        for symbol in ordered_symbols:
+            temp_df = pd.DataFrame({feature: matrices[feature][symbol] for feature in self.FEATURES})
+            temp_df.index = pd.to_datetime(temp_df.index)
+            temp_df = temp_df.sort_index()
+            if dropna:
+                temp_df = temp_df.dropna()
+            if temp_df.empty:
+                continue
+            if "volume" in temp_df.columns:
+                temp_df["volume"] = pd.to_numeric(temp_df["volume"], errors="coerce").fillna(0).astype("int64")
+            for feature in ("open", "high", "low", "close"):
+                temp_df[feature] = pd.to_numeric(temp_df[feature], errors="coerce").astype("float64")
+            temp_df = self._normalize_ohlcv(temp_df)
+            data_dict[symbol] = temp_df
+
+        if check_val and data_dict:
+            frame = self.load_ohlcv_frame(
+                symbols=list(data_dict.keys()),
+                start_date=start_date,
+                end_date=end_date,
+                limit=limit,
+                check_val=False,
+                dropna=dropna,
+                _data_dict=data_dict,
+            )
+            report = validate_data(frame, self.OHLCV_DATASET_NAME)
+            if not report["valid"]:
+                logger.warning("Validation warnings for dataset %s: %s", self.DATASET_NAME, report["errors"])
+
+        return data_dict
+
+    def load_ohlcv_frame(
+        self,
+        symbols: str | list[str] | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        limit: int | None = None,
+        check_val: bool = True,
+        dropna: bool = True,
+        _data_dict: dict[str, pd.DataFrame] | None = None,
+    ) -> pd.DataFrame:
+        """Load OHLCV as a long DataFrame with columns time, symbol, OHLCV."""
+        data_dict = _data_dict or self.load_ohlcv(
+            symbols=symbols,
+            start_date=start_date,
+            end_date=end_date,
+            limit=limit,
+            check_val=False,
+            dropna=dropna,
+        )
+        frames = []
+        for symbol, df in data_dict.items():
+            part = df.reset_index().rename(columns={"index": "time"})
+            if part.columns[0] != "time":
+                part = part.rename(columns={part.columns[0]: "time"})
+            part["symbol"] = symbol
+            frames.append(part[["time", "symbol", "open", "high", "low", "close", "volume"]])
+        if not frames:
+            return pd.DataFrame(columns=["time", "symbol", "open", "high", "low", "close", "volume"])
+
+        result = pd.concat(frames, ignore_index=True)
+        result["time"] = pd.to_datetime(result["time"], errors="coerce")
+        result = result.dropna(subset=["time"]).sort_values(["symbol", "time"]).reset_index(drop=True)
+        if check_val:
+            report = validate_data(result, self.OHLCV_DATASET_NAME)
+            if not report["valid"]:
+                logger.warning("Validation warnings for dataset %s: %s", self.DATASET_NAME, report["errors"])
+        return result
+
+
+class VNDailyMatrix(CryptoDailyMatrix):
+    """Loads pivoted daily matrices for the VN equity universe."""
+
+    DATASET_NAME = "vn_daily_matrix"
+    OHLCV_DATASET_NAME = "vn_daily_ohlcv"
+    TZ_INFO = "Asia/Ho_Chi_Minh"
+
+    def _get_path(self, feature: str) -> Path:
+        return STORAGE_DIR / "vn" / "equity" / "daily_matrix" / f"{feature.lower()}.csv.gz"
+
+    def _normalize_ohlcv(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Repair vendor OHLC bounds while preserving every observed price."""
+        result = df.copy()
+        prices = result[["open", "high", "low", "close"]]
+        result["high"] = prices.max(axis=1, skipna=False)
+        result["low"] = prices.min(axis=1, skipna=False)
+        return result
+
 
 # =====================================================================
 # Validation Function & Master Router
@@ -382,7 +535,7 @@ def validate_data(df: pd.DataFrame, dataset: str) -> dict[str, Any]:
         report["errors"].append("DataFrame is empty.")
         return report
 
-    if dataset == "binance_daily_matrix":
+    if dataset in ("binance_daily_matrix", "vn_daily_matrix"):
         # Check index
         if not isinstance(df.index, pd.DatetimeIndex):
             try:
@@ -502,6 +655,8 @@ def validate_data(df: pd.DataFrame, dataset: str) -> dict[str, Any]:
     expected_gap = None
     if dataset == "crypto_1m":
         expected_gap = pd.Timedelta(minutes=1)
+    elif dataset == "crypto_daily_ohlcv":
+        expected_gap = pd.Timedelta(days=1)
 
     if expected_gap is not None:
         continuity_errors = []
@@ -554,6 +709,10 @@ def load_data(
         if not feature:
             raise ValueError("Parameter 'feature' is required for binance_daily_matrix.")
         return CryptoDailyMatrix().load(feature, symbols, start_date, end_date, limit, check_val)
+    elif dataset_lower in ("vn_daily_matrix",):
+        if not feature:
+            raise ValueError("Parameter 'feature' is required for vn_daily_matrix.")
+        return VNDailyMatrix().load(feature, symbols, start_date, end_date, limit, check_val)
     else:
         logger.warning("Unknown dataset: %s", dataset)
         return pd.DataFrame()
