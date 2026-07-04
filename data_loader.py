@@ -256,6 +256,12 @@ class CryptoBinance1m(MarketDataLoaderBase):
     TZ_INFO = "UTC"
 
 
+class CryptoBinanceQuarterly1m(CryptoBinance1m):
+    """Loads concrete Binance USD-M quarterly contracts from the shared futures 1m storage."""
+
+    DATASET_NAME = "crypto_binance_quarterly_1m"
+
+
 class BinanceOptions5m(MarketDataLoaderBase):
     """Loads 5m options snap shots from Binance (naive time represented in UTC)."""
 
@@ -703,6 +709,8 @@ def load_data(
         return VnFutures1m().load(symbols, start_date, end_date, limit, check_val)
     elif dataset_lower in ("crypto_1m",):
         return CryptoBinance1m().load(symbols, start_date, end_date, limit, check_val)
+    elif dataset_lower in ("crypto_binance_quarterly_1m", "binance_usdm_quarterly_1m"):
+        return CryptoBinanceQuarterly1m().load(symbols, start_date, end_date, limit, check_val)
     elif dataset_lower in ("options_5m",):
         return BinanceOptions5m().load(symbols, start_date, end_date, limit, check_val)
     elif dataset_lower in ("binance_daily_matrix",):
