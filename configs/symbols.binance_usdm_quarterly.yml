@@ -1,0 +1,9 @@
+pairs:
+  - BTCUSDT
+  - ETHUSDT
+interval: "1m"
+start_month: "2021-02"
+sleep_seconds: 21600
+rest_overlap_minutes: 10
+vision_base_url: "https://data.binance.vision"
+s3_base_url: "https://s3-ap-northeast-1.amazonaws.com/data.binance.vision"

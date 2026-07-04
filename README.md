@@ -19,6 +19,10 @@ storage/
 │   │           └── year=2026/
 │   │               └── month=06/
 │   │                   └── part.csv.gz
+│   │       └── symbol=BTCUSDT_240329/
+│   │           └── year=2024/
+│   │               └── month=03/
+│   │                   └── part.csv.gz
 │   └── binance_daily_matrix/
 │       ├── open.csv.gz
 │       ├── high.csv.gz
@@ -89,6 +93,16 @@ Dữ liệu Binance Daily Matrix được lưu trữ tại `storage/crypto/binan
 
 Danh sách symbol được theo dõi lưu trong tệp trạng thái `state/binance_daily_matrix_symbols.json`, tự động cập nhật hàng tháng từ Binance USD-M Futures nhưng chỉ nhận **crypto coin perpetual** hợp lệ: `contractType=PERPETUAL`, `underlyingType=COIN`, `quoteAsset=USDT`, `marginAsset=USDT`, loại `Alpha/Index/TradFi`, và mặc định yêu cầu tối thiểu `365` ngày history. Thứ tự cột ưu tiên nhóm core big/liquid symbols (`BTCUSDT`, `ETHUSDT`, `BNBUSDT`, `SOLUSDT`, ...) trước, sau đó mới tới phần mở rộng xếp theo score: `50%` rank `24h quoteVolume`, `30%` rank tuổi listing, `20%` rank độ ổn định volume 180 ngày. Policy là **chỉ thêm, không bớt** trong universe hợp lệ; symbol sai schema như equity/pre-market/commodity/index sẽ bị reject khỏi daily crypto matrix.
 
+### 1.3b Binance USD-M Quarterly 1m
+
+Concrete USD-M quarterly contracts như `BTCUSDT_240329` và `ETHUSDT_260925` được lưu chung schema/path với Binance futures 1m:
+
+```text
+storage/crypto/binance_futures/1m/symbol=BTCUSDT_240329/year=2024/month=03/part.csv.gz
+```
+
+Collector [`collectors/binance_usdm_quarterly_1m.py`](collectors/binance_usdm_quarterly_1m.py) tự discover active `CURRENT_QUARTER`/`NEXT_QUARTER` từ Binance `/fapi/v1/exchangeInfo`, discover historical concrete contracts từ Binance Vision S3, rồi đồng bộ theo thứ tự: monthly ZIP -> daily ZIP -> REST active tail. `_get_data` chỉ lưu raw contract-level data, không tự build continuous contract. Chi tiết vận hành nằm tại [`BINANCE_USDM_QUARTERLY_1M.md`](BINANCE_USDM_QUARTERLY_1M.md).
+
 ### 1.4 Cấu trúc Ma trận Dữ liệu Ngày VN (VN Daily Matrix)
 
 VN Daily Matrix được build từ canonical storage `storage/vn/equity/1d/` sang `storage/vn/equity/daily_matrix/`, gồm 5 ma trận `open/high/low/close/volume` cùng schema pivot: index là ngày giao dịch, columns là mã cổ phiếu.
@@ -127,6 +141,7 @@ Hệ thống ghi nhận trạng thái liên tục tại thư mục `state/` đ�
 - **VN Intraday Stocks & Futures**: Chạy hàng ngày lúc **16:30** (Giờ Việt Nam `Asia/Ho_Chi_Minh`). Khi khởi động lại hoặc đến giờ chạy, hệ thống tự động kiểm tra và thực hiện tải bù dữ liệu thiếu theo ngày (incremental catch-up) cho mục đích lưu trữ lịch sử để backtest.
 - **Binance Daily Matrix**: Chạy hàng ngày lúc **00:05** (Giờ UTC), chỉ ghi nến daily đã đóng hoàn toàn. Khi file hiện có bị thiếu phần đầu hoặc có gap nội bộ, service sẽ đọc matrix hiện tại, xác định điểm cần backfill theo từng symbol, fetch bù từ mốc thiếu rồi merge/dedupe vào storage.
 - **Crypto 1m Live**: Chạy cập nhật liên tục mỗi phút để thu thập nến crypto thời gian thực.
+- **Binance USD-M Quarterly 1m**: Chạy định kỳ, dùng Binance Vision để kéo lịch sử quarterly dài nhất có thể và REST để bù active tail.
 - **Options Binance 5m**: Chạy cập nhật Snapshot tùy chọn Binance mỗi 5 phút.
 
 ### 4.2 Khởi chạy bằng Docker Compose
@@ -156,6 +171,9 @@ PYTHONPATH=. python -m collectors.vn_intraday_dnse --mode once --symbols VN30F1M
 
 # Chạy một lần để backfill/cập nhật ma trận Binance Daily từ 2020-01-01
 PYTHONPATH=. python -m collectors.binance_daily_matrix --mode once --backfill-start 2020-01-01
+
+# Chạy một lần để đồng bộ USD-M quarterly contracts lịch sử/current
+PYTHONPATH=. python -m collectors.binance_usdm_quarterly_1m --mode once
 ```
 
 ### 4.4 Audit continuity & repair crypto gaps
@@ -244,6 +262,7 @@ SDK cung cấp các Class Reader chuyên biệt cho từng nguồn dữ liệu:
 | `VNDailyMatrix` | Dữ liệu Matrix xoay ngày cổ phiếu Việt Nam | Múi giờ Việt Nam `Asia/Ho_Chi_Minh` |
 | `VnFutures1m` | Dữ liệu nến 1m phái sinh Việt Nam | Múi giờ Việt Nam `Asia/Ho_Chi_Minh` |
 | `CryptoBinance1m` | Dữ liệu nến 1m Binance Futures | Múi giờ quốc tế `UTC` |
+| `CryptoBinanceQuarterly1m` | Alias đọc concrete USD-M quarterly contracts trong cùng Binance Futures storage | Múi giờ quốc tế `UTC` |
 | `CryptoDailyMatrix` | Dữ liệu Matrix xoay ngày Binance | Múi giờ quốc tế `UTC` |
 | `BinanceOptions5m` | Dữ liệu snapshot option 5m Binance | Múi giờ quốc tế `UTC` |
 
