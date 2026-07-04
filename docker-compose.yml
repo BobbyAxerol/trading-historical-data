@@ -2,6 +2,9 @@ name: get_data
 
 x-get-data-service: &get-data-service
   image: get_data-collectors:latest
+  build:
+    context: .
+    dockerfile: docker/Dockerfile
   restart: unless-stopped
   volumes:
     - ./storage:/app/storage
@@ -11,10 +14,16 @@ x-get-data-service: &get-data-service
 services:
   crypto-1m-live:
     <<: *get-data-service
-    build:
-      context: .
-      dockerfile: docker/Dockerfile
     command: ["python", "-m", "collectors.crypto_1m", "--mode", "live"]
+    environment:
+      TZ: UTC
+      DATA_ROOT: /app/storage
+      STATE_ROOT: /app/state
+      LOG_ROOT: /app/logs
+
+  binance-usdm-quarterly-1m:
+    <<: *get-data-service
+    command: ["python", "-m", "collectors.binance_usdm_quarterly_1m", "--mode", "live"]
     environment:
       TZ: UTC
       DATA_ROOT: /app/storage

@@ -12,6 +12,7 @@ from data_loader import (
     VNDailyMatrix,
     VnFutures1m,
     CryptoBinance1m,
+    CryptoBinanceQuarterly1m,
     CryptoDailyMatrix,
 )
 
@@ -47,6 +48,12 @@ class TestDataLoaderClasses(unittest.TestCase):
         df = CryptoBinance1m().load(symbols="BTCUSDT")
         if not df.empty:
             self.assertEqual(df["symbol"].iloc[0], "BTCUSDT")
+            self.assertIsNone(df["time"].dt.tz)
+
+    def test_crypto_binance_quarterly_1m_alias(self):
+        df = CryptoBinanceQuarterly1m().load(symbols="BTCUSDT_240329", limit=5, check_val=False)
+        if not df.empty:
+            self.assertEqual(df["symbol"].iloc[0], "BTCUSDT_240329")
             self.assertIsNone(df["time"].dt.tz)
 
     def test_crypto_daily_matrix_class(self):
