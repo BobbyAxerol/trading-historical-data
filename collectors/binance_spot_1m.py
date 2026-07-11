@@ -611,78 +611,6 @@ def repair_gap_ranges(
     return repaired_rows
 
 
-def fill_source_gaps_forward(
-    *,
-    symbol: str,
-    store: PartitionedCsvGzStore,
-    manifest: Manifest,
-    gaps: list[dict[str, str]],
-    max_gap_minutes: int,
-    logger,
-) -> int:
-    base = load_symbol_frame(store, symbol)
-    if base.empty:
-        return 0
-    base["time"] = pd.to_datetime(base["time"], errors="coerce").dt.floor("min")
-    base = base.dropna(subset=["time"]).drop_duplicates(subset=["symbol", "time"], keep="last").sort_values("time")
-
-    total_rows = 0
-    for gap in gaps:
-        minutes = int(gap.get("minutes") or 0)
-        if minutes <= 0 or minutes > max_gap_minutes:
-            continue
-        start = pd.Timestamp(gap["start"])
-        end = pd.Timestamp(gap["end"])
-        if start.tzinfo is not None:
-            start = start.tz_convert(None)
-        if end.tzinfo is not None:
-            end = end.tz_convert(None)
-
-        previous = base[base["time"] < start].tail(1)
-        if previous.empty:
-            logger.warning("%s cannot synthetic-fill gap without previous close: %s -> %s", symbol, start, end)
-            continue
-        previous_close = float(previous["close"].iloc[0])
-        times = pd.date_range(start, end, freq="min")
-        if times.empty:
-            continue
-
-        fill = pd.DataFrame(
-            {
-                "time": times,
-                "symbol": symbol,
-                "open": previous_close,
-                "high": previous_close,
-                "low": previous_close,
-                "close": previous_close,
-                "volume": 0.0,
-                "close_time": times + pd.Timedelta(59, unit="s"),
-                "quote_volume": 0.0,
-                "number_of_trades": 0,
-                "taker_buy_base_volume": 0.0,
-                "taker_buy_quote_volume": 0.0,
-                "source": "synthetic_gap_fill_forward",
-                "ingested_at": utc_now_iso(),
-            }
-        )
-        result = _append(store, fill, symbol)
-        written = int(result.get("rows_written") or 0)
-        total_rows += written
-        manifest.update_symbol(
-            symbol,
-            latest_time=str(result["latest_time"]),
-            last_success_at=utc_now_iso(),
-            last_gap_start=str(start),
-            last_gap_end=str(end),
-            source="synthetic_gap_fill_forward",
-            rows_written=written,
-            last_error=None,
-        )
-        logger.info("%s synthetic filled source gap %s -> %s rows=%s prev_close=%s", symbol, start, end, written, previous_close)
-
-    return total_rows
-
-
 def sync_symbol(
     *,
     symbol: str,
@@ -694,7 +622,6 @@ def sync_symbol(
     refresh_archive: bool,
     run_audit: bool,
     repair_gaps: bool,
-    fill_source_gaps: bool,
     daily_lookback_days: int,
     max_gap_minutes: int,
     max_workers: int,
@@ -769,8 +696,6 @@ def sync_symbol(
     if run_audit:
         normalize_existing_partitions(store, symbol, logger)
         audit = audit_symbol(store, symbol, expected_start=backfill_start)
-        source_gap_count = len(audit["gaps"])
-        synthetic_rows = 0
         if repair_gaps and audit["gaps"]:
             total_rows += repair_gap_ranges(
                 symbol=symbol,
@@ -784,20 +709,6 @@ def sync_symbol(
             )
             normalize_existing_partitions(store, symbol, logger)
             audit = audit_symbol(store, symbol, expected_start=backfill_start)
-        if fill_source_gaps and audit["gaps"]:
-            synthetic_rows = fill_source_gaps_forward(
-                symbol=symbol,
-                store=store,
-                manifest=manifest,
-                gaps=audit["gaps"],
-                max_gap_minutes=max_gap_minutes,
-                logger=logger,
-            )
-            total_rows += synthetic_rows
-            normalize_existing_partitions(store, symbol, logger)
-            audit = audit_symbol(store, symbol, expected_start=backfill_start)
-        audit["source_gap_count_before_fill"] = source_gap_count
-        audit["synthetic_gap_fill_rows"] = synthetic_rows
         JsonState(f"audits/{DATASET}_{symbol}.json").write({"dataset": DATASET, "symbol": symbol, "updated_at": utc_now_iso(), **audit})
         logger.info("%s audit: rows=%s gaps=%s dup=%s ohlc_bad=%s negative=%s", symbol, audit["rows"], len(audit["gaps"]), audit["duplicate_rows"], audit["ohlc_bad_rows"], audit["negative_rows"])
 
@@ -815,7 +726,6 @@ def sync_all(args: argparse.Namespace, logger, *, run_audit: bool) -> dict[str, 
     daily_lookback_days = int(args.daily_lookback_days or config.get("daily_lookback_days", 45))
     max_gap_minutes = int(args.max_gap_minutes or config.get("max_gap_minutes", 10080))
     max_workers = int(args.max_workers or config.get("max_workers", 4))
-    fill_source_gaps = bool(args.fill_source_gaps or config.get("fill_source_gaps", False))
 
     JsonState("binance_spot_1m_symbols.json").write(
         {
@@ -845,7 +755,6 @@ def sync_all(args: argparse.Namespace, logger, *, run_audit: bool) -> dict[str, 
                 refresh_archive=args.refresh_archive,
                 run_audit=run_audit,
                 repair_gaps=args.repair_gaps,
-                fill_source_gaps=fill_source_gaps,
                 daily_lookback_days=daily_lookback_days,
                 max_gap_minutes=max_gap_minutes,
                 max_workers=max_workers,
@@ -906,7 +815,6 @@ def main() -> None:
     parser.add_argument("--no-rest", action="store_true")
     parser.add_argument("--refresh-archive", action="store_true")
     parser.add_argument("--repair-gaps", action="store_true")
-    parser.add_argument("--fill-source-gaps", action="store_true", help="Fill unrecoverable source-level gaps using previous-close zero-volume candles.")
     parser.add_argument("--no-validate", action="store_true")
     args = parser.parse_args()
 
