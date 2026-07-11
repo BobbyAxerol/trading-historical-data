@@ -262,6 +262,36 @@ class CryptoBinanceQuarterly1m(CryptoBinance1m):
     DATASET_NAME = "crypto_binance_quarterly_1m"
 
 
+class CryptoBinanceSpot1m(MarketDataLoaderBase):
+    """Loads 1m Binance Spot candles (naive time represented in UTC)."""
+
+    DATASET_NAME = "crypto_binance_spot_1m"
+    NEW_PATH_PARTS = ("crypto", "binance_spot", "1m")
+    TZ_INFO = "UTC"
+
+    def _normalize(self, df: pd.DataFrame) -> pd.DataFrame:
+        result = df.copy()
+        if "time" not in result.columns:
+            return result
+
+        result["time"] = pd.to_datetime(result["time"], errors="coerce")
+        result = result.dropna(subset=["time"])
+        try:
+            if result["time"].dt.tz is not None:
+                result["time"] = result["time"].dt.tz_convert(self.TZ_INFO).dt.tz_localize(None)
+        except Exception:
+            pass
+
+        for col in ["open", "high", "low", "close", "volume", "quote_volume", "taker_buy_base_volume", "taker_buy_quote_volume"]:
+            if col in result.columns:
+                result[col] = pd.to_numeric(result[col], errors="coerce").astype("float64")
+        if "number_of_trades" in result.columns:
+            result["number_of_trades"] = pd.to_numeric(result["number_of_trades"], errors="coerce").astype("Int64")
+
+        sort_cols = ["symbol", "time"] if "symbol" in result.columns else ["time"]
+        return result.sort_values(sort_cols).reset_index(drop=True)
+
+
 class BinanceOptions5m(MarketDataLoaderBase):
     """Loads 5m options snap shots from Binance (naive time represented in UTC)."""
 
@@ -659,7 +689,7 @@ def validate_data(df: pd.DataFrame, dataset: str) -> dict[str, Any]:
     report["info"]["max_time"] = str(df["time"].max())
 
     expected_gap = None
-    if dataset == "crypto_1m":
+    if dataset in ("crypto_1m", "crypto_binance_futures_1m", "crypto_binance_quarterly_1m", "binance_usdm_quarterly_1m", "crypto_binance_spot_1m", "binance_spot_1m", "crypto_spot_1m"):
         expected_gap = pd.Timedelta(minutes=1)
     elif dataset == "crypto_daily_ohlcv":
         expected_gap = pd.Timedelta(days=1)
@@ -711,6 +741,8 @@ def load_data(
         return CryptoBinance1m().load(symbols, start_date, end_date, limit, check_val)
     elif dataset_lower in ("crypto_binance_quarterly_1m", "binance_usdm_quarterly_1m"):
         return CryptoBinanceQuarterly1m().load(symbols, start_date, end_date, limit, check_val)
+    elif dataset_lower in ("crypto_binance_spot_1m", "binance_spot_1m", "crypto_spot_1m"):
+        return CryptoBinanceSpot1m().load(symbols, start_date, end_date, limit, check_val)
     elif dataset_lower in ("options_5m",):
         return BinanceOptions5m().load(symbols, start_date, end_date, limit, check_val)
     elif dataset_lower in ("binance_daily_matrix",):
