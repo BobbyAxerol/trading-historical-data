@@ -1,0 +1,12 @@
+symbols:
+  - BTCUSDT
+interval: "1m"
+backfill_start: "2018-01-01"
+sleep_seconds: 70
+rest_overlap_minutes: 10
+daily_lookback_days: 45
+audit_interval_seconds: 21600
+max_gap_minutes: 10080
+max_workers: 4
+vision_base_url: "https://data.binance.vision"
+s3_base_url: "https://s3-ap-northeast-1.amazonaws.com/data.binance.vision"

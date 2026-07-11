@@ -23,6 +23,12 @@ storage/
 │   │           └── year=2024/
 │   │               └── month=03/
 │   │                   └── part.csv.gz
+│   ├── binance_spot/
+│   │   └── 1m/
+│   │       └── symbol=BTCUSDT/
+│   │           └── year=2026/
+│   │               └── month=06/
+│   │                   └── part.csv.gz
 │   └── binance_daily_matrix/
 │       ├── open.csv.gz
 │       ├── high.csv.gz
@@ -102,6 +108,16 @@ storage/crypto/binance_futures/1m/symbol=BTCUSDT_240329/year=2024/month=03/part.
 ```
 
 Collector [`collectors/binance_usdm_quarterly_1m.py`](collectors/binance_usdm_quarterly_1m.py) tự discover active `CURRENT_QUARTER`/`NEXT_QUARTER` từ Binance `/fapi/v1/exchangeInfo`, discover historical concrete contracts từ Binance Vision S3, rồi đồng bộ theo thứ tự: monthly ZIP -> daily ZIP -> REST active tail. `_get_data` chỉ lưu raw contract-level data, không tự build continuous contract. Chi tiết vận hành nằm tại [`BINANCE_USDM_QUARTERLY_1M.md`](BINANCE_USDM_QUARTERLY_1M.md).
+
+### 1.3c Binance Spot 1m
+
+Binance Spot 1m hiện được cấu hình mặc định cho `BTCUSDT` từ `2018-01-01`:
+
+```text
+storage/crypto/binance_spot/1m/symbol=BTCUSDT/year=YYYY/month=MM/part.csv.gz
+```
+
+Collector [`collectors/binance_spot_1m.py`](collectors/binance_spot_1m.py) sync theo thứ tự: Binance Vision spot monthly ZIP -> Vision spot daily ZIP đoạn gần hiện tại -> Binance Spot REST `/api/v3/klines` để bù tail tới candle đã đóng mới nhất. Append luôn dedupe theo `symbol,time`, đọc tail storage để resume, và audit continuity 1 phút khi validation chạy. Chi tiết vận hành nằm tại [`BINANCE_SPOT_1M.md`](BINANCE_SPOT_1M.md).
 
 ### 1.4 Cấu trúc Ma trận Dữ liệu Ngày VN (VN Daily Matrix)
 
@@ -263,13 +279,14 @@ SDK cung cấp các Class Reader chuyên biệt cho từng nguồn dữ liệu:
 | `VnFutures1m` | Dữ liệu nến 1m phái sinh Việt Nam | Múi giờ Việt Nam `Asia/Ho_Chi_Minh` |
 | `CryptoBinance1m` | Dữ liệu nến 1m Binance Futures | Múi giờ quốc tế `UTC` |
 | `CryptoBinanceQuarterly1m` | Alias đọc concrete USD-M quarterly contracts trong cùng Binance Futures storage | Múi giờ quốc tế `UTC` |
+| `CryptoBinanceSpot1m` | Dữ liệu nến 1m Binance Spot, mặc định hiện có `BTCUSDT` từ `2018-01-01` | Múi giờ quốc tế `UTC` |
 | `CryptoDailyMatrix` | Dữ liệu Matrix xoay ngày Binance | Múi giờ quốc tế `UTC` |
 | `BinanceOptions5m` | Dữ liệu snapshot option 5m Binance | Múi giờ quốc tế `UTC` |
 
 #### Ví dụ gọi các Endpoint cụ thể:
 
 ```python
-from data_loader import VnStock1m, VnStockDaily, VNDailyMatrix, CryptoDailyMatrix
+from data_loader import VnStock1m, VnStockDaily, VNDailyMatrix, CryptoDailyMatrix, CryptoBinanceQuarterly1m, CryptoBinanceSpot1m, load_data
 
 # 1. Gọi dữ liệu nến 1m của FPT & ACB trong 1 khoảng thời gian, giới hạn 1000 dòng
 df_1m = VnStock1m().load(
@@ -311,6 +328,38 @@ vn_close = VNDailyMatrix().load(
 vn_data_dict = VNDailyMatrix().load_ohlcv(
     symbols=None,
     start_date="2016-01-01",
+    check_val=True,
+)
+
+# 7. Gọi dữ liệu Binance USD-M quarterly concrete contracts
+# Dữ liệu nằm chung storage với Binance futures 1m, symbol có dạng BTCUSDT_YYMMDD / ETHUSDT_YYMMDD
+quarterly_df = CryptoBinanceQuarterly1m().load(
+    symbols=["BTCUSDT_240329", "ETHUSDT_260925"],
+    start_date="2024-01-01",
+    end_date="2026-07-04 10:00:00",
+    check_val=True,
+)
+
+# Có thể gọi qua router nếu service khác muốn truyền dataset name động
+quarterly_df_2 = load_data(
+    "binance_usdm_quarterly_1m",
+    symbols="BTCUSDT_261225",
+    start_date="2026-06-26",
+    check_val=True,
+)
+
+# 8. Gọi dữ liệu Binance Spot BTCUSDT 1m
+spot_df = CryptoBinanceSpot1m().load(
+    symbols="BTCUSDT",
+    start_date="2018-01-01",
+    check_val=True,
+)
+
+# Alias router tương đương cho service khác
+spot_df_2 = load_data(
+    "binance_spot_1m",
+    symbols="BTCUSDT",
+    start_date="2018-01-01",
     check_val=True,
 )
 ```
