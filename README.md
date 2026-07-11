@@ -117,7 +117,9 @@ Binance Spot 1m hiện được cấu hình mặc định cho `BTCUSDT` từ `20
 storage/crypto/binance_spot/1m/symbol=BTCUSDT/year=YYYY/month=MM/part.csv.gz
 ```
 
-Collector [`collectors/binance_spot_1m.py`](collectors/binance_spot_1m.py) sync theo thứ tự: Binance Vision spot monthly ZIP -> Vision spot daily ZIP đoạn gần hiện tại -> Binance Spot REST `/api/v3/klines` để bù tail tới candle đã đóng mới nhất. Append luôn dedupe theo `symbol,time`, đọc tail storage để resume, và audit continuity 1 phút khi validation chạy. Chi tiết vận hành nằm tại [`BINANCE_SPOT_1M.md`](BINANCE_SPOT_1M.md).
+Collector [`collectors/binance_spot_1m.py`](collectors/binance_spot_1m.py) sync theo thứ tự: Binance Vision spot monthly ZIP -> Vision spot daily ZIP đoạn gần hiện tại -> Binance Spot REST `/api/v3/klines` để bù tail tới candle đã đóng mới nhất. Append luôn dedupe theo `symbol,time`, đọc tail storage để resume, và audit continuity 1 phút khi validation chạy.
+
+Với BTCUSDT spot, một số gap lịch sử official spot không có kline/trade/aggTrade. Theo policy backtest đã duyệt ngày `2026-07-11`, collector được phép fill các gap mà local Binance USD-M Futures cover đủ từng phút vào cùng raw spot storage với `source=binance_usdm_futures_proxy_gap_fill`. OHLC lấy từ futures cùng phút; volume/trade count được scale theo median tỷ lệ spot/futures quanh gap. Các gap không có futures coverage, chủ yếu 2018/2019, được giữ nguyên. Chi tiết vận hành nằm tại [`BINANCE_SPOT_1M.md`](BINANCE_SPOT_1M.md).
 
 ### 1.4 Cấu trúc Ma trận Dữ liệu Ngày VN (VN Daily Matrix)
 
@@ -349,6 +351,7 @@ quarterly_df_2 = load_data(
 )
 
 # 8. Gọi dữ liệu Binance Spot BTCUSDT 1m
+# Cột source phân biệt official spot và các dòng futures proxy được duyệt để fill gap backtest.
 spot_df = CryptoBinanceSpot1m().load(
     symbols="BTCUSDT",
     start_date="2018-01-01",

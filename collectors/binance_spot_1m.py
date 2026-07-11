@@ -58,6 +58,8 @@ OUTPUT_COLUMNS = [
     "source",
     "ingested_at",
 ]
+FUTURES_STORE_PARTS = ["crypto", "binance_futures", "1m"]
+PROXY_FILL_SOURCE = "binance_usdm_futures_proxy_gap_fill"
 
 
 def _ms(value: pd.Timestamp) -> int:
@@ -548,6 +550,120 @@ def load_symbol_frame(store: PartitionedCsvGzStore, symbol: str, *, usecols: lis
     return df
 
 
+def _median_scale(
+    spot: pd.DataFrame,
+    futures: pd.DataFrame,
+    *,
+    column: str,
+    default: float = 1.0,
+) -> float:
+    if column not in spot.columns or column not in futures.columns:
+        return default
+    merged = spot[["time", column]].merge(futures[["time", column]], on="time", suffixes=("_spot", "_futures"))
+    if merged.empty:
+        return default
+    spot_values = pd.to_numeric(merged[f"{column}_spot"], errors="coerce")
+    futures_values = pd.to_numeric(merged[f"{column}_futures"], errors="coerce")
+    ratios = spot_values / futures_values
+    ratios = ratios[ratios.replace([float("inf"), float("-inf")], pd.NA).notna()]
+    ratios = ratios[(ratios > 0) & (ratios < 1000)]
+    if ratios.empty:
+        return default
+    return float(ratios.median())
+
+
+def _build_futures_proxy_rows(
+    *,
+    symbol: str,
+    futures_df: pd.DataFrame,
+    spot_context: pd.DataFrame,
+    futures_context: pd.DataFrame,
+) -> pd.DataFrame:
+    proxy = futures_df.copy()
+    for col in ["open", "high", "low", "close", "volume", "quote_volume", "taker_buy_base_volume", "taker_buy_quote_volume"]:
+        if col in proxy.columns:
+            proxy[col] = pd.to_numeric(proxy[col], errors="coerce")
+    proxy["symbol"] = symbol
+
+    scale_cols = ["volume", "quote_volume", "taker_buy_base_volume", "taker_buy_quote_volume"]
+    for col in scale_cols:
+        if col in proxy.columns:
+            proxy[col] = proxy[col] * _median_scale(spot_context, futures_context, column=col)
+
+    if "number_of_trades" in proxy.columns:
+        trade_scale = _median_scale(spot_context, futures_context, column="number_of_trades")
+        proxy["number_of_trades"] = (pd.to_numeric(proxy["number_of_trades"], errors="coerce") * trade_scale).round().astype("Int64")
+
+    proxy["source"] = PROXY_FILL_SOURCE
+    proxy["ingested_at"] = utc_now_iso()
+    if "close_time" not in proxy.columns:
+        proxy["close_time"] = proxy["time"] + pd.Timedelta(seconds=59, milliseconds=999)
+    return proxy[OUTPUT_COLUMNS].dropna(subset=["time", "open", "high", "low", "close"]).reset_index(drop=True)
+
+
+def proxy_fill_gaps_from_futures(
+    *,
+    symbol: str,
+    spot_store: PartitionedCsvGzStore,
+    futures_store: PartitionedCsvGzStore,
+    manifest: Manifest,
+    gaps: list[dict[str, str]],
+    max_gap_minutes: int,
+    context_hours: int,
+    logger,
+) -> int:
+    rows_written = 0
+    spot_context_all = load_symbol_frame(
+        spot_store,
+        symbol,
+        usecols=["time", "volume", "quote_volume", "number_of_trades", "taker_buy_base_volume", "taker_buy_quote_volume"],
+    )
+    futures_all = load_symbol_frame(futures_store, symbol, usecols=OUTPUT_COLUMNS)
+    if futures_all.empty:
+        logger.warning("%s skip futures proxy fill: no local futures data", symbol)
+        return 0
+
+    for gap in gaps:
+        minutes = int(gap.get("minutes") or 0)
+        if minutes <= 0 or minutes > max_gap_minutes:
+            continue
+        start = pd.Timestamp(gap["start"]).tz_localize(None)
+        end = pd.Timestamp(gap["end"]).tz_localize(None)
+        expected_times = pd.date_range(start, end, freq="min")
+
+        futures_df = futures_all[(futures_all["time"] >= start) & (futures_all["time"] <= end)].copy()
+        if len(futures_df) != len(expected_times) or set(futures_df["time"]) != set(expected_times):
+            logger.info("%s skip futures proxy gap %s -> %s: futures coverage %s/%s", symbol, start, end, len(futures_df), len(expected_times))
+            continue
+
+        context_start = start - pd.Timedelta(int(context_hours), unit="h")
+        context_end = end + pd.Timedelta(int(context_hours), unit="h")
+        spot_context = spot_context_all[(spot_context_all["time"] >= context_start) & (spot_context_all["time"] <= context_end)].copy()
+        futures_context = futures_all[(futures_all["time"] >= context_start) & (futures_all["time"] <= context_end)].copy()
+        proxy = _build_futures_proxy_rows(
+            symbol=symbol,
+            futures_df=futures_df,
+            spot_context=spot_context,
+            futures_context=futures_context,
+        )
+        if proxy.empty:
+            continue
+        result = _append(spot_store, proxy, symbol)
+        written = int(result.get("rows_written") or 0)
+        rows_written += written
+        manifest.update_symbol(
+            symbol,
+            latest_time=str(result["latest_time"]),
+            last_success_at=utc_now_iso(),
+            last_gap_start=str(start),
+            last_gap_end=str(end),
+            source=PROXY_FILL_SOURCE,
+            last_error=None,
+        )
+        logger.info("%s futures proxy filled rows=%s gap=%s -> %s", symbol, written, start, end)
+    return rows_written
+
+
 def _date_texts_between(start: pd.Timestamp, end: pd.Timestamp) -> list[str]:
     days = pd.date_range(start.normalize(), end.normalize(), freq="D")
     return [day.strftime("%Y-%m-%d") for day in days]
@@ -622,8 +738,10 @@ def sync_symbol(
     refresh_archive: bool,
     run_audit: bool,
     repair_gaps: bool,
+    proxy_fill_futures_gaps: bool,
     daily_lookback_days: int,
     max_gap_minutes: int,
+    proxy_context_hours: int,
     max_workers: int,
     store: PartitionedCsvGzStore,
     manifest: Manifest,
@@ -709,6 +827,20 @@ def sync_symbol(
             )
             normalize_existing_partitions(store, symbol, logger)
             audit = audit_symbol(store, symbol, expected_start=backfill_start)
+        if proxy_fill_futures_gaps and audit["gaps"]:
+            futures_store = PartitionedCsvGzStore(FUTURES_STORE_PARTS, partition="month")
+            total_rows += proxy_fill_gaps_from_futures(
+                symbol=symbol,
+                spot_store=store,
+                futures_store=futures_store,
+                manifest=manifest,
+                gaps=audit["gaps"],
+                max_gap_minutes=max_gap_minutes,
+                context_hours=proxy_context_hours,
+                logger=logger,
+            )
+            normalize_existing_partitions(store, symbol, logger)
+            audit = audit_symbol(store, symbol, expected_start=backfill_start)
         JsonState(f"audits/{DATASET}_{symbol}.json").write({"dataset": DATASET, "symbol": symbol, "updated_at": utc_now_iso(), **audit})
         logger.info("%s audit: rows=%s gaps=%s dup=%s ohlc_bad=%s negative=%s", symbol, audit["rows"], len(audit["gaps"]), audit["duplicate_rows"], audit["ohlc_bad_rows"], audit["negative_rows"])
 
@@ -725,7 +857,9 @@ def sync_all(args: argparse.Namespace, logger, *, run_audit: bool) -> dict[str, 
     overlap_minutes = int(args.rest_overlap_minutes or config.get("rest_overlap_minutes", 10))
     daily_lookback_days = int(args.daily_lookback_days or config.get("daily_lookback_days", 45))
     max_gap_minutes = int(args.max_gap_minutes or config.get("max_gap_minutes", 10080))
+    proxy_context_hours = int(args.proxy_context_hours or config.get("proxy_context_hours", 6))
     max_workers = int(args.max_workers or config.get("max_workers", 4))
+    proxy_fill_futures_gaps = bool(args.proxy_fill_futures_gaps or config.get("proxy_fill_from_futures", False))
 
     JsonState("binance_spot_1m_symbols.json").write(
         {
@@ -755,8 +889,10 @@ def sync_all(args: argparse.Namespace, logger, *, run_audit: bool) -> dict[str, 
                 refresh_archive=args.refresh_archive,
                 run_audit=run_audit,
                 repair_gaps=args.repair_gaps,
+                proxy_fill_futures_gaps=proxy_fill_futures_gaps,
                 daily_lookback_days=daily_lookback_days,
                 max_gap_minutes=max_gap_minutes,
+                proxy_context_hours=proxy_context_hours,
                 max_workers=max_workers,
                 store=store,
                 manifest=manifest,
@@ -815,6 +951,8 @@ def main() -> None:
     parser.add_argument("--no-rest", action="store_true")
     parser.add_argument("--refresh-archive", action="store_true")
     parser.add_argument("--repair-gaps", action="store_true")
+    parser.add_argument("--proxy-fill-futures-gaps", action="store_true")
+    parser.add_argument("--proxy-context-hours", type=int, default=None)
     parser.add_argument("--no-validate", action="store_true")
     args = parser.parse_args()
 
