@@ -36,20 +36,28 @@ Khi audit được bật, collector kiểm tra:
 - OHLC logical errors;
 - giá/volume âm.
 
-Nếu `--repair-gaps` được bật, các gap có độ dài không vượt `max_gap_minutes` sẽ được gọi lại bằng daily Vision và REST rồi merge vào partition hiện có. Collector không tự tạo candle giả trong canonical spot storage.
+Nếu `--repair-gaps` được bật, các gap có độ dài không vượt `max_gap_minutes` sẽ được gọi lại bằng daily Vision và REST rồi merge vào partition hiện có. Collector không forward-fill và không dựng nến synthetic từ giá gần nhất.
 
-Sau backfill đầu tiên ngày `2026-07-11`, audit `BTCUSDT` cho kết quả:
+Theo policy backtest đã duyệt ngày `2026-07-11`, nếu `proxy_fill_from_futures: true` hoặc `--proxy-fill-futures-gaps` được bật, các gap spot mà Binance USD-M Futures `BTCUSDT` local cover đủ 100% từng phút sẽ được fill thẳng vào canonical spot storage với:
+
+- `source=binance_usdm_futures_proxy_gap_fill`;
+- OHLC lấy từ USD-M Futures 1m cùng phút;
+- `volume`, `quote_volume`, `taker_buy_*`, `number_of_trades` được scale bằng median tỷ lệ spot/futures trong cửa sổ context hai bên gap (`proxy_context_hours`, mặc định 6 giờ);
+- gap không đủ futures coverage được giữ nguyên, không fill.
+
+Snapshot audit sau futures proxy repair ngày `2026-07-11 08:26 UTC` cho `BTCUSDT`:
 
 ```text
-rows=4,475,065
-range=2018-01-01 00:00:00 -> 2026-07-11 06:49:00 UTC
+rows=4,477,485
+range=2018-01-01 00:00:00 -> 2026-07-11 08:24:00 UTC
 duplicate_rows=0
 ohlc_bad_rows=0
 negative_rows=0
-source_level_gaps=31
+remaining_gaps=16
+futures_proxy_fill_rows=2,325
 ```
 
-Các gap nguồn là các đoạn Binance spot historical không có candle trong monthly Vision, daily Vision, Spot REST, spot trades hoặc spot aggTrades. Nghiên cứu bổ sung ngày `2026-07-11`: Binance USD-M Futures `BTCUSDT` 1m cover được 15/31 gap, tổng `2,325` phút; phần còn lại chủ yếu nằm trước khi USD-M Futures có data hoặc không có futures coverage. Nếu cần fill bằng futures proxy cho backtest, phải ghi rõ source riêng như `binance_usdm_futures_proxy_gap_fill` và không coi đó là spot raw thật.
+Các gap nguồn là các đoạn Binance spot historical không có candle trong monthly Vision, daily Vision, Spot REST, spot trades hoặc spot aggTrades. Nghiên cứu bổ sung ngày `2026-07-11`: Binance USD-M Futures `BTCUSDT` 1m cover được 15/31 gap, tổng `2,325` phút. Các đoạn này đã được fill vào raw spot theo policy trên với source `binance_usdm_futures_proxy_gap_fill`. Phần còn lại nằm trong 2018/2019, trước khi USD-M Futures local có coverage, nên được giữ nguyên để backtest dùng dữ liệu nào có dữ liệu đó.
 
 ## Loader
 
