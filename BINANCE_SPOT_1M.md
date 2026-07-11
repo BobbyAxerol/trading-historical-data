@@ -36,27 +36,20 @@ Khi audit được bật, collector kiểm tra:
 - OHLC logical errors;
 - giá/volume âm.
 
-Nếu `--repair-gaps` được bật, các gap có độ dài không vượt `max_gap_minutes` sẽ được gọi lại bằng daily Vision và REST rồi merge vào partition hiện có. Nếu vẫn còn gap nguồn không thể vá, bật thêm `--fill-source-gaps` để fill-forward phục vụ backtest:
-
-- `open/high/low/close` = previous close trước gap;
-- `volume/quote_volume/taker_buy_*` = `0`;
-- `number_of_trades` = `0`;
-- `source` = `synthetic_gap_fill_forward`.
+Nếu `--repair-gaps` được bật, các gap có độ dài không vượt `max_gap_minutes` sẽ được gọi lại bằng daily Vision và REST rồi merge vào partition hiện có. Collector không tự tạo candle giả trong canonical spot storage.
 
 Sau backfill đầu tiên ngày `2026-07-11`, audit `BTCUSDT` cho kết quả:
 
 ```text
-rows=4,483,093
-range=2018-01-01 00:00:00 -> 2026-07-11 06:12:00 UTC
+rows=4,475,065
+range=2018-01-01 00:00:00 -> 2026-07-11 06:49:00 UTC
 duplicate_rows=0
 ohlc_bad_rows=0
 negative_rows=0
-source_level_gaps_before_fill=31
-synthetic_gap_fill_rows=8,065
-remaining_gaps_after_fill=0
+source_level_gaps=31
 ```
 
-Các gap nguồn ban đầu là các đoạn Binance spot historical không có candle trong cả monthly Vision, daily Vision và Spot REST. Sau khi anh chọn fill cho backtest, collector ghi synthetic zero-volume candles với `source=synthetic_gap_fill_forward` để lưới 1m liên tục nhưng vẫn truy vết được đâu là dữ liệu fill.
+Các gap nguồn là các đoạn Binance spot historical không có candle trong monthly Vision, daily Vision, Spot REST, spot trades hoặc spot aggTrades. Nghiên cứu bổ sung ngày `2026-07-11`: Binance USD-M Futures `BTCUSDT` 1m cover được 15/31 gap, tổng `2,325` phút; phần còn lại chủ yếu nằm trước khi USD-M Futures có data hoặc không có futures coverage. Nếu cần fill bằng futures proxy cho backtest, phải ghi rõ source riêng như `binance_usdm_futures_proxy_gap_fill` và không coi đó là spot raw thật.
 
 ## Loader
 
