@@ -36,20 +36,27 @@ Khi audit được bật, collector kiểm tra:
 - OHLC logical errors;
 - giá/volume âm.
 
-Nếu `--repair-gaps` được bật, các gap có độ dài không vượt `max_gap_minutes` sẽ được gọi lại bằng REST và merge vào partition hiện có. Không tạo candle giả.
+Nếu `--repair-gaps` được bật, các gap có độ dài không vượt `max_gap_minutes` sẽ được gọi lại bằng daily Vision và REST rồi merge vào partition hiện có. Nếu vẫn còn gap nguồn không thể vá, bật thêm `--fill-source-gaps` để fill-forward phục vụ backtest:
+
+- `open/high/low/close` = previous close trước gap;
+- `volume/quote_volume/taker_buy_*` = `0`;
+- `number_of_trades` = `0`;
+- `source` = `synthetic_gap_fill_forward`.
 
 Sau backfill đầu tiên ngày `2026-07-11`, audit `BTCUSDT` cho kết quả:
 
 ```text
-rows=4,474,999
-range=2018-01-01 00:00:00 -> 2026-07-11 05:43:00 UTC
+rows=4,483,093
+range=2018-01-01 00:00:00 -> 2026-07-11 06:12:00 UTC
 duplicate_rows=0
 ohlc_bad_rows=0
 negative_rows=0
-source_level_gaps=31
+source_level_gaps_before_fill=31
+synthetic_gap_fill_rows=8,065
+remaining_gaps_after_fill=0
 ```
 
-Các gap còn lại là các đoạn Binance spot historical không có candle trong cả monthly Vision, daily Vision và Spot REST. Collector ghi danh sách chi tiết tại `state/audits/crypto_binance_spot_1m_BTCUSDT.json`. Hệ thống cố ý không fill bằng candle giả; nếu backtest cần lưới 1m tuyệt đối đều, hãy xử lý fill ở tầng strategy/preprocessor riêng để policy đó không làm bẩn raw storage.
+Các gap nguồn ban đầu là các đoạn Binance spot historical không có candle trong cả monthly Vision, daily Vision và Spot REST. Sau khi anh chọn fill cho backtest, collector ghi synthetic zero-volume candles với `source=synthetic_gap_fill_forward` để lưới 1m liên tục nhưng vẫn truy vết được đâu là dữ liệu fill.
 
 ## Loader
 

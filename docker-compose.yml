@@ -32,7 +32,7 @@ services:
 
   binance-spot-1m:
     <<: *get-data-service
-    command: ["python", "-m", "collectors.binance_spot_1m", "--mode", "live", "--repair-gaps"]
+    command: ["python", "-m", "collectors.binance_spot_1m", "--mode", "live", "--repair-gaps", "--fill-source-gaps"]
     environment:
       TZ: UTC
       DATA_ROOT: /app/storage
