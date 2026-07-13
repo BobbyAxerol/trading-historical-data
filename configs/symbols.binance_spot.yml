@@ -8,5 +8,7 @@ daily_lookback_days: 45
 audit_interval_seconds: 21600
 max_gap_minutes: 10080
 max_workers: 4
+proxy_fill_from_futures: true
+proxy_context_hours: 6
 vision_base_url: "https://data.binance.vision"
 s3_base_url: "https://s3-ap-northeast-1.amazonaws.com/data.binance.vision"

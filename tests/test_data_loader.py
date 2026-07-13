@@ -13,6 +13,7 @@ from data_loader import (
     VnFutures1m,
     CryptoBinance1m,
     CryptoBinanceQuarterly1m,
+    BinanceOrderBookSnapshot1h,
     CryptoDailyMatrix,
 )
 
@@ -55,6 +56,13 @@ class TestDataLoaderClasses(unittest.TestCase):
         if not df.empty:
             self.assertEqual(df["symbol"].iloc[0], "BTCUSDT_240329")
             self.assertIsNone(df["time"].dt.tz)
+
+    def test_binance_orderbook_snapshot_class_exists(self):
+        df = BinanceOrderBookSnapshot1h().load(symbols="BTCUSDT", limit=5, check_val=False)
+        if not df.empty:
+            self.assertEqual(df["symbol"].iloc[0], "BTCUSDT")
+            self.assertIn("bid_depth_1pct", df.columns)
+            self.assertIn("q_bid_depth_1pct", df.columns)
 
     def test_crypto_daily_matrix_class(self):
         # Close feature daily matrix
