@@ -1,0 +1,20 @@
+market: "usdm_futures"
+symbols:
+  - BTCUSDT
+quarterly_pairs:
+  - BTCUSDT
+include_current_quarter: true
+include_next_quarter: true
+depth_limit: 20
+snapshot_interval: "1h"
+lookback_days: 30
+percent_bands:
+  - 0.002
+  - 0.01
+  - 0.02
+  - 0.05
+primary_feature_band: 0.01
+sleep_seconds: 3600
+rest_overlap_hours: 2
+vision_base_url: "https://data.binance.vision"
+s3_base_url: "https://s3-ap-northeast-1.amazonaws.com/data.binance.vision"
