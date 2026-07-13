@@ -39,6 +39,15 @@ services:
       STATE_ROOT: /app/state
       LOG_ROOT: /app/logs
 
+  binance-orderbook-snapshot-1h:
+    <<: *get-data-service
+    command: ["python", "-m", "collectors.binance_orderbook_snapshot_1h", "--mode", "live"]
+    environment:
+      TZ: UTC
+      DATA_ROOT: /app/storage
+      STATE_ROOT: /app/state
+      LOG_ROOT: /app/logs
+
   vn-daily:
     <<: *get-data-service
     command: ["python", "-m", "collectors.vn_daily", "--mode", "live", "--schedule", "16:30"]
