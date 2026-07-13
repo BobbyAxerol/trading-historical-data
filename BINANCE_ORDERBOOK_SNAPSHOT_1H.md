@@ -47,6 +47,20 @@ Collector [`collectors/binance_orderbook_snapshot_1h.py`](collectors/binance_ord
 
 Vision `bookDepth` là dữ liệu đã aggregate theo percent band (`timestamp,percentage,depth,notional`), nên historical features lấy trực tiếp từ band `-0.20/+0.20`, `-1/+1`, `-2/+2`, `-5/+5`. REST rows được tính từ top `depth_limit` L2 levels hiện tại; band xa như `5%` vì vậy chỉ phản ánh liquidity nằm trong top 20 levels tại thời điểm gọi REST.
 
+## Delayed Vision Catch-up
+
+Binance Vision `daily/bookDepth` thường publish trễ so với thời gian thực. Service live **không cần chạy tay lại** để bù những ngày Vision publish muộn, miễn là container vẫn chạy với `--mode live` và không bật `--no-vision`.
+
+Mỗi vòng service sẽ:
+
+- quét lại toàn bộ rolling `lookback_days` gần nhất trên Vision;
+- skip ngày nào storage đã có ít nhất một row trong ngày đó;
+- tiếp tục thử các ngày còn thiếu trong storage;
+- khi ZIP ngày thiếu xuất hiện trên Vision, tải file đó, downsample về 1h, append/dedupe vào storage;
+- sau đó vẫn append REST snapshot giờ hiện tại.
+
+Vì vậy audit có thể tạm thời báo `gap_count=1` khi Vision mới có dữ liệu tới ngày cũ hơn hôm nay, còn REST đã append snapshot hiện tại. Gap này sẽ tự khép lại khi Binance publish các file daily còn thiếu trong rolling 30 ngày. `gap_count` là số đoạn đứt continuity hourly, không phải số giờ thiếu.
+
 ## Feature Meaning
 
 - `bid_depth_1pct`: tổng base quantity phía bid trong band 1%.
