@@ -135,7 +135,7 @@ Order book snapshot 1h hiện được cấu hình cho `BTCUSDT` perpetual và a
 storage/crypto/binance_orderbook_snapshot/1h/symbol=BTCUSDT/year=YYYY/month=MM/part.csv.gz
 ```
 
-Collector [`collectors/binance_orderbook_snapshot_1h.py`](collectors/binance_orderbook_snapshot_1h.py) seed rolling `30 days` từ Binance Vision USD-M `daily/bookDepth`, downsample về bucket 1h, rồi gọi REST `/fapi/v1/depth` với `depth_limit=20` để append giờ hiện tại. Service live tự quét lại rolling window và tự bù các ngày Vision publish trễ; không cần chạy tay lại nếu container vẫn chạy và không bật `--no-vision`. Feature chính gồm `bid_depth_1pct`, `ask_depth_1pct`, `q_bid_depth_1pct`, `q_ask_depth_1pct`; các band đang bật là `0.2%`, `1%`, `2%`, `5%`, với `1%` là primary band. Chi tiết vận hành nằm tại [`BINANCE_ORDERBOOK_SNAPSHOT_1H.md`](BINANCE_ORDERBOOK_SNAPSHOT_1H.md).
+Collector [`collectors/binance_orderbook_snapshot_1h.py`](collectors/binance_orderbook_snapshot_1h.py) seed rolling `30 days` từ Binance Vision USD-M `daily/bookDepth`, downsample về bucket 1h, rồi gọi REST `/fapi/v1/depth` với `depth_limit=20` để append giờ hiện tại. Service live tự quét lại rolling window và tự bù các ngày Vision publish trễ; không cần chạy tay lại nếu container vẫn chạy và không bật `--no-vision`. Feature chính gồm `bid_depth_1pct`, `ask_depth_1pct`, `q_bid_depth_1pct`, `q_ask_depth_1pct`; trong đó `q_` nghĩa là quote-notional depth, không phải quarterly. Quarterly được xác định bằng `symbol`/`contract_type`. Các band đang bật là `0.2%`, `1%`, `2%`, `5%`, với `1%` là primary band. Chi tiết vận hành nằm tại [`BINANCE_ORDERBOOK_SNAPSHOT_1H.md`](BINANCE_ORDERBOOK_SNAPSHOT_1H.md).
 
 ### 1.4 Cấu trúc Ma trận Dữ liệu Ngày VN (VN Daily Matrix)
 

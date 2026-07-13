@@ -36,6 +36,19 @@ depth_limit,source,ingested_at
 
 `time` là bucket 1h UTC-naive dùng để dedupe/load. `sample_time` là timestamp thật của snapshot được chọn trong bucket giờ đó.
 
+## Naming Convention
+
+Trong dataset này, prefix `q_` trong các feature như `q_bid_depth_1pct` và `q_ask_depth_1pct` **luôn có nghĩa là quote-notional**, không có nghĩa là quarterly.
+
+Quy ước bắt buộc:
+
+- `bid_depth_*` / `ask_depth_*`: base quantity depth, ví dụ BTC quantity.
+- `q_bid_depth_*` / `q_ask_depth_*`: quote-notional depth, tức `sum(price * quantity)`, đơn vị quote asset như USDT.
+- `quarterly`: được biểu diễn bằng `symbol` concrete như `BTCUSDT_260925` và `contract_type` như `CURRENT_QUARTER` hoặc `NEXT_QUARTER`.
+- Không dùng prefix `q_` để chỉ quarterly contract.
+
+Do đó service downstream không được map `q_bid_depth_1pct` sang nghĩa "quarterly bid depth". Nếu cần feature riêng cho quarterly, hãy lọc theo `contract_type` hoặc `symbol`, rồi giữ nguyên nghĩa `q_ = quote-notional`.
+
 ## Sync Logic
 
 Collector [`collectors/binance_orderbook_snapshot_1h.py`](collectors/binance_orderbook_snapshot_1h.py) chạy theo thứ tự:
