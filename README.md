@@ -29,6 +29,12 @@ storage/
 │   │           └── year=2026/
 │   │               └── month=06/
 │   │                   └── part.csv.gz
+│   ├── binance_orderbook_snapshot/
+│   │   └── 1h/
+│   │       └── symbol=BTCUSDT/
+│   │           └── year=2026/
+│   │               └── month=07/
+│   │                   └── part.csv.gz
 │   └── binance_daily_matrix/
 │       ├── open.csv.gz
 │       ├── high.csv.gz
@@ -117,7 +123,19 @@ Binance Spot 1m hiện được cấu hình mặc định cho `BTCUSDT` từ `20
 storage/crypto/binance_spot/1m/symbol=BTCUSDT/year=YYYY/month=MM/part.csv.gz
 ```
 
-Collector [`collectors/binance_spot_1m.py`](collectors/binance_spot_1m.py) sync theo thứ tự: Binance Vision spot monthly ZIP -> Vision spot daily ZIP đoạn gần hiện tại -> Binance Spot REST `/api/v3/klines` để bù tail tới candle đã đóng mới nhất. Append luôn dedupe theo `symbol,time`, đọc tail storage để resume, và audit continuity 1 phút khi validation chạy. Chi tiết vận hành nằm tại [`BINANCE_SPOT_1M.md`](BINANCE_SPOT_1M.md).
+Collector [`collectors/binance_spot_1m.py`](collectors/binance_spot_1m.py) sync theo thứ tự: Binance Vision spot monthly ZIP -> Vision spot daily ZIP đoạn gần hiện tại -> Binance Spot REST `/api/v3/klines` để bù tail tới candle đã đóng mới nhất. Append luôn dedupe theo `symbol,time`, đọc tail storage để resume, và audit continuity 1 phút khi validation chạy.
+
+Với BTCUSDT spot, một số gap lịch sử official spot không có kline/trade/aggTrade. Theo policy backtest đã duyệt ngày `2026-07-11`, collector được phép fill các gap mà local Binance USD-M Futures cover đủ từng phút vào cùng raw spot storage với `source=binance_usdm_futures_proxy_gap_fill`. OHLC lấy từ futures cùng phút; volume/trade count được scale theo median tỷ lệ spot/futures quanh gap. Các gap không có futures coverage, chủ yếu 2018/2019, được giữ nguyên. Chi tiết vận hành nằm tại [`BINANCE_SPOT_1M.md`](BINANCE_SPOT_1M.md).
+
+### 1.3d Binance USD-M Order Book Snapshot 1h
+
+Order book snapshot 1h hiện được cấu hình cho `BTCUSDT` perpetual và active BTCUSDT quarterly contracts:
+
+```text
+storage/crypto/binance_orderbook_snapshot/1h/symbol=BTCUSDT/year=YYYY/month=MM/part.csv.gz
+```
+
+Collector [`collectors/binance_orderbook_snapshot_1h.py`](collectors/binance_orderbook_snapshot_1h.py) seed rolling `30 days` từ Binance Vision USD-M `daily/bookDepth`, downsample về bucket 1h, rồi gọi REST `/fapi/v1/depth` với `depth_limit=20` để append giờ hiện tại. Service live tự quét lại rolling window và tự bù các ngày Vision publish trễ; không cần chạy tay lại nếu container vẫn chạy và không bật `--no-vision`. Feature chính gồm `bid_depth_1pct`, `ask_depth_1pct`, `q_bid_depth_1pct`, `q_ask_depth_1pct`; các band đang bật là `0.2%`, `1%`, `2%`, `5%`, với `1%` là primary band. Chi tiết vận hành nằm tại [`BINANCE_ORDERBOOK_SNAPSHOT_1H.md`](BINANCE_ORDERBOOK_SNAPSHOT_1H.md).
 
 ### 1.4 Cấu trúc Ma trận Dữ liệu Ngày VN (VN Daily Matrix)
 
@@ -158,6 +176,7 @@ Hệ thống ghi nhận trạng thái liên tục tại thư mục `state/` đ�
 - **Binance Daily Matrix**: Chạy hàng ngày lúc **00:05** (Giờ UTC), chỉ ghi nến daily đã đóng hoàn toàn. Khi file hiện có bị thiếu phần đầu hoặc có gap nội bộ, service sẽ đọc matrix hiện tại, xác định điểm cần backfill theo từng symbol, fetch bù từ mốc thiếu rồi merge/dedupe vào storage.
 - **Crypto 1m Live**: Chạy cập nhật liên tục mỗi phút để thu thập nến crypto thời gian thực.
 - **Binance USD-M Quarterly 1m**: Chạy định kỳ, dùng Binance Vision để kéo lịch sử quarterly dài nhất có thể và REST để bù active tail.
+- **Binance Order Book Snapshot 1h**: Chạy mỗi giờ, seed/lookback 30 ngày từ Binance Vision `bookDepth`, rồi REST append snapshot hiện tại.
 - **Options Binance 5m**: Chạy cập nhật Snapshot tùy chọn Binance mỗi 5 phút.
 
 ### 4.2 Khởi chạy bằng Docker Compose
@@ -190,6 +209,9 @@ PYTHONPATH=. python -m collectors.binance_daily_matrix --mode once --backfill-st
 
 # Chạy một lần để đồng bộ USD-M quarterly contracts lịch sử/current
 PYTHONPATH=. python -m collectors.binance_usdm_quarterly_1m --mode once
+
+# Chạy một lần để seed 30 ngày order book snapshot 1h và append REST snapshot hiện tại
+PYTHONPATH=. python -m collectors.binance_orderbook_snapshot_1h --mode once
 ```
 
 ### 4.4 Audit continuity & repair crypto gaps
@@ -280,13 +302,14 @@ SDK cung cấp các Class Reader chuyên biệt cho từng nguồn dữ liệu:
 | `CryptoBinance1m` | Dữ liệu nến 1m Binance Futures | Múi giờ quốc tế `UTC` |
 | `CryptoBinanceQuarterly1m` | Alias đọc concrete USD-M quarterly contracts trong cùng Binance Futures storage | Múi giờ quốc tế `UTC` |
 | `CryptoBinanceSpot1m` | Dữ liệu nến 1m Binance Spot, mặc định hiện có `BTCUSDT` từ `2018-01-01` | Múi giờ quốc tế `UTC` |
+| `BinanceOrderBookSnapshot1h` | Feature snapshot order book USD-M Futures 1h (`bid_depth_1pct`, `q_bid_depth_1pct`, ...) | Múi giờ quốc tế `UTC` |
 | `CryptoDailyMatrix` | Dữ liệu Matrix xoay ngày Binance | Múi giờ quốc tế `UTC` |
 | `BinanceOptions5m` | Dữ liệu snapshot option 5m Binance | Múi giờ quốc tế `UTC` |
 
 #### Ví dụ gọi các Endpoint cụ thể:
 
 ```python
-from data_loader import VnStock1m, VnStockDaily, VNDailyMatrix, CryptoDailyMatrix, CryptoBinanceQuarterly1m, CryptoBinanceSpot1m, load_data
+from data_loader import VnStock1m, VnStockDaily, VNDailyMatrix, CryptoDailyMatrix, CryptoBinanceQuarterly1m, CryptoBinanceSpot1m, BinanceOrderBookSnapshot1h, load_data
 
 # 1. Gọi dữ liệu nến 1m của FPT & ACB trong 1 khoảng thời gian, giới hạn 1000 dòng
 df_1m = VnStock1m().load(
@@ -349,6 +372,7 @@ quarterly_df_2 = load_data(
 )
 
 # 8. Gọi dữ liệu Binance Spot BTCUSDT 1m
+# Cột source phân biệt official spot và các dòng futures proxy được duyệt để fill gap backtest.
 spot_df = CryptoBinanceSpot1m().load(
     symbols="BTCUSDT",
     start_date="2018-01-01",
@@ -360,6 +384,20 @@ spot_df_2 = load_data(
     "binance_spot_1m",
     symbols="BTCUSDT",
     start_date="2018-01-01",
+    check_val=True,
+)
+
+# 9. Gọi feature order book snapshot 1h
+orderbook_df = BinanceOrderBookSnapshot1h().load_features(
+    symbols=["BTCUSDT", "BTCUSDT_260925"],
+    start_date="2026-06-13",
+    check_val=True,
+)
+
+orderbook_df_2 = load_data(
+    "binance_orderbook_snapshot_1h",
+    symbols="BTCUSDT",
+    start_date="2026-06-13",
     check_val=True,
 )
 ```
