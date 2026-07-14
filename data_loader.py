@@ -335,6 +335,62 @@ class BinanceOrderBookSnapshot1h(MarketDataLoaderBase):
         return self.load(symbols=symbols, start_date=start_date, end_date=end_date, limit=limit, check_val=check_val)
 
 
+class BinanceFuturesMetrics5m(MarketDataLoaderBase):
+    """Loads Binance USD-M futures metrics 5m from Vision (OI and long/short ratios)."""
+
+    DATASET_NAME = "crypto_binance_futures_metrics_5m"
+    NEW_PATH_PARTS = ("crypto", "binance_futures_metrics", "5m")
+    TZ_INFO = "UTC"
+
+    def _normalize(self, df: pd.DataFrame) -> pd.DataFrame:
+        result = df.copy()
+        if "time" not in result.columns:
+            return result
+        result["time"] = pd.to_datetime(result["time"], errors="coerce")
+        result = result.dropna(subset=["time"])
+        for col in result.columns:
+            if col in {"time", "market", "symbol", "contract_type", "source", "ingested_at"}:
+                continue
+            result[col] = pd.to_numeric(result[col], errors="coerce")
+        sort_cols = ["symbol", "time"] if "symbol" in result.columns else ["time"]
+        return result.sort_values(sort_cols).reset_index(drop=True)
+
+    def load_open_interest(
+        self,
+        symbols: str | list[str] | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        limit: int | None = None,
+        check_val: bool = True,
+    ) -> pd.DataFrame:
+        cols = ["time", "market", "symbol", "contract_type", "sum_open_interest", "sum_open_interest_value", "source", "ingested_at"]
+        df = self.load(symbols=symbols, start_date=start_date, end_date=end_date, limit=limit, check_val=check_val)
+        return df[[col for col in cols if col in df.columns]] if not df.empty else df
+
+    def load_long_short_ratios(
+        self,
+        symbols: str | list[str] | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        limit: int | None = None,
+        check_val: bool = True,
+    ) -> pd.DataFrame:
+        cols = [
+            "time",
+            "market",
+            "symbol",
+            "contract_type",
+            "count_toptrader_long_short_ratio",
+            "sum_toptrader_long_short_ratio",
+            "count_long_short_ratio",
+            "sum_taker_long_short_vol_ratio",
+            "source",
+            "ingested_at",
+        ]
+        df = self.load(symbols=symbols, start_date=start_date, end_date=end_date, limit=limit, check_val=check_val)
+        return df[[col for col in cols if col in df.columns]] if not df.empty else df
+
+
 class CryptoDailyMatrix:
     """Loads pivoted daily matrices (open, high, low, close, volume) for top 400 Binance futures."""
 
@@ -665,6 +721,47 @@ def validate_data(df: pd.DataFrame, dataset: str) -> dict[str, Any]:
         report["info"]["max_time"] = str(df["time"].max())
         return report
 
+    if dataset in ("crypto_binance_futures_metrics_5m", "binance_futures_metrics_5m", "futures_metrics_5m"):
+        required_cols = ["time", "symbol", "sum_open_interest", "sum_open_interest_value", "count_long_short_ratio"]
+        missing_cols = [c for c in required_cols if c not in df.columns]
+        if missing_cols:
+            report["valid"] = False
+            report["errors"].append(f"Missing required columns: {missing_cols}")
+            return report
+        if not pd.api.types.is_datetime64_any_dtype(df["time"]):
+            try:
+                pd.to_datetime(df["time"])
+            except Exception as exc:
+                report["valid"] = False
+                report["errors"].append(f"Column 'time' is not parseable as datetime: {exc}")
+        numeric_cols = [
+            "sum_open_interest",
+            "sum_open_interest_value",
+            "count_toptrader_long_short_ratio",
+            "sum_toptrader_long_short_ratio",
+            "count_long_short_ratio",
+            "sum_taker_long_short_vol_ratio",
+        ]
+        for col in numeric_cols:
+            if col in df.columns and not pd.api.types.is_numeric_dtype(df[col]):
+                report["valid"] = False
+                report["errors"].append(f"Column '{col}' is not numeric.")
+        for col in ("sum_open_interest", "sum_open_interest_value"):
+            if col in df.columns:
+                neg_count = (df[col].dropna() < 0).sum()
+                if neg_count > 0:
+                    report["valid"] = False
+                    report["errors"].append(f"Column '{col}' contains {neg_count} negative values.")
+        dup_count = df.duplicated(subset=["symbol", "time"]).sum()
+        report["info"]["duplicate_count"] = int(dup_count)
+        if dup_count > 0:
+            report["valid"] = False
+            report["errors"].append(f"Found {dup_count} duplicate rows by symbol and time.")
+        report["info"]["symbols"] = list(df["symbol"].unique())
+        report["info"]["min_time"] = str(df["time"].min())
+        report["info"]["max_time"] = str(df["time"].max())
+        return report
+
     # Standard OHLCV validation
     required_cols = ["time", "symbol", "open", "high", "low", "close", "volume"]
     missing_cols = [c for c in required_cols if c not in df.columns]
@@ -811,6 +908,8 @@ def load_data(
         return CryptoBinanceSpot1m().load(symbols, start_date, end_date, limit, check_val)
     elif dataset_lower in ("crypto_binance_orderbook_snapshot_1h", "binance_orderbook_snapshot_1h", "orderbook_snapshot_1h"):
         return BinanceOrderBookSnapshot1h().load(symbols, start_date, end_date, limit, check_val)
+    elif dataset_lower in ("crypto_binance_futures_metrics_5m", "binance_futures_metrics_5m", "futures_metrics_5m"):
+        return BinanceFuturesMetrics5m().load(symbols, start_date, end_date, limit, check_val)
     elif dataset_lower in ("options_5m",):
         return BinanceOptions5m().load(symbols, start_date, end_date, limit, check_val)
     elif dataset_lower in ("binance_daily_matrix",):
