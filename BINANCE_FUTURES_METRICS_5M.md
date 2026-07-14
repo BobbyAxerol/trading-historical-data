@@ -16,11 +16,14 @@ symbols:
 quarterly_pairs:
   - BTCUSDT
   - ETHUSDT
-start_date: "2023-01-01"
+start_date: null
 vision_overlap_days: 7
+include_rest_tail: true
 ```
 
 `quarterly_pairs` được discover qua Binance `/fapi/v1/exchangeInfo`, chỉ lấy active `CURRENT_QUARTER` và `NEXT_QUARTER`, rồi lưu bằng concrete symbol như `BTCUSDT_260925`.
+
+`start_date: null` nghĩa là auto-discover ngày sớm nhất có thật trên Binance Vision cho từng symbol. Nếu cần giới hạn dữ liệu vì lý do test/disk, truyền `--start-date YYYY-MM-DD`; collector sẽ lấy `max(ngày sớm nhất Vision có, start_date)`.
 
 ## Storage
 
@@ -58,15 +61,18 @@ Không tự đổi tên `count_*` thành `account_*` hoặc `sum_*` thành `posi
 Collector [`collectors/binance_futures_metrics_5m.py`](collectors/binance_futures_metrics_5m.py) chạy theo thứ tự:
 
 1. Optional legacy seed từ `/root/bobby/pool_alpha/Arbops/binance_basis_arb/data_storage/*_metrics_synced.csv.gz` nếu file tồn tại.
-2. Binance Vision daily ZIP:
+2. Normalize/dedupe partition hiện có theo `symbol,time`, sửa timestamp về bucket 5 phút và ép numeric schema.
+3. List toàn bộ keys có thật từ Binance Vision S3 prefix:
    `data/futures/um/daily/metrics/{SYMBOL}/{SYMBOL}-metrics-YYYY-MM-DD.zip`.
-3. Append/dedupe vào partition monthly.
-4. Khi storage đã có data, live sync chỉ quét lại từ `latest_time - vision_overlap_days`, không tải lại toàn bộ lịch sử.
-5. Ngày nào có đủ `min_rows_per_full_day=288` rows sẽ được skip. Ngày partial hoặc ngày Vision publish trễ sẽ được retry ở các vòng sau.
+4. Tính `effective_start` theo earliest Vision key nếu config để `null/auto`.
+5. Quét coverage toàn bộ từ `effective_start` tới latest Vision key. Ngày nào thiếu/partial so với `min_rows_per_full_day=288` sẽ schedule tải lại file ngày đó và file liền trước để bù bucket rìa ngày.
+6. Append/dedupe vào partition monthly.
+7. Với perpetual symbols, REST tail dùng Binance Futures Data endpoints để bù vài ngày cuối nếu Vision publish trễ. Quarterly concrete contracts không dùng REST tail vì Binance REST metrics không expose concrete quarterly contract theo cùng schema; quarterly lấy từ Vision.
+8. Audit lại duplicate, internal 5-minute gaps và partial days; kết quả ghi dưới `state/audits/`.
 
-Binance Vision metrics daily ZIP có thể đặt bucket rìa ngày trong file liền trước. Vì vậy collector luôn quét thêm `start - 1 day`, nhưng chỉ append những timestamp `>= start_date`; mục tiêu là bù được bucket `00:00` của ngày đầu cửa sổ mà không làm storage lẫn dữ liệu ngoài range cấu hình.
+Binance Vision metrics daily ZIP thường chứa `00:05` của ngày file tới `00:00` của ngày kế tiếp. Vì vậy coverage repair luôn xét cả file liền trước khi một calendar day bị thiếu bucket `00:00`.
 
-Hiện không dùng REST tail vì Binance Vision metrics là source canonical trong thiết kế này. File daily thường publish trễ, nên latest intraday có thể chậm hơn hiện tại một ngày.
+REST tail chỉ là lớp bù đuôi cho perpetual; khi Binance Vision publish file daily, vòng sau vẫn quét coverage và dedupe theo `symbol,time`, nên storage không bị duplicate.
 
 ## Loader
 
@@ -75,7 +81,6 @@ from data_loader import BinanceFuturesMetrics5m
 
 metrics = BinanceFuturesMetrics5m().load(
     symbols=["BTCUSDT", "ETHUSDT", "LINKUSDT"],
-    start_date="2023-01-01",
     check_val=True,
 )
 
@@ -99,4 +104,4 @@ Expected storage:
 
 - 30 days, around 11 configured/active symbols: roughly `3-7 MB`.
 - 1 year, around 11 symbols: roughly `40-80 MB`.
-- From `2023-01-01` to current, around 11 symbols: usually below a few hundred MB in csv.gz.
+- Full available Vision history to current, around 11 symbols: usually below a few hundred MB in csv.gz.

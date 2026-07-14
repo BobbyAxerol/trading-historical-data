@@ -151,7 +151,7 @@ Binance Futures Metrics 5m lưu open interest và long/short ratios từ cùng m
 storage/crypto/binance_futures_metrics/5m/symbol=BTCUSDT/year=YYYY/month=MM/part.csv.gz
 ```
 
-Collector [`collectors/binance_futures_metrics_5m.py`](collectors/binance_futures_metrics_5m.py) chuẩn hoá dữ liệu legacy BTC/ETH nếu có, rồi bù Binance Vision `data/futures/um/daily/metrics/{SYMBOL}/` cho `BTCUSDT`, `ETHUSDT`, nhóm relation symbols (`LINKUSDT`, `ARBUSDT`, `OPUSDT`, `POLUSDT`, `AAVEUSDT`) và active BTC/ETH quarterly contracts. Một canonical dataset chứa cả `sum_open_interest`, `sum_open_interest_value`, `count_toptrader_long_short_ratio`, `sum_toptrader_long_short_ratio`, `count_long_short_ratio`, `sum_taker_long_short_vol_ratio`; downstream có thể gọi helper loader để lấy riêng OI hoặc ratios. Chi tiết vận hành nằm tại [`BINANCE_FUTURES_METRICS_5M.md`](BINANCE_FUTURES_METRICS_5M.md).
+Collector [`collectors/binance_futures_metrics_5m.py`](collectors/binance_futures_metrics_5m.py) chuẩn hoá dữ liệu legacy BTC/ETH nếu có, discover earliest/latest keys có thật trên Binance Vision `data/futures/um/daily/metrics/{SYMBOL}/`, rồi repair coverage toàn range cho `BTCUSDT`, `ETHUSDT`, nhóm relation symbols (`LINKUSDT`, `ARBUSDT`, `OPUSDT`, `POLUSDT`, `AAVEUSDT`) và active BTC/ETH quarterly contracts. Một canonical dataset chứa cả `sum_open_interest`, `sum_open_interest_value`, `count_toptrader_long_short_ratio`, `sum_toptrader_long_short_ratio`, `count_long_short_ratio`, `sum_taker_long_short_vol_ratio`; downstream có thể gọi helper loader để lấy riêng OI hoặc ratios. Perpetual symbols có thêm REST tail vài ngày cuối nếu Vision publish trễ. Chi tiết vận hành nằm tại [`BINANCE_FUTURES_METRICS_5M.md`](BINANCE_FUTURES_METRICS_5M.md).
 
 ### 1.4 Cấu trúc Ma trận Dữ liệu Ngày VN (VN Daily Matrix)
 
@@ -193,7 +193,7 @@ Hệ thống ghi nhận trạng thái liên tục tại thư mục `state/` đ�
 - **Crypto 1m Live**: Chạy cập nhật liên tục mỗi phút để thu thập nến crypto thời gian thực.
 - **Binance USD-M Quarterly 1m**: Chạy định kỳ, dùng Binance Vision để kéo lịch sử quarterly dài nhất có thể và REST để bù active tail.
 - **Binance Order Book Snapshot 1h**: Chạy mỗi giờ, seed/lookback 30 ngày từ Binance Vision `bookDepth`, rồi REST append snapshot hiện tại.
-- **Binance Futures Metrics 5m**: Chạy định kỳ, dùng Binance Vision `daily/metrics`; khi đã có storage thì chỉ quét lại đoạn overlap gần nhất để bù publish trễ.
+- **Binance Futures Metrics 5m**: Chạy định kỳ, dùng Binance Vision `daily/metrics`; mỗi vòng đều scan coverage từ earliest available key để phát hiện/fix missing hoặc partial days, sau đó REST tail cho perpetual nếu Vision publish trễ.
 - **Options Binance 5m**: Chạy cập nhật Snapshot tùy chọn Binance mỗi 5 phút.
 
 ### 4.2 Khởi chạy bằng Docker Compose
@@ -425,7 +425,6 @@ orderbook_df_2 = load_data(
 # 10. Gọi futures metrics 5m
 metrics_df = BinanceFuturesMetrics5m().load(
     symbols=["BTCUSDT", "ETHUSDT", "LINKUSDT"],
-    start_date="2023-01-01",
     check_val=True,
 )
 oi_df = BinanceFuturesMetrics5m().load_open_interest(symbols="BTCUSDT")
