@@ -1,0 +1,20 @@
+symbols:
+  - BTCUSDT
+  - ETHUSDT
+  - LINKUSDT
+  - ARBUSDT
+  - OPUSDT
+  - POLUSDT
+  - AAVEUSDT
+quarterly_pairs:
+  - BTCUSDT
+  - ETHUSDT
+include_current_quarter: true
+include_next_quarter: true
+start_date: "2023-01-01"
+sleep_seconds: 21600
+vision_overlap_days: 7
+max_workers: 16
+min_rows_per_full_day: 288
+legacy_seed_dir: "/root/bobby/pool_alpha/Arbops/binance_basis_arb/data_storage"
+vision_base_url: "https://data.binance.vision"

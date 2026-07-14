@@ -14,6 +14,7 @@ from data_loader import (
     CryptoBinance1m,
     CryptoBinanceQuarterly1m,
     BinanceOrderBookSnapshot1h,
+    BinanceFuturesMetrics5m,
     CryptoDailyMatrix,
 )
 
@@ -63,6 +64,13 @@ class TestDataLoaderClasses(unittest.TestCase):
             self.assertEqual(df["symbol"].iloc[0], "BTCUSDT")
             self.assertIn("bid_depth_1pct", df.columns)
             self.assertIn("q_bid_depth_1pct", df.columns)
+
+    def test_binance_futures_metrics_class_exists(self):
+        df = BinanceFuturesMetrics5m().load(symbols="BTCUSDT", limit=5, check_val=False)
+        if not df.empty:
+            self.assertEqual(df["symbol"].iloc[0], "BTCUSDT")
+            self.assertIn("sum_open_interest", df.columns)
+            self.assertIn("count_long_short_ratio", df.columns)
 
     def test_crypto_daily_matrix_class(self):
         # Close feature daily matrix

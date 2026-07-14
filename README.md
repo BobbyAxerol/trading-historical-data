@@ -35,6 +35,12 @@ storage/
 │   │           └── year=2026/
 │   │               └── month=07/
 │   │                   └── part.csv.gz
+│   ├── binance_futures_metrics/
+│   │   └── 5m/
+│   │       └── symbol=BTCUSDT/
+│   │           └── year=2026/
+│   │               └── month=07/
+│   │                   └── part.csv.gz
 │   └── binance_daily_matrix/
 │       ├── open.csv.gz
 │       ├── high.csv.gz
@@ -137,6 +143,16 @@ storage/crypto/binance_orderbook_snapshot/1h/symbol=BTCUSDT/year=YYYY/month=MM/p
 
 Collector [`collectors/binance_orderbook_snapshot_1h.py`](collectors/binance_orderbook_snapshot_1h.py) seed rolling `30 days` từ Binance Vision USD-M `daily/bookDepth`, downsample về bucket 1h, rồi gọi REST `/fapi/v1/depth` với `depth_limit=20` để append giờ hiện tại. Service live tự quét lại rolling window và tự bù các ngày Vision publish trễ; không cần chạy tay lại nếu container vẫn chạy và không bật `--no-vision`. Feature chính gồm `bid_depth_1pct`, `ask_depth_1pct`, `q_bid_depth_1pct`, `q_ask_depth_1pct`; trong đó `q_` nghĩa là quote-notional depth, không phải quarterly. Quarterly được xác định bằng `symbol`/`contract_type`. Các band đang bật là `0.2%`, `1%`, `2%`, `5%`, với `1%` là primary band. Chi tiết vận hành nằm tại [`BINANCE_ORDERBOOK_SNAPSHOT_1H.md`](BINANCE_ORDERBOOK_SNAPSHOT_1H.md).
 
+### 1.3e Binance USD-M Futures Metrics 5m
+
+Binance Futures Metrics 5m lưu open interest và long/short ratios từ cùng một file Binance Vision `daily/metrics`:
+
+```text
+storage/crypto/binance_futures_metrics/5m/symbol=BTCUSDT/year=YYYY/month=MM/part.csv.gz
+```
+
+Collector [`collectors/binance_futures_metrics_5m.py`](collectors/binance_futures_metrics_5m.py) chuẩn hoá dữ liệu legacy BTC/ETH nếu có, rồi bù Binance Vision `data/futures/um/daily/metrics/{SYMBOL}/` cho `BTCUSDT`, `ETHUSDT`, nhóm relation symbols (`LINKUSDT`, `ARBUSDT`, `OPUSDT`, `POLUSDT`, `AAVEUSDT`) và active BTC/ETH quarterly contracts. Một canonical dataset chứa cả `sum_open_interest`, `sum_open_interest_value`, `count_toptrader_long_short_ratio`, `sum_toptrader_long_short_ratio`, `count_long_short_ratio`, `sum_taker_long_short_vol_ratio`; downstream có thể gọi helper loader để lấy riêng OI hoặc ratios. Chi tiết vận hành nằm tại [`BINANCE_FUTURES_METRICS_5M.md`](BINANCE_FUTURES_METRICS_5M.md).
+
 ### 1.4 Cấu trúc Ma trận Dữ liệu Ngày VN (VN Daily Matrix)
 
 VN Daily Matrix được build từ canonical storage `storage/vn/equity/1d/` sang `storage/vn/equity/daily_matrix/`, gồm 5 ma trận `open/high/low/close/volume` cùng schema pivot: index là ngày giao dịch, columns là mã cổ phiếu.
@@ -177,6 +193,7 @@ Hệ thống ghi nhận trạng thái liên tục tại thư mục `state/` đ�
 - **Crypto 1m Live**: Chạy cập nhật liên tục mỗi phút để thu thập nến crypto thời gian thực.
 - **Binance USD-M Quarterly 1m**: Chạy định kỳ, dùng Binance Vision để kéo lịch sử quarterly dài nhất có thể và REST để bù active tail.
 - **Binance Order Book Snapshot 1h**: Chạy mỗi giờ, seed/lookback 30 ngày từ Binance Vision `bookDepth`, rồi REST append snapshot hiện tại.
+- **Binance Futures Metrics 5m**: Chạy định kỳ, dùng Binance Vision `daily/metrics`; khi đã có storage thì chỉ quét lại đoạn overlap gần nhất để bù publish trễ.
 - **Options Binance 5m**: Chạy cập nhật Snapshot tùy chọn Binance mỗi 5 phút.
 
 ### 4.2 Khởi chạy bằng Docker Compose
@@ -212,6 +229,9 @@ PYTHONPATH=. python -m collectors.binance_usdm_quarterly_1m --mode once
 
 # Chạy một lần để seed 30 ngày order book snapshot 1h và append REST snapshot hiện tại
 PYTHONPATH=. python -m collectors.binance_orderbook_snapshot_1h --mode once
+
+# Chạy một lần để chuẩn hoá futures metrics 5m
+PYTHONPATH=. python -m collectors.binance_futures_metrics_5m --mode once
 ```
 
 ### 4.4 Audit continuity & repair crypto gaps
@@ -303,13 +323,14 @@ SDK cung cấp các Class Reader chuyên biệt cho từng nguồn dữ liệu:
 | `CryptoBinanceQuarterly1m` | Alias đọc concrete USD-M quarterly contracts trong cùng Binance Futures storage | Múi giờ quốc tế `UTC` |
 | `CryptoBinanceSpot1m` | Dữ liệu nến 1m Binance Spot, mặc định hiện có `BTCUSDT` từ `2018-01-01` | Múi giờ quốc tế `UTC` |
 | `BinanceOrderBookSnapshot1h` | Feature snapshot order book USD-M Futures 1h (`bid_depth_1pct`, `q_bid_depth_1pct`, ...) | Múi giờ quốc tế `UTC` |
+| `BinanceFuturesMetrics5m` | Futures metrics 5m: open interest, top/global long-short ratios, taker long-short volume ratio | Múi giờ quốc tế `UTC` |
 | `CryptoDailyMatrix` | Dữ liệu Matrix xoay ngày Binance | Múi giờ quốc tế `UTC` |
 | `BinanceOptions5m` | Dữ liệu snapshot option 5m Binance | Múi giờ quốc tế `UTC` |
 
 #### Ví dụ gọi các Endpoint cụ thể:
 
 ```python
-from data_loader import VnStock1m, VnStockDaily, VNDailyMatrix, CryptoDailyMatrix, CryptoBinanceQuarterly1m, CryptoBinanceSpot1m, BinanceOrderBookSnapshot1h, load_data
+from data_loader import VnStock1m, VnStockDaily, VNDailyMatrix, CryptoDailyMatrix, CryptoBinanceQuarterly1m, CryptoBinanceSpot1m, BinanceOrderBookSnapshot1h, BinanceFuturesMetrics5m, load_data
 
 # 1. Gọi dữ liệu nến 1m của FPT & ACB trong 1 khoảng thời gian, giới hạn 1000 dòng
 df_1m = VnStock1m().load(
@@ -400,6 +421,15 @@ orderbook_df_2 = load_data(
     start_date="2026-06-13",
     check_val=True,
 )
+
+# 10. Gọi futures metrics 5m
+metrics_df = BinanceFuturesMetrics5m().load(
+    symbols=["BTCUSDT", "ETHUSDT", "LINKUSDT"],
+    start_date="2023-01-01",
+    check_val=True,
+)
+oi_df = BinanceFuturesMetrics5m().load_open_interest(symbols="BTCUSDT")
+ratios_df = BinanceFuturesMetrics5m().load_long_short_ratios(symbols="BTCUSDT")
 ```
 
 **Các tham số chung hỗ trợ:**
