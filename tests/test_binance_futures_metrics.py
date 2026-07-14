@@ -6,7 +6,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent.resolve()))
 
 import pandas as pd
 
-from collectors.binance_futures_metrics_5m import normalize_metrics_frame
+from collectors.binance_futures_metrics_5m import (
+    _date_from_key,
+    effective_start_day,
+    missing_coverage_key_days,
+    normalize_metrics_frame,
+)
 
 
 class TestBinanceFuturesMetrics(unittest.TestCase):
@@ -30,6 +35,29 @@ class TestBinanceFuturesMetrics(unittest.TestCase):
         self.assertEqual(df.loc[0, "contract_type"], "PERPETUAL")
         self.assertAlmostEqual(df.loc[0, "sum_open_interest"], 103887.929)
         self.assertAlmostEqual(df.loc[0, "count_long_short_ratio"], 1.26964914)
+
+    def test_date_from_key_supports_quarterly_symbols(self):
+        key = "data/futures/um/daily/metrics/BTCUSDT_260925/BTCUSDT_260925-metrics-2026-07-11.zip"
+        self.assertEqual(_date_from_key(key), "2026-07-11")
+
+    def test_effective_start_auto_uses_earliest_vision_key(self):
+        keys = [
+            "data/futures/um/daily/metrics/BTCUSDT/BTCUSDT-metrics-2020-01-02.zip",
+            "data/futures/um/daily/metrics/BTCUSDT/BTCUSDT-metrics-2020-01-01.zip",
+        ]
+        self.assertEqual(str(effective_start_day(keys, None).date()), "2020-01-01")
+        self.assertEqual(str(effective_start_day(keys, "2020-01-02").date()), "2020-01-02")
+
+    def test_missing_coverage_schedules_neighbor_file_for_midnight_bucket(self):
+        available_days = pd.to_datetime(["2020-01-01", "2020-01-02", "2020-01-03"]).tolist()
+        key_days, missing_days = missing_coverage_key_days(
+            available_days=available_days,
+            local_day_counts={"2020-01-01": 287, "2020-01-02": 287, "2020-01-03": 288},
+            effective_start=pd.Timestamp("2020-01-01"),
+            min_rows_per_full_day=288,
+        )
+        self.assertEqual([str(day.date()) for day in key_days], ["2020-01-01", "2020-01-02"])
+        self.assertEqual(missing_days, [{"date": "2020-01-02", "rows": 287, "expected_rows": 288}])
 
 
 if __name__ == "__main__":

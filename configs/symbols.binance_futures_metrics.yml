@@ -11,10 +11,15 @@ quarterly_pairs:
   - ETHUSDT
 include_current_quarter: true
 include_next_quarter: true
-start_date: "2023-01-01"
+# null/auto means discover and pull from the earliest Binance Vision file per symbol.
+start_date: null
 sleep_seconds: 21600
 vision_overlap_days: 7
 max_workers: 16
 min_rows_per_full_day: 288
+include_rest_tail: true
+rest_tail_days: 3
+rest_overlap_hours: 12
 legacy_seed_dir: "/root/bobby/pool_alpha/Arbops/binance_basis_arb/data_storage"
 vision_base_url: "https://data.binance.vision"
+s3_base_url: "https://s3-ap-northeast-1.amazonaws.com/data.binance.vision"
