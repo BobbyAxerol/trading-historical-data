@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import os
+import sys
 import tempfile
 from pathlib import Path
 
 import pandas as pd
+
+sys.path.insert(0, str(Path(__file__).parent.parent.resolve()))
 
 
 def main() -> None:
@@ -13,7 +16,7 @@ def main() -> None:
         os.environ["DATA_ROOT"] = str(root / "storage")
         os.environ["STATE_ROOT"] = str(root / "state")
         from collectors.common.manifest import Manifest
-        from collectors.common.storage import PartitionedCsvGzStore
+        from collectors.common.storage import PartitionedParquetStore
 
         df = pd.DataFrame(
             {
@@ -26,7 +29,7 @@ def main() -> None:
                 "volume": [10, 20, 30],
             }
         )
-        store = PartitionedCsvGzStore(["unit", "ohlcv", "1m"], partition="month")
+        store = PartitionedParquetStore(["unit", "ohlcv", "1m"], partition="month")
         result = store.append(
             df,
             time_col="time",
@@ -35,11 +38,11 @@ def main() -> None:
             lock_name="unit/TEST",
         )
         assert result["rows_written"] == 3
-        files = list((root / "storage").rglob("*.csv.gz"))
+        files = list((root / "storage").rglob("*.parquet"))
         assert len(files) == 1
-        saved = pd.read_csv(files[0], compression="gzip")
+        saved = pd.read_parquet(files[0])
         assert len(saved) == 2
-        assert saved.loc[saved["time"] == "2026-06-01 09:00:00", "open"].iloc[0] == 2
+        assert saved.loc[saved["time"] == pd.Timestamp("2026-06-01 09:00:00"), "open"].iloc[0] == 2
 
         manifest = Manifest("unit_test")
         manifest.update_symbol("TEST", latest_time="2026-06-01T09:01:00")
@@ -49,4 +52,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

@@ -18,7 +18,8 @@ from collectors.common.env import load_environment
 from collectors.common.logging import setup_logging
 from collectors.common.manifest import Heartbeat, JsonState, Manifest, utc_now_iso
 from collectors.common.retry import retry_sync
-from collectors.common.storage import PartitionedCsvGzStore
+from collectors.common.storage import PartitionedParquetStore as PartitionedCsvGzStore
+from collectors.common.storage import read_partition_file, write_partition_file
 
 DATASET = "crypto_binance_orderbook_snapshot_1h"
 STORE_PARTS = ["crypto", "binance_orderbook_snapshot", "1h"]
@@ -194,11 +195,14 @@ def vision_daily_keys(symbol: str, *, start_day: str, end_day: str, s3_base_url:
 
 def _date_has_rows(store: PartitionedCsvGzStore, symbol: str, date_text: str) -> bool:
     date = pd.Timestamp(date_text)
-    path = store.root / f"symbol={symbol}" / f"year={date.year:04d}" / f"month={date.month:02d}" / "part.csv.gz"
+    partition_dir = store.root / f"symbol={symbol}" / f"year={date.year:04d}" / f"month={date.month:02d}"
+    path = partition_dir / "part.parquet"
+    if not path.exists():
+        path = partition_dir / "part.csv.gz"
     if not path.exists():
         return False
     try:
-        df = pd.read_csv(path, compression="gzip", usecols=["time"])
+        df = read_partition_file(path, usecols=["time"])
     except Exception:
         return False
     times = pd.to_datetime(df["time"], errors="coerce")
@@ -396,7 +400,7 @@ def prune_lookback(store: PartitionedCsvGzStore, symbol: str, *, lookback_days: 
     removed = 0
     for path in store.files({"symbol": symbol}):
         try:
-            df = pd.read_csv(path, compression="gzip")
+            df = read_partition_file(path)
         except Exception as exc:
             logger.warning("%s failed to read partition for prune %s: %s", symbol, path, exc)
             continue
@@ -416,9 +420,7 @@ def prune_lookback(store: PartitionedCsvGzStore, symbol: str, *, lookback_days: 
         df["time"] = df["time"].dt.strftime("%Y-%m-%d %H:%M:%S")
         if "sample_time" in df.columns:
             df["sample_time"] = pd.to_datetime(df["sample_time"], errors="coerce").dt.strftime("%Y-%m-%d %H:%M:%S")
-        tmp = path.with_name(path.name + ".tmp")
-        df.to_csv(tmp, index=False, compression="gzip")
-        os.replace(tmp, path)
+        write_partition_file(df, path)
     if removed:
         logger.info("%s pruned orderbook rows=%s cutoff=%s", symbol, removed, cutoff)
     return {"touched": touched, "removed": removed}
@@ -516,7 +518,7 @@ def audit_symbol(store: PartitionedCsvGzStore, symbol: str, *, lookback_days: in
     frames = []
     for path in store.files({"symbol": symbol}):
         try:
-            frames.append(pd.read_csv(path, compression="gzip"))
+            frames.append(read_partition_file(path))
         except Exception:
             continue
     if not frames:

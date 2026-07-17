@@ -19,7 +19,8 @@ from collectors.common.env import load_environment
 from collectors.common.logging import setup_logging
 from collectors.common.manifest import Heartbeat, JsonState, Manifest, utc_now_iso
 from collectors.common.retry import retry_sync
-from collectors.common.storage import PartitionedCsvGzStore
+from collectors.common.storage import PartitionedParquetStore as PartitionedCsvGzStore
+from collectors.common.storage import read_partition_file, write_partition_file
 
 DATASET = "crypto_binance_futures_metrics_5m"
 STORE_PARTS = ["crypto", "binance_futures_metrics", "5m"]
@@ -240,7 +241,7 @@ def _symbol_day_counts(store: PartitionedCsvGzStore, symbol: str) -> dict[str, i
     frames = []
     for path in store.files({"symbol": symbol}):
         try:
-            frames.append(pd.read_csv(path, compression="gzip", usecols=["time"]))
+            frames.append(read_partition_file(path, usecols=["time"]))
         except Exception:
             continue
     if not frames:
@@ -378,7 +379,7 @@ def normalize_existing_partitions(
     rows_removed = 0
     for path in store.files({"symbol": symbol}):
         try:
-            df = pd.read_csv(path, compression="gzip")
+            df = read_partition_file(path)
         except Exception as exc:
             logger.warning("%s failed to read metrics partition %s: %s", symbol, path, exc)
             continue
@@ -421,9 +422,7 @@ def normalize_existing_partitions(
         if needs_write:
             comparable = work.copy()
             comparable["time"] = comparable["time"].dt.strftime("%Y-%m-%d %H:%M:%S")
-            tmp = path.with_name(path.name + ".tmp")
-            comparable.to_csv(tmp, index=False, compression="gzip")
-            os.replace(tmp, path)
+            write_partition_file(comparable, path)
             touched += 1
 
     if touched:
@@ -579,7 +578,14 @@ def _fetch_rest_metric(endpoint: str, *, symbol: str, start: pd.Timestamp, end: 
     return pd.DataFrame(rows)
 
 
-def fetch_rest_metrics_tail(symbol: str, *, contract_type: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
+def fetch_rest_metrics_tail(
+    symbol: str,
+    *,
+    contract_type: str,
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+    logger=None,
+) -> pd.DataFrame:
     if contract_type != "PERPETUAL" or "_" in symbol:
         return pd.DataFrame(columns=METRIC_COLUMNS)
 
@@ -595,7 +601,20 @@ def fetch_rest_metrics_tail(symbol: str, *, contract_type: str, start: pd.Timest
         "takerlongshortRatio": {"buySellRatio": "sum_taker_long_short_vol_ratio"},
     }
     for endpoint, columns in endpoint_map.items():
-        raw = _fetch_rest_metric(endpoint, symbol=symbol, start=start, end=end)
+        try:
+            raw = _fetch_rest_metric(endpoint, symbol=symbol, start=start, end=end)
+        except requests.HTTPError as exc:
+            status_code = exc.response.status_code if exc.response is not None else None
+            if status_code in {400, 404}:
+                if logger is not None:
+                    logger.warning(
+                        "%s REST metric endpoint %s unavailable status=%s; keeping other metrics",
+                        symbol,
+                        endpoint,
+                        status_code,
+                    )
+                continue
+            raise
         if raw.empty or "timestamp" not in raw.columns:
             continue
         frame = pd.DataFrame(
@@ -646,7 +665,7 @@ def sync_rest_tail(
         start = start_by_window
     if start > end:
         return 0
-    df = fetch_rest_metrics_tail(symbol, contract_type=contract_type, start=start, end=end)
+    df = fetch_rest_metrics_tail(symbol, contract_type=contract_type, start=start, end=end, logger=logger)
     if df.empty:
         manifest.update_symbol(symbol, last_rest_error="empty_rest_metrics_tail", last_rest_start=str(start), last_rest_end=str(end))
         logger.warning("%s REST metrics tail returned no rows %s -> %s", symbol, start, end)
@@ -677,7 +696,7 @@ def audit_symbol(
     frames = []
     for path in store.files({"symbol": symbol}):
         try:
-            frames.append(pd.read_csv(path, compression="gzip", usecols=["time", "symbol"]))
+            frames.append(read_partition_file(path, usecols=["time", "symbol"]))
         except Exception:
             continue
     if not frames:

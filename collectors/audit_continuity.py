@@ -26,6 +26,12 @@ def _paths(patterns: list[Path]) -> list[Path]:
     return found
 
 
+def _partition_paths(pattern: Path) -> list[Path]:
+    csv_paths = _paths([pattern / "part.csv.gz"])
+    parquet_paths = _paths([pattern / "part.parquet"])
+    return sorted(parquet_paths + [path for path in csv_paths if not path.with_name("part.parquet").exists()])
+
+
 def _read_times(path: Path, time_cols: list[str]) -> pd.Series:
     if path.suffix == ".parquet":
         for time_col in time_cols:
@@ -130,7 +136,7 @@ def main() -> None:
     ok = True
     for symbol in symbols:
         if args.dataset == "crypto":
-            paths = _paths([root / "crypto" / "binance_futures" / "1m" / f"symbol={symbol}" / "year=*" / "month=*" / "part.csv.gz"])
+            paths = _partition_paths(root / "crypto" / "binance_futures" / "1m" / f"symbol={symbol}" / "year=*" / "month=*")
             if args.include_existing_files:
                 paths += [
                     GET_DATA_ROOT / "crypto_1m_data" / f"{symbol.lower()}_perpetual_1m.csv.gz",
@@ -138,17 +144,17 @@ def main() -> None:
                 ]
             ok &= audit_symbol(f"crypto:{symbol}", paths, ["time", "open_time"], pd.Timedelta(minutes=1))
         elif args.dataset == "vn-daily":
-            paths = _paths([root / "vn" / "equity" / "1d" / f"symbol={symbol}" / "year=*" / "part.csv.gz"])
+            paths = _partition_paths(root / "vn" / "equity" / "1d" / f"symbol={symbol}" / "year=*")
             if args.include_existing_files:
                 paths += [GET_DATA_ROOT / "data_stock" / f"{symbol}_1d_max.csv.gz"]
             ok &= audit_symbol(f"vn-daily:{symbol}", paths, ["time"], None)
         elif args.dataset == "vn-intraday":
-            paths = _paths([root / "vn" / "equity" / "1m" / f"symbol={symbol}" / "year=*" / "month=*" / "part.csv.gz"])
+            paths = _partition_paths(root / "vn" / "equity" / "1m" / f"symbol={symbol}" / "year=*" / "month=*")
             if args.include_existing_files:
                 paths += [GET_DATA_ROOT / "data_stock" / "_intraday_storage" / "stocks" / f"{symbol}_1m.csv.gz"]
             ok &= audit_symbol(f"vn-intraday:{symbol}", paths, ["time"], None)
         elif args.dataset == "vn-futures":
-            paths = _paths([root / "vn" / "futures" / "1m" / f"symbol={symbol}" / "year=*" / "month=*" / "part.csv.gz"])
+            paths = _partition_paths(root / "vn" / "futures" / "1m" / f"symbol={symbol}" / "year=*" / "month=*")
             if args.include_existing_files:
                 paths += [
                     GET_DATA_ROOT / "data_stock" / "_intraday_storage" / "futures" / f"{symbol}_1m.csv.gz",
@@ -156,7 +162,7 @@ def main() -> None:
                 ]
             ok &= audit_symbol(f"vn-futures:{symbol}", paths, ["time"], None)
         else:
-            paths = _paths([root / "options" / "binance" / "snapshot_5m" / f"underlying={symbol}" / "year=*" / "month=*" / "part.csv.gz"])
+            paths = _partition_paths(root / "options" / "binance" / "snapshot_5m" / f"underlying={symbol}" / "year=*" / "month=*")
             if args.include_existing_files:
                 paths += [GET_DATA_ROOT / "options_full_history.csv.gz", GET_DATA_ROOT / "option_data" / "options_full_history.csv.gz"]
             ok &= audit_symbol(f"options:{symbol}", paths, ["snapshot_time", "time"], pd.Timedelta(minutes=5))

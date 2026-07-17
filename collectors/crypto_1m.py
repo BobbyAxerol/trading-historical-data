@@ -14,7 +14,7 @@ from collectors.common.env import GET_DATA_ROOT, load_environment
 from collectors.common.logging import setup_logging
 from collectors.common.manifest import Heartbeat, Manifest, utc_now_iso
 from collectors.common.retry import retry_sync
-from collectors.common.storage import PartitionedCsvGzStore
+from collectors.common.storage import PartitionedParquetStore
 
 DATASET = "crypto_binance_futures_1m"
 BINANCE_FAPI = "https://fapi.binance.com"
@@ -128,7 +128,7 @@ def fetch_1m(symbol: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFram
 def run_symbol(symbol: str, mode: str, backfill_start: str, logger) -> None:
     manifest = Manifest(DATASET)
     state = manifest.symbol_state(symbol)
-    store = PartitionedCsvGzStore(["crypto", "binance_futures", "1m"], partition="month")
+    store = PartitionedParquetStore(["crypto", "binance_futures", "1m"], partition="month")
     storage_latest = store.latest_time(attrs={"symbol": symbol}, time_col="time")
     legacy_latest = latest_time_from_files(
         [
