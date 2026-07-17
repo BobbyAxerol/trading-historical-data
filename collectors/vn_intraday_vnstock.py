@@ -160,7 +160,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=["once", "live"], default="once")
     parser.add_argument("--symbols", default=None)
-    parser.add_argument("--source", default="KBS")
+    parser.add_argument("--source", default="vci")
     parser.add_argument("--max-symbols", type=int, default=0)
     parser.add_argument("--backfill-start", default=None)
     parser.add_argument("--schedule", default=None)

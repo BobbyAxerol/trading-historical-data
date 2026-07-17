@@ -426,9 +426,10 @@ def sync_rest_tail(
 
 def audit_symbol(store: PartitionedCsvGzStore, symbol: str, *, expected_start: str | None = None) -> dict[str, Any]:
     frames = []
+    audit_cols = ["time", "symbol", "open", "high", "low", "close", "volume", "quote_volume"]
     for path in store.files({"symbol": symbol}):
         try:
-            frames.append(read_partition_file(path))
+            frames.append(read_partition_file(path, usecols=audit_cols))
         except Exception:
             continue
     if not frames:
