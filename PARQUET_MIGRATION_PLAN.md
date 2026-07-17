@@ -37,7 +37,7 @@ storage/vn/equity/daily_matrix/close.parquet
 
 ## Phase 1: Parquet Storage Layer
 
-Trạng thái: in progress.
+Trạng thái: done.
 
 Thêm `PartitionedParquetStore` tương thích với `PartitionedCsvGzStore`:
 
@@ -58,6 +58,8 @@ Test cần có:
 
 ## Phase 2: CSV.GZ -> Parquet Converter
 
+Trạng thái: done.
+
 Thêm tool convert local, không call API:
 
 ```bash
@@ -73,6 +75,20 @@ Yêu cầu:
 - Giữ nguyên columns.
 - Parse các cột datetime phổ biến: `time`, `close_time`, `sample_time`, `ingested_at` nếu parse được.
 - Ghi migration report vào `state/parquet_migration_report.json`.
+
+Tool hiện tại:
+
+```bash
+python -m tools.convert_csv_gz_to_parquet --dry-run
+python -m tools.convert_csv_gz_to_parquet --dataset crypto/binance_futures_metrics/5m --workers 4
+```
+
+Guard hiện có:
+
+- Không xoá `csv.gz`.
+- Không overwrite Parquet mới hơn CSV trừ khi truyền `--overwrite`.
+- Validate row count và column order sau khi ghi.
+- Ghi report gồm status từng file, row count, size, datetime columns, min/max `time`, errors.
 
 ## Phase 3: Data Loader Parquet-First Fallback CSV
 
@@ -121,4 +137,3 @@ python -m tools.cleanup_csv_gz_after_parquet --confirm
 - Min/max time khớp.
 - Parquet mtime >= CSV mtime.
 - Validation pass.
-
