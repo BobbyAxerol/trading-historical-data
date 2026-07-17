@@ -166,17 +166,32 @@ Kết quả full validation gần nhất:
 
 ## Phase 6: CSV Cleanup
 
+Trạng thái: done for long-format `part.csv.gz`.
+
 Chỉ xoá `csv.gz` bằng tool có guard:
 
 ```bash
 python -m tools.cleanup_csv_gz_after_parquet --dry-run
 python -m tools.cleanup_csv_gz_after_parquet --confirm
+python -m tools.cleanup_csv_gz_after_parquet --dataset crypto/binance_spot/1m --confirm
 ```
 
 Điều kiện xoá:
 
 - `part.parquet` tồn tại.
-- Row count khớp.
-- Min/max time khớp.
+- Validation pass theo cùng policy Phase 5: không mất key từ CSV, không duplicate key, column order giữ nguyên, time range của Parquet bao phủ CSV, và `time` không null.
 - Parquet mtime >= CSV mtime.
-- Validation pass.
+- Warning CSV stale được phép mặc định nếu Parquet mới hơn CSV và không mất key. Dùng `--strict-no-warnings` nếu muốn chặn cả warning.
+
+Tool mặc định chạy dry-run nếu không truyền `--confirm`.
+
+Report được ghi tại `state/parquet_cleanup_report.json`.
+
+Kết quả cleanup đã chạy:
+
+- Dry-run cuối: `total=4431`, `dry_run_delete=4431`, `blocked=0`, `errors=0`, `reclaimable_bytes=1397226950`.
+- Confirm cleanup: `total=4431`, `deleted=4431`, `blocked=0`, `errors=0`, `deleted_bytes=1397226950`.
+- Post-check: `storage/**/part.csv.gz = 0`.
+- Post-check: `storage/**/part.parquet = 4472` tại thời điểm kiểm tra sau cleanup, vì services live tiếp tục ghi thêm Parquet.
+- `*.csv.gz` còn lại là matrix wide-format (`open.csv.gz`, `close.csv.gz`, ...), thuộc phase riêng và không bị xoá trong Phase 6.
+- Smoke `data_loader` sau cleanup pass cho futures 1m, spot 1m, VN 1m, VN daily, futures metrics 5m, orderbook snapshot 1h.
