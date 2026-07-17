@@ -15,7 +15,7 @@ from collectors.common.env import GET_DATA_ROOT, load_environment
 from collectors.common.logging import setup_logging
 from collectors.common.manifest import Heartbeat, Manifest, utc_now_iso
 from collectors.common.retry import retry_sync
-from collectors.common.storage import PartitionedCsvGzStore
+from collectors.common.storage import PartitionedParquetStore
 
 DATASET = "options_binance_snapshot_5m"
 EAPI = "https://eapi.binance.com"
@@ -138,7 +138,7 @@ def run_once(args, logger) -> None:
         logger.warning("No option rows after filter")
         return
 
-    store = PartitionedCsvGzStore(["options", "binance", "snapshot_5m"], partition="month")
+    store = PartitionedParquetStore(["options", "binance", "snapshot_5m"], partition="month")
     total = 0
     for underlying, part in df.groupby("underlying"):
         state = manifest.symbol_state(underlying)

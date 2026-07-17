@@ -19,7 +19,7 @@ from collectors.common.env import GET_DATA_ROOT, load_environment
 from collectors.common.logging import setup_logging
 from collectors.common.manifest import Heartbeat, Manifest, utc_now_iso
 from collectors.common.retry import SlidingWindowRateLimiter, retry_sync
-from collectors.common.storage import PartitionedCsvGzStore
+from collectors.common.storage import PartitionedParquetStore
 
 DATASET = "vn_futures_dnse_1m"
 BASE_URL = "https://openapi.dnse.com.vn"
@@ -146,7 +146,7 @@ def run_symbol(symbol: str, *, start_default: str, limiter: SlidingWindowRateLim
     manifest = Manifest(DATASET)
     state = manifest.symbol_state(symbol)
     dataset_parts = ["vn", "futures" if symbol in DERIVATIVE_SYMBOLS else "equity", "1m"]
-    store = PartitionedCsvGzStore(dataset_parts, partition="month")
+    store = PartitionedParquetStore(dataset_parts, partition="month")
     storage_latest = store.latest_time(attrs={"symbol": symbol}, time_col="time")
     legacy_base = "futures" if symbol in DERIVATIVE_SYMBOLS else "stocks"
     legacy_latest = latest_time_from_files(

@@ -8,7 +8,7 @@ import pandas as pd
 
 from collectors.common.env import GET_DATA_ROOT, load_environment
 from collectors.common.manifest import Manifest, utc_now_iso
-from collectors.common.storage import PartitionedCsvGzStore
+from collectors.common.storage import PartitionedParquetStore as PartitionedCsvGzStore
 
 CHUNK_ROWS = 250_000
 

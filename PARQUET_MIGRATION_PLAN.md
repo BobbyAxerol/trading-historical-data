@@ -107,12 +107,22 @@ Lý do dùng freshness guard: trong transition, collectors live vẫn có thể 
 
 ## Phase 4: Collector Parquet Writer
 
+Trạng thái: done for long-format collectors.
+
 Sau khi converter và loader ổn:
 
 - Chuyển collector từ `PartitionedCsvGzStore` sang `PartitionedParquetStore` hoặc store factory.
 - Append/dedupe/sort giữ nguyên.
 - Không đổi schema output.
 - Có thể dual-write ngắn hạn nếu cần rollback, nhưng không duy trì lâu dài vì tốn disk.
+
+Quy ước triển khai:
+
+- Long-format live collectors ghi `part.parquet`.
+- `PartitionedParquetStore` vẫn đọc `part.csv.gz` cũ nếu partition đó chưa có Parquet, rồi merge/dedupe và ghi Parquet mới.
+- Các audit/repair nội bộ dùng helper đọc/ghi partition chung để đọc được cả Parquet và CSV fallback.
+- Không dual-write CSV trong Phase 4.
+- Matrix wide-format (`open.csv.gz`, `close.csv.gz`, ...) vẫn để phase riêng.
 
 ## Phase 5: Validation
 

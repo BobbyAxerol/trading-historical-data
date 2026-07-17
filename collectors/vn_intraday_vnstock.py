@@ -14,7 +14,7 @@ from collectors.common.env import GET_DATA_ROOT, load_environment
 from collectors.common.logging import setup_logging
 from collectors.common.manifest import Heartbeat, Manifest, utc_now_iso
 from collectors.common.retry import SlidingWindowRateLimiter, retry_sync
-from collectors.common.storage import PartitionedCsvGzStore
+from collectors.common.storage import PartitionedParquetStore
 
 DATASET = "vn_equity_1m"
 
@@ -97,7 +97,7 @@ def fetch_symbol(symbol: str, start: str, end: str, source: str) -> pd.DataFrame
 def run_symbol(symbol: str, *, source: str, start_default: str, limiter: SlidingWindowRateLimiter, logger) -> None:
     manifest = Manifest(DATASET)
     state = manifest.symbol_state(symbol)
-    store = PartitionedCsvGzStore(["vn", "equity", "1m"], partition="month")
+    store = PartitionedParquetStore(["vn", "equity", "1m"], partition="month")
     storage_latest = store.latest_time(attrs={"symbol": symbol}, time_col="time")
     legacy_latest = latest_time_from_files(
         [

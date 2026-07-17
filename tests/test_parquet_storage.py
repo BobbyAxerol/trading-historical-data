@@ -92,6 +92,80 @@ class TestPartitionedParquetStore(unittest.TestCase):
         loaded = pd.read_parquet(path)
         self.assertEqual(str(loaded.loc[0, "time"]), "2026-01-02 00:00:00")
 
+    def test_append_reads_existing_csv_fallback_before_writing_parquet(self):
+        csv_path = (
+            Path(os.environ["DATA_ROOT"])
+            / "crypto"
+            / "test"
+            / "1m"
+            / "symbol=ETHUSDT"
+            / "year=2026"
+            / "month=07"
+            / "part.csv.gz"
+        )
+        csv_path.parent.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(
+            {
+                "time": ["2026-07-01 00:00:00"],
+                "symbol": ["ETHUSDT"],
+                "close": [100.0],
+            }
+        ).to_csv(csv_path, index=False, compression="gzip")
+
+        store = PartitionedParquetStore(["crypto", "test", "1m"], partition="month")
+        store.append(
+            pd.DataFrame(
+                {
+                    "time": ["2026-07-01 00:01:00"],
+                    "symbol": ["ETHUSDT"],
+                    "close": [101.0],
+                }
+            ),
+            time_col="time",
+            dedupe_cols=["symbol", "time"],
+            attrs={"symbol": "ETHUSDT"},
+            lock_name="test_parquet/ETHUSDT",
+        )
+        parquet_path = csv_path.with_name("part.parquet")
+        self.assertTrue(parquet_path.exists())
+        loaded = pd.read_parquet(parquet_path)
+        self.assertEqual(len(loaded), 2)
+        self.assertEqual(list(loaded["close"]), [100.0, 101.0])
+
+    def test_append_normalizes_mixed_ingested_at_dtype(self):
+        store = PartitionedParquetStore(["crypto", "test", "1m"], partition="month")
+        first = pd.DataFrame(
+            {
+                "time": [pd.Timestamp("2026-07-01 00:00:00")],
+                "symbol": ["BTCUSDT"],
+                "close": [100.0],
+                "close_time": ["1782864059999"],
+                "ingested_at": [pd.Timestamp("2026-07-01 00:01:00")],
+            }
+        )
+        second = pd.DataFrame(
+            {
+                "time": ["2026-07-01 00:01:00"],
+                "symbol": ["BTCUSDT"],
+                "close": [101.0],
+                "close_time": [pd.Timestamp("2026-07-01 00:01:59.999")],
+                "ingested_at": ["2026-07-01T00:02:00+00:00"],
+            }
+        )
+        for df in (first, second):
+            store.append(
+                df,
+                time_col="time",
+                dedupe_cols=["symbol", "time"],
+                attrs={"symbol": "BTCUSDT"},
+                lock_name="test_parquet/BTCUSDT_mixed_ingested_at",
+            )
+        path = Path(os.environ["DATA_ROOT"]) / "crypto" / "test" / "1m" / "symbol=BTCUSDT" / "year=2026" / "month=07" / "part.parquet"
+        loaded = pd.read_parquet(path)
+        self.assertEqual(len(loaded), 2)
+        self.assertTrue(pd.api.types.is_datetime64_any_dtype(loaded["close_time"]))
+        self.assertTrue(pd.api.types.is_datetime64_any_dtype(loaded["ingested_at"]))
+
 
 if __name__ == "__main__":
     unittest.main()

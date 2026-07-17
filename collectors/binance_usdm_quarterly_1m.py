@@ -18,7 +18,8 @@ from collectors.common.env import load_environment
 from collectors.common.logging import setup_logging
 from collectors.common.manifest import Heartbeat, JsonState, Manifest, utc_now_iso
 from collectors.common.retry import retry_sync
-from collectors.common.storage import PartitionedCsvGzStore
+from collectors.common.storage import PartitionedParquetStore as PartitionedCsvGzStore
+from collectors.common.storage import read_partition_file
 from collectors.crypto_1m import BINANCE_FAPI, _closed_until, fetch_1m
 
 DATASET = "crypto_binance_usdm_quarterly_1m"
@@ -272,16 +273,20 @@ def _append(store: PartitionedCsvGzStore, df: pd.DataFrame, symbol: str) -> dict
 
 def _month_partition_exists(store: PartitionedCsvGzStore, symbol: str, month: str) -> bool:
     year, month_num = month.split("-", 1)
-    return (store.root / f"symbol={symbol}" / f"year={int(year):04d}" / f"month={int(month_num):02d}" / "part.csv.gz").exists()
+    partition_dir = store.root / f"symbol={symbol}" / f"year={int(year):04d}" / f"month={int(month_num):02d}"
+    return (partition_dir / "part.parquet").exists() or (partition_dir / "part.csv.gz").exists()
 
 
 def _date_exists(store: PartitionedCsvGzStore, symbol: str, date_text: str) -> bool:
     date = pd.Timestamp(date_text)
-    path = store.root / f"symbol={symbol}" / f"year={date.year:04d}" / f"month={date.month:02d}" / "part.csv.gz"
+    partition_dir = store.root / f"symbol={symbol}" / f"year={date.year:04d}" / f"month={date.month:02d}"
+    path = partition_dir / "part.parquet"
+    if not path.exists():
+        path = partition_dir / "part.csv.gz"
     if not path.exists():
         return False
     try:
-        df = pd.read_csv(path, compression="gzip", usecols=["time"])
+        df = read_partition_file(path, usecols=["time"])
     except Exception:
         return False
     times = pd.to_datetime(df["time"], errors="coerce")
@@ -296,7 +301,7 @@ def small_gap_ranges(store: PartitionedCsvGzStore, symbol: str, *, max_gap_minut
     frames = []
     for path in store.files({"symbol": symbol}):
         try:
-            frames.append(pd.read_csv(path, compression="gzip", usecols=["time"]))
+            frames.append(read_partition_file(path, usecols=["time"]))
         except Exception:
             continue
     if not frames:

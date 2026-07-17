@@ -8,7 +8,8 @@ from collectors.common.config import load_yaml
 from collectors.common.env import load_environment
 from collectors.common.logging import setup_logging
 from collectors.common.manifest import Manifest, utc_now_iso
-from collectors.common.storage import PartitionedCsvGzStore
+from collectors.common.storage import PartitionedParquetStore as PartitionedCsvGzStore
+from collectors.common.storage import read_partition_file
 from collectors.crypto_1m import DATASET, fetch_1m
 
 
@@ -19,10 +20,9 @@ def _symbol_times(store: PartitionedCsvGzStore, symbol: str) -> pd.Series:
     chunks: list[pd.Series] = []
     for path in sorted(store.files({"symbol": symbol})):
         try:
-            header = pd.read_csv(path, compression="gzip", nrows=0)
-            if "time" not in header.columns:
+            values = read_partition_file(path, usecols=["time"])
+            if "time" not in values.columns:
                 continue
-            values = pd.read_csv(path, compression="gzip", usecols=["time"])
             chunks.append(pd.to_datetime(values["time"], errors="coerce"))
         except Exception as exc:
             raise RuntimeError(f"read failed {path}: {exc}") from exc

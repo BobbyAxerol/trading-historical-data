@@ -10,6 +10,8 @@ from .discovery import latest_time_from_files
 from .env import data_root
 from .locks import FileLock
 
+DATETIME_COLUMNS = ("time", "close_time", "sample_time", "snapshot_time", "ingested_at")
+
 
 def normalize_datetime(series: pd.Series, *, utc: bool = False) -> pd.Series:
     values = pd.to_datetime(series, errors="coerce", utc=utc)
@@ -25,6 +27,46 @@ def normalize_datetime(series: pd.Series, *, utc: bool = False) -> pd.Series:
     return values
 
 
+def _parse_mixed_datetime(series: pd.Series) -> pd.Series:
+    parsed = pd.to_datetime(series, errors="coerce", utc=True)
+    numeric = pd.to_numeric(series, errors="coerce")
+    numeric_values = numeric.dropna()
+    if not numeric_values.empty:
+        max_abs = numeric_values.abs().max()
+        unit = "ns"
+        if max_abs < 10**12:
+            unit = "s"
+        elif max_abs < 10**14:
+            unit = "ms"
+        elif max_abs < 10**17:
+            unit = "us"
+        numeric_parsed = pd.to_datetime(numeric, unit=unit, errors="coerce", utc=True)
+        parsed.loc[numeric.notna()] = numeric_parsed.loc[numeric.notna()]
+    return parsed
+
+
+def normalize_common_datetime_columns(df: pd.DataFrame, columns: Iterable[str] = DATETIME_COLUMNS) -> pd.DataFrame:
+    work = df.copy()
+    for col in columns:
+        if col not in work.columns:
+            continue
+        non_null = work[col].dropna()
+        if non_null.empty:
+            continue
+        parsed = _parse_mixed_datetime(work[col])
+        if parsed.notna().sum() < max(1, int(non_null.shape[0] * 0.99)):
+            continue
+        try:
+            parsed = parsed.dt.tz_convert(None)
+        except Exception:
+            try:
+                parsed = parsed.dt.tz_localize(None)
+            except Exception:
+                pass
+        work[col] = parsed
+    return work
+
+
 def _atomic_to_csv_gz(df: pd.DataFrame, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
@@ -35,8 +77,33 @@ def _atomic_to_csv_gz(df: pd.DataFrame, path: Path) -> None:
 def _atomic_to_parquet(df: pd.DataFrame, path: Path, *, compression: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
-    df.to_parquet(tmp, index=False, engine="pyarrow", compression=compression)
+    save_df = normalize_common_datetime_columns(df)
+    save_df.to_parquet(tmp, index=False, engine="pyarrow", compression=compression)
     os.replace(tmp, path)
+
+
+def read_partition_file(path: Path, *, usecols: list[str] | None = None, nrows: int | None = None) -> pd.DataFrame:
+    if path.suffix == ".parquet":
+        df = pd.read_parquet(path, columns=usecols, engine="pyarrow")
+        return df.head(nrows) if nrows is not None else df
+    return pd.read_csv(path, compression="gzip", usecols=usecols, nrows=nrows)
+
+
+def write_partition_file(df: pd.DataFrame, path: Path, *, compression: str = "zstd") -> None:
+    if path.suffix == ".parquet":
+        _atomic_to_parquet(df, path, compression=compression)
+    else:
+        _atomic_to_csv_gz(df, path)
+
+
+def _select_existing_partition_file(path: Path) -> Path | None:
+    if path.exists():
+        return path
+    if path.suffix == ".parquet":
+        fallback = path.with_name("part.csv.gz")
+        if fallback.exists():
+            return fallback
+    return None
 
 
 class PartitionedCsvGzStore:
@@ -153,7 +220,17 @@ class PartitionedParquetStore:
         path = self.root
         for key, value in attrs.items():
             path = path / f"{key}={value}"
-        return list(path.glob(f"year=*/{self.filename}")) + list(path.glob(f"year=*/month=*/{self.filename}"))
+        files: list[Path] = []
+        for partition_dir in list(path.glob("year=*")) + list(path.glob("year=*/month=*")):
+            if not partition_dir.is_dir():
+                continue
+            parquet = partition_dir / self.filename
+            csv = partition_dir / "part.csv.gz"
+            if parquet.exists():
+                files.append(parquet)
+            elif csv.exists():
+                files.append(csv)
+        return sorted(files)
 
     def latest_time(self, *, attrs: dict[str, str], time_col: str) -> pd.Timestamp | None:
         return latest_time_from_files(self.files(attrs), [time_col])
@@ -190,8 +267,9 @@ class PartitionedParquetStore:
                 part_when = pd.Timestamp(part_df[time_col].iloc[0])
                 path = self._partition_path(part_when, attrs)
 
-                if path.exists():
-                    existing = pd.read_parquet(path, engine="pyarrow")
+                existing_path = _select_existing_partition_file(path)
+                if existing_path is not None:
+                    existing = read_partition_file(existing_path)
                     existing[time_col] = normalize_datetime(existing[time_col])
                     combined = pd.concat([existing, part_df], ignore_index=True)
                 else:
