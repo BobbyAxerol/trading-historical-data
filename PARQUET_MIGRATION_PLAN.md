@@ -126,6 +126,8 @@ Quy ước triển khai:
 
 ## Phase 5: Validation
 
+Trạng thái: done for long-format partitioned storage.
+
 Validate trước khi xem Parquet là source chính:
 
 - Row count `csv.gz` vs Parquet.
@@ -135,6 +137,32 @@ Validate trước khi xem Parquet là source chính:
 - Null `time`.
 - Sample equality một số partition.
 - Smoke test các loader endpoint chính.
+
+Tool hiện tại:
+
+```bash
+python -m tools.validate_parquet_migration --workers 4 --sample-rows 25
+python -m tools.validate_parquet_migration --dataset crypto/binance_futures/1m --workers 4
+```
+
+Quy ước validation trong transition sau Phase 4:
+
+- Vì live collectors đã ghi Parquet trực tiếp, `part.csv.gz` ở các partition active có thể stale.
+- Parquet được coi là pass nếu không mất key từ CSV, không có duplicate key, column order giữ nguyên, time range của Parquet bao phủ CSV, và `time` không null.
+- Nếu cùng key nhưng value khác trong khi Parquet mới hơn CSV, tool ghi warning `sample_value_mismatch_parquet_newer_than_csv`, không fail. Đây là case active partitions được REST/Vision refill hoặc snapshot/orderbook cập nhật sau khi CSV đã ngừng ghi.
+- Report được ghi tại `state/parquet_validation_report.json`.
+
+Kết quả full validation gần nhất:
+
+- `total_files=4431`
+- `ok_files=4431`
+- `error_files=0`
+- `warning_files=10`
+- `row_delta=3995`
+- `csv_keys_missing_in_parquet=0`
+- `parquet_duplicate_keys=0`
+
+10 warning hiện là CSV stale ở active partitions của `binance_futures_metrics/5m` và `binance_orderbook_snapshot/1h`; không phải mất dữ liệu.
 
 ## Phase 6: CSV Cleanup
 
