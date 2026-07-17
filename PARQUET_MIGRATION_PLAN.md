@@ -92,13 +92,18 @@ Guard hiện có:
 
 ## Phase 3: Data Loader Parquet-First Fallback CSV
 
+Trạng thái: done.
+
 Sửa `data_loader.py` tối thiểu:
 
-- Cùng partition có `part.parquet` thì đọc Parquet.
-- Nếu chưa có Parquet thì fallback `part.csv.gz`.
+- Cùng partition có `part.parquet` fresh hơn hoặc bằng `part.csv.gz` thì đọc Parquet.
+- Nếu chưa có Parquet, Parquet cũ hơn CSV, hoặc Parquet read lỗi thì fallback `part.csv.gz`.
 - Public endpoint behavior giữ nguyên.
 - Validation mặc định giữ nguyên.
-- Có thể thêm bounded internal workers qua env/config, nhưng không bắt downstream đổi code.
+- Chưa thêm public parameter mới.
+- Chưa đổi matrix wide-format loader; matrix sẽ xử lý ở phase riêng.
+
+Lý do dùng freshness guard: trong transition, collectors live vẫn có thể ghi `part.csv.gz` mới hơn `part.parquet`. Data loader không được đọc Parquet cũ và làm mất dữ liệu mới.
 
 ## Phase 4: Collector Parquet Writer
 

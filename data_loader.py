@@ -20,6 +20,35 @@ BASE_DIR = Path(__file__).parent.resolve()
 STORAGE_DIR = BASE_DIR / "storage"
 
 
+def _select_partition_file(partition_dir: Path) -> Path | None:
+    """Prefer fresh Parquet partitions, fallback to CSV during migration."""
+    parquet_file = partition_dir / "part.parquet"
+    csv_file = partition_dir / "part.csv.gz"
+    if parquet_file.exists():
+        if not csv_file.exists() or parquet_file.stat().st_mtime >= csv_file.stat().st_mtime:
+            return parquet_file
+    if csv_file.exists():
+        return csv_file
+    return None
+
+
+def _read_partition_file(path: Path) -> pd.DataFrame:
+    if path.name.endswith(".parquet"):
+        return pd.read_parquet(path, engine="pyarrow")
+    return pd.read_csv(path, compression="gzip")
+
+
+def _read_partition_with_fallback(path: Path) -> pd.DataFrame:
+    try:
+        return _read_partition_file(path)
+    except Exception:
+        if path.name.endswith(".parquet"):
+            csv_fallback = path.with_name("part.csv.gz")
+            if csv_fallback.exists():
+                return pd.read_csv(csv_fallback, compression="gzip")
+        raise
+
+
 def _get_new_symbol_files(
     dataset_path: Path,
     is_option: bool,
@@ -53,8 +82,8 @@ def _get_new_symbol_files(
         month_dirs = list(year_dir.glob("month=*"))
         if not month_dirs:
             # Partitioned by year only (e.g. 1d datasets)
-            part_file = year_dir / "part.csv.gz"
-            if part_file.exists():
+            part_file = _select_partition_file(year_dir)
+            if part_file is not None:
                 paths.append(part_file)
             continue
 
@@ -70,8 +99,8 @@ def _get_new_symbol_files(
             if end_ts is not None:
                 if year > end_ts.year or (year == end_ts.year and month > end_ts.month):
                     continue
-            part_file = month_dir / "part.csv.gz"
-            if part_file.exists():
+            part_file = _select_partition_file(month_dir)
+            if part_file is not None:
                 paths.append(part_file)
     return sorted(paths)
 
@@ -184,7 +213,7 @@ class MarketDataLoaderBase:
                     sym_dfs = []
                     for f in files:
                         try:
-                            sym_dfs.append(pd.read_csv(f, compression="gzip"))
+                            sym_dfs.append(_read_partition_with_fallback(f))
                         except Exception as exc:
                             logger.error("Failed to read partition %s: %s", f, exc)
                     if sym_dfs:
