@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import argparse
 import math
+import os
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pandas as pd
@@ -372,17 +373,41 @@ def fetch_daily_klines(symbol: str, start: pd.Timestamp, end: pd.Timestamp, logg
 
 
 def _closed_daily_until() -> pd.Timestamp:
-    return pd.Timestamp.now(tz="UTC").normalize().tz_convert(None) - pd.Timedelta(days=1)
+    return pd.Timestamp.now(tz="UTC").normalize().tz_convert(None) - timedelta(days=1)
 
 
 def _load_matrix(path) -> pd.DataFrame:
     if not path.exists():
         return pd.DataFrame()
-    df = pd.read_csv(path, compression="gzip", index_col=0)
+    if path.suffix == ".parquet":
+        df = pd.read_parquet(path, engine="pyarrow")
+    else:
+        df = pd.read_csv(path, compression="gzip", index_col=0)
     df.index = pd.to_datetime(df.index, errors="coerce")
     df = df[~df.index.isna()]
     df = df[~df.index.duplicated(keep="last")].sort_index()
     return df
+
+
+def _select_matrix_path(matrix_dir, feature: str) -> Any:
+    parquet_path = matrix_dir / f"{feature}.parquet"
+    csv_path = matrix_dir / f"{feature}.csv.gz"
+    if parquet_path.exists():
+        if not csv_path.exists() or parquet_path.stat().st_mtime >= csv_path.stat().st_mtime:
+            return parquet_path
+    if csv_path.exists():
+        return csv_path
+    return parquet_path
+
+
+def _atomic_write_matrix(df: pd.DataFrame, path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    if path.suffix == ".parquet":
+        df.to_parquet(tmp, engine="pyarrow", compression="zstd")
+    else:
+        df.to_csv(tmp, compression="gzip")
+    os.replace(tmp, path)
 
 
 def _symbol_fetch_start(
@@ -407,16 +432,17 @@ def _symbol_fetch_start(
         return backfill_start
 
     gaps = series.index.to_series().sort_values().diff().dropna()
-    big_gaps = gaps[gaps > pd.Timedelta(days=1)]
+    overlap = timedelta(days=int(overlap_days))
+    big_gaps = gaps[gaps > timedelta(days=1)]
     if not big_gaps.empty:
         first_gap_idx = big_gaps.index[0]
         prev_pos = series.index.get_loc(first_gap_idx) - 1
-        return max(backfill_start, pd.Timestamp(series.index[prev_pos]).normalize() - pd.Timedelta(days=overlap_days))
+        return max(backfill_start, pd.Timestamp(series.index[prev_pos]).normalize() - overlap)
 
     if latest < end:
-        return max(backfill_start, latest - pd.Timedelta(days=overlap_days))
+        return max(backfill_start, latest - overlap)
 
-    return max(backfill_start, latest - pd.Timedelta(days=overlap_days))
+    return max(backfill_start, latest - overlap)
 
 
 def run_pipeline(
@@ -437,10 +463,10 @@ def run_pipeline(
     matrix_dir = data_root() / "crypto" / "binance_daily_matrix"
     matrix_dir.mkdir(parents=True, exist_ok=True)
     
-    paths = {f: matrix_dir / f"{f}.csv.gz" for f in FEATURES}
+    paths = {f: matrix_dir / f"{f}.parquet" for f in FEATURES}
 
     # 2. Determine per-symbol fetch windows from existing open matrix
-    existing_open = _load_matrix(paths["open"])
+    existing_open = _load_matrix(_select_matrix_path(matrix_dir, "open"))
     backfill_start = pd.Timestamp(backfill_start_str).normalize()
     end = _closed_daily_until()
 
@@ -495,13 +521,14 @@ def run_pipeline(
             else:
                 pivoted_new = pivoted_new.astype("float64")
 
-            if path.exists():
+            existing_path = _select_matrix_path(matrix_dir, feature)
+            if existing_path.exists():
                 try:
-                    existing_df = _load_matrix(path)
+                    existing_df = _load_matrix(existing_path)
                     # Align indices & columns, combining df with prioritized new data
                     combined = pivoted_new.combine_first(existing_df)
                 except Exception as exc:
-                    logger.error("Error loading %s, overwriting: %s", path.name, exc)
+                    logger.error("Error loading %s, overwriting: %s", existing_path.name, exc)
                     combined = pivoted_new
             else:
                 combined = pivoted_new
@@ -513,12 +540,11 @@ def run_pipeline(
             combined = combined[~combined.index.duplicated(keep="last")]
             combined = combined.sort_index()
             combined = combined.reindex(symbols, axis=1)
-            combined.index = combined.index.strftime("%Y-%m-%d")
+            combined.index = pd.to_datetime(combined.index).normalize()
+            combined.index.name = "time"
 
             # Write atomically
-            tmp = path.with_suffix(".tmp")
-            combined.to_csv(tmp, compression="gzip")
-            tmp.replace(path)
+            _atomic_write_matrix(combined, path)
             
             logger.info("Wrote matrix %s: shape=%s", path.name, combined.shape)
 

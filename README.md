@@ -6,7 +6,7 @@ Hệ thống dịch vụ thu thập dữ liệu thị trường tự động (Cr
 
 ## 1. Cấu trúc lưu trữ (Storage Layout / Data Lake)
 
-Toàn bộ dữ liệu thu thập được lưu trữ tập trung tại thư mục `storage/` dưới dạng các tệp tin **CSV nén GZIP (`.csv.gz`)** được phân vùng (partitioned).
+Toàn bộ dữ liệu thu thập được lưu trữ tập trung tại thư mục `storage/`. Storage chính hiện dùng **Parquet (`.parquet`)**; một số matrix hoặc legacy fallback có thể còn CSV nén GZIP trong giai đoạn chuyển đổi riêng.
 
 ### 1.1 Sơ đồ phân vùng đường dẫn
 
@@ -18,35 +18,35 @@ storage/
 │   │       └── symbol=BTCUSDT/
 │   │           └── year=2026/
 │   │               └── month=06/
-│   │                   └── part.csv.gz
+│   │                   └── part.parquet
 │   │       └── symbol=BTCUSDT_240329/
 │   │           └── year=2024/
 │   │               └── month=03/
-│   │                   └── part.csv.gz
+│   │                   └── part.parquet
 │   ├── binance_spot/
 │   │   └── 1m/
 │   │       └── symbol=BTCUSDT/
 │   │           └── year=2026/
 │   │               └── month=06/
-│   │                   └── part.csv.gz
+│   │                   └── part.parquet
 │   ├── binance_orderbook_snapshot/
 │   │   └── 1h/
 │   │       └── symbol=BTCUSDT/
 │   │           └── year=2026/
 │   │               └── month=07/
-│   │                   └── part.csv.gz
+│   │                   └── part.parquet
 │   ├── binance_futures_metrics/
 │   │   └── 5m/
 │   │       └── symbol=BTCUSDT/
 │   │           └── year=2026/
 │   │               └── month=07/
-│   │                   └── part.csv.gz
+│   │                   └── part.parquet
 │   └── binance_daily_matrix/
-│       ├── open.csv.gz
-│       ├── high.csv.gz
-│       ├── low.csv.gz
-│       ├── close.csv.gz
-│       └── volume.csv.gz
+│       ├── open.parquet
+│       ├── high.parquet
+│       ├── low.parquet
+│       ├── close.parquet
+│       └── volume.parquet
 ├── vn/
 │   ├── equity/
 │   │   ├── 1d/
@@ -98,11 +98,13 @@ Tất cả các tệp tin trong `vn/equity/1m/` và `vn/futures/1m/` đều đư
 ### 1.3 Cấu trúc Ma trận Dữ liệu Ngày Binance (Binance Daily Matrix)
 
 Dữ liệu Binance Daily Matrix được lưu trữ tại `storage/crypto/binance_daily_matrix/` dưới dạng các ma trận xoay (pivoted) tương ứng cho 5 trường thuộc tính:
-- `open.csv.gz`: Giá mở cửa.
-- `high.csv.gz`: Giá cao nhất.
-- `low.csv.gz`: Giá thấp nhất.
-- `close.csv.gz`: Giá đóng cửa.
-- `volume.csv.gz`: Khối lượng giao dịch (kiểu `int64`).
+- `open.parquet`: Giá mở cửa.
+- `high.parquet`: Giá cao nhất.
+- `low.parquet`: Giá thấp nhất.
+- `close.parquet`: Giá đóng cửa.
+- `volume.parquet`: Khối lượng giao dịch (kiểu `int64`).
+
+Loader `CryptoDailyMatrix` ưu tiên đọc Parquet và chỉ fallback CSV nếu file Parquet chưa tồn tại trong quá trình chuyển đổi.
 
 **Cấu trúc bảng ma trận:**
 - **Index (Dòng)**: Cột chỉ số ngày (`time`, định dạng `YYYY-MM-DD`).
