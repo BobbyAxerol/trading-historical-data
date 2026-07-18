@@ -131,7 +131,7 @@ class TestOhlcvProjectionAndResample(unittest.TestCase):
                 "high": [x + 10.5 for x in range(10)],
                 "low": [x + 9.5 for x in range(10)],
                 "close": [x + 10.25 for x in range(10)],
-                "volume": [1] * len(times),
+                "volume": [1.9] * len(times),
                 "source": ["unit_test"] * len(times),
                 "ingested_at": ["2026-07-01T00:00:00Z"] * len(times),
             }
@@ -160,13 +160,15 @@ class TestOhlcvProjectionAndResample(unittest.TestCase):
         duck = TempOhlcvLoader().load_resampled(symbols="BTCUSDT", timeframe="5min", check_val=True, engine="duckdb")
         pandas_df = TempOhlcvLoader().load_resampled(symbols="BTCUSDT", timeframe="5min", check_val=True, engine="pandas")
 
-        pd.testing.assert_frame_equal(duck.reset_index(drop=True), pandas_df.reset_index(drop=True), check_dtype=False)
+        pd.testing.assert_frame_equal(duck.reset_index(drop=True), pandas_df.reset_index(drop=True), check_dtype=True)
+        self.assertEqual(str(duck["time"].dtype), "datetime64[ns]")
         self.assertEqual(len(duck), 2)
         self.assertEqual(float(duck.loc[0, "open"]), 10.0)
         self.assertEqual(float(duck.loc[0, "high"]), 14.5)
         self.assertEqual(float(duck.loc[0, "low"]), 9.5)
         self.assertEqual(float(duck.loc[0, "close"]), 14.25)
         self.assertEqual(float(duck.loc[0, "volume"]), 5.0)
+        self.assertEqual(str(duck["volume"].dtype), "int64")
 
 
 class TestDailyPartitionDiscovery(unittest.TestCase):

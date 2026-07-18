@@ -219,6 +219,7 @@ class MarketDataLoaderBase:
     DEFAULT_COLUMNS: tuple[str, ...] | None = None
     RESAMPLE_SUPPORTED: bool = False
     TIME_COLUMN: str = "time"
+    RESAMPLE_VOLUME_DTYPE: str = "int64"
 
     def _get_new_path(self) -> Path:
         return STORAGE_DIR.joinpath(*self.NEW_PATH_PARTS)
@@ -420,6 +421,11 @@ class MarketDataLoaderBase:
             params.append(end_ts.to_pydatetime())
         where_sql = " AND ".join(where)
         limit_sql = f" LIMIT {int(limit)}" if limit is not None else ""
+        volume_expr = (
+            "COALESCE(CAST(floor(CAST(volume AS DOUBLE)) AS BIGINT), 0) AS volume"
+            if self.RESAMPLE_VOLUME_DTYPE == "int64"
+            else "CAST(volume AS DOUBLE) AS volume"
+        )
         query = f"""
             WITH src AS (
                 SELECT
@@ -429,7 +435,7 @@ class MarketDataLoaderBase:
                     CAST(high AS DOUBLE) AS high,
                     CAST(low AS DOUBLE) AS low,
                     CAST(close AS DOUBLE) AS close,
-                    CAST(volume AS DOUBLE) AS volume
+                    {volume_expr}
                 FROM read_parquet({path_list})
             ),
             filtered AS (
@@ -495,6 +501,8 @@ class MarketDataLoaderBase:
                     continue
                 for col in ["open", "high", "low", "close", "volume"]:
                     chunk[col] = pd.to_numeric(chunk[col], errors="coerce")
+                if self.RESAMPLE_VOLUME_DTYPE == "int64":
+                    chunk["volume"] = chunk["volume"].fillna(0).astype("int64")
                 chunk = chunk.dropna(subset=["open", "high", "low", "close"])
                 if chunk.empty:
                     continue
@@ -581,6 +589,8 @@ class MarketDataLoaderBase:
             raise ValueError(f"Unsupported resample engine: {engine}")
 
         result = self._normalize(result)
+        if "time" in result.columns:
+            result["time"] = pd.to_datetime(result["time"], errors="coerce").astype("datetime64[ns]")
         result = result.dropna(subset=["open", "high", "low", "close"])
         result = result[["time", "symbol", "open", "high", "low", "close", "volume"]]
         if check_val:
@@ -649,6 +659,7 @@ class CryptoBinanceSpot1m(MarketDataLoaderBase):
     TZ_INFO = "UTC"
     DEFAULT_COLUMNS = OHLCV_COLUMNS
     RESAMPLE_SUPPORTED = True
+    RESAMPLE_VOLUME_DTYPE = "float64"
 
     def _normalize(self, df: pd.DataFrame) -> pd.DataFrame:
         result = df.copy()
