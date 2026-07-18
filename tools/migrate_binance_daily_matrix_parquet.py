@@ -13,10 +13,18 @@ from collectors.common.env import data_root, load_environment, state_root
 from collectors.common.manifest import utc_now_iso
 
 FEATURES = ("open", "high", "low", "close", "volume")
+DATASETS = {
+    "binance_daily_matrix": ("crypto", "binance_daily_matrix"),
+    "vn_daily_matrix": ("vn", "equity", "daily_matrix"),
+}
 
 
-def _matrix_dir() -> Path:
-    return data_root() / "crypto" / "binance_daily_matrix"
+def _matrix_dir(dataset: str) -> Path:
+    try:
+        parts = DATASETS[dataset]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported matrix dataset: {dataset}") from exc
+    return data_root().joinpath(*parts)
 
 
 def _read_csv_matrix(path: Path) -> pd.DataFrame:
@@ -179,9 +187,10 @@ def run_migration(
     overwrite: bool,
     cleanup_csv: bool,
     confirm: bool,
+    dataset: str = "binance_daily_matrix",
     report_path: Path | None = None,
 ) -> dict[str, Any]:
-    matrix_dir = _matrix_dir()
+    matrix_dir = _matrix_dir(dataset)
     items = [
         migrate_feature(
             feature,
@@ -196,6 +205,7 @@ def run_migration(
     errors = [item for item in items if item.get("errors")]
     report = {
         "tool": "migrate_binance_daily_matrix_parquet",
+        "dataset": dataset,
         "updated_at": utc_now_iso(),
         "matrix_dir": str(matrix_dir),
         "dry_run": dry_run,
@@ -212,13 +222,19 @@ def run_migration(
         "errors": errors,
         "items": items,
     }
-    write_report(report, report_path or (state_root() / "binance_daily_matrix_parquet_migration_report.json"))
+    default_report = (
+        "binance_daily_matrix_parquet_migration_report.json"
+        if dataset == "binance_daily_matrix"
+        else f"{dataset}_parquet_migration_report.json"
+    )
+    write_report(report, report_path or (state_root() / default_report))
     return report
 
 
 def main() -> None:
     load_environment()
-    parser = argparse.ArgumentParser(description="Migrate Binance daily matrix CSV.GZ files to Parquet.")
+    parser = argparse.ArgumentParser(description="Migrate daily matrix CSV.GZ files to Parquet.")
+    parser.add_argument("--dataset", choices=sorted(DATASETS), default="binance_daily_matrix")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--cleanup-csv", action="store_true")
@@ -231,10 +247,11 @@ def main() -> None:
         overwrite=args.overwrite,
         cleanup_csv=args.cleanup_csv,
         confirm=args.confirm,
+        dataset=args.dataset,
         report_path=Path(args.report).resolve() if args.report else None,
     )
     print(
-        "binance daily matrix parquet migration: "
+        f"{args.dataset} parquet migration: "
         f"total={report['total_features']} ok={report['ok_features']} errors={report['error_features']} "
         f"converted={report['converted_features']} deleted_csv={report['deleted_csv_features']} "
         f"csv_size_bytes={report['csv_size_bytes']} parquet_size_bytes={report['parquet_size_bytes']}"

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -664,7 +665,15 @@ class VNDailyMatrix(CryptoDailyMatrix):
     TZ_INFO = "Asia/Ho_Chi_Minh"
 
     def _get_path(self, feature: str) -> Path:
-        return STORAGE_DIR / "vn" / "equity" / "daily_matrix" / f"{feature.lower()}.csv.gz"
+        matrix_dir = STORAGE_DIR / "vn" / "equity" / "daily_matrix"
+        parquet_path = matrix_dir / f"{feature.lower()}.parquet"
+        csv_path = matrix_dir / f"{feature.lower()}.csv.gz"
+        if parquet_path.exists():
+            if not csv_path.exists() or parquet_path.stat().st_mtime >= csv_path.stat().st_mtime:
+                return parquet_path
+        if csv_path.exists():
+            return csv_path
+        return parquet_path
 
     def _normalize_ohlcv(self, df: pd.DataFrame) -> pd.DataFrame:
         """Repair vendor OHLC bounds while preserving every observed price."""
@@ -895,9 +904,9 @@ def validate_data(df: pd.DataFrame, dataset: str) -> dict[str, Any]:
 
     expected_gap = None
     if dataset in ("crypto_1m", "crypto_binance_futures_1m", "crypto_binance_quarterly_1m", "binance_usdm_quarterly_1m", "crypto_binance_spot_1m", "binance_spot_1m", "crypto_spot_1m"):
-        expected_gap = pd.Timedelta(minutes=1)
+        expected_gap = timedelta(minutes=1)
     elif dataset == "crypto_daily_ohlcv":
-        expected_gap = pd.Timedelta(days=1)
+        expected_gap = timedelta(days=1)
 
     if expected_gap is not None:
         continuity_errors = []

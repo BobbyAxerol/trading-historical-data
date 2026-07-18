@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 from typing import Iterable
 
@@ -51,18 +52,27 @@ def _read_symbol(raw_root: Path, symbol: str, start_ts: pd.Timestamp | None, end
     if not symbol_root.exists():
         return pd.DataFrame()
 
-    frames = []
-    for path in sorted(symbol_root.glob("year=*/part.csv.gz")):
+    by_year: dict[int, Path] = {}
+    for path in sorted(symbol_root.glob("year=*/part.parquet")) + sorted(symbol_root.glob("year=*/part.csv.gz")):
         try:
             year = int(path.parent.name.split("=", 1)[1])
         except (IndexError, ValueError):
             continue
+        current = by_year.get(year)
+        if current is None or path.stat().st_mtime >= current.stat().st_mtime:
+            by_year[year] = path
+
+    frames = []
+    for year, path in sorted(by_year.items()):
         if start_ts is not None and year < start_ts.year:
             continue
         if end_ts is not None and year > end_ts.year:
             continue
         try:
-            frames.append(pd.read_csv(path, compression="gzip"))
+            if path.suffix == ".parquet":
+                frames.append(pd.read_parquet(path, engine="pyarrow"))
+            else:
+                frames.append(pd.read_csv(path, compression="gzip"))
         except Exception:
             continue
 
@@ -135,13 +145,14 @@ def build_matrix(
             matrix = matrix.reindex(columns=active_symbols)
             matrix.index = pd.to_datetime(matrix.index, errors="coerce")
             matrix = matrix[~matrix.index.isna()].sort_index()
-            matrix.index = matrix.index.strftime("%Y-%m-%d")
-            tmp = matrix_root / f"{feature}.csv.tmp"
-            out = matrix_root / f"{feature}.csv.gz"
-            matrix.to_csv(tmp, compression="gzip")
-            tmp.replace(out)
+            matrix.index = pd.to_datetime(matrix.index).normalize()
+            matrix.index.name = "time"
+            out = matrix_root / f"{feature}.parquet"
+            tmp = matrix_root / f"{feature}.parquet.tmp"
+            matrix.to_parquet(tmp, engine="pyarrow", compression="zstd")
+            os.replace(tmp, out)
             if logger:
-                logger.info("Wrote VN daily matrix %s.csv.gz: shape=%s", feature, matrix.shape)
+                logger.info("Wrote VN daily matrix %s.parquet: shape=%s", feature, matrix.shape)
 
     state = JsonState("vn_daily_matrix_symbols.json")
     state.write({

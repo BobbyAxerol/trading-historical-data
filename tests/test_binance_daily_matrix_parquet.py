@@ -73,6 +73,24 @@ class TestBinanceDailyMatrixParquet(unittest.TestCase):
         self.assertEqual(float(loaded.loc[pd.Timestamp("2026-01-02"), "BTCUSDT"]), 99.0)
         self.assertFalse(path.exists())
 
+    def test_vn_daily_matrix_dataset_cleanup(self):
+        self.matrix_dir = Path(os.environ["DATA_ROOT"]) / "vn" / "equity" / "daily_matrix"
+        self.matrix_dir.mkdir(parents=True, exist_ok=True)
+        index = pd.to_datetime(["2026-01-01", "2026-01-02"])
+        for feature in ("open", "high", "low", "close", "volume"):
+            pd.DataFrame({"FPT": [1, 2], "VCB": [3, 4]}, index=index).to_csv(
+                self.matrix_dir / f"{feature}.csv.gz",
+                compression="gzip",
+            )
+
+        run_migration(dry_run=False, overwrite=False, cleanup_csv=False, confirm=False, dataset="vn_daily_matrix")
+        report = run_migration(dry_run=False, overwrite=False, cleanup_csv=True, confirm=True, dataset="vn_daily_matrix")
+
+        self.assertEqual(report["dataset"], "vn_daily_matrix")
+        self.assertEqual(report["error_features"], 0)
+        self.assertEqual(report["deleted_csv_features"], 5)
+        self.assertFalse(any(self.matrix_dir.glob("*.csv.gz")))
+
 
 if __name__ == "__main__":
     unittest.main()
