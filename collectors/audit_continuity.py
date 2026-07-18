@@ -27,8 +27,8 @@ def _paths(patterns: list[Path]) -> list[Path]:
 
 
 def _partition_paths(pattern: Path) -> list[Path]:
-    csv_paths = _paths([pattern / "part.csv.gz"])
-    parquet_paths = _paths([pattern / "part.parquet"])
+    csv_paths = _paths([pattern / "part.csv.gz", pattern / "day=*" / "part.csv.gz"])
+    parquet_paths = _paths([pattern / "part.parquet", pattern / "day=*" / "part.parquet"])
     return sorted(parquet_paths + [path for path in csv_paths if not path.with_name("part.parquet").exists()])
 
 

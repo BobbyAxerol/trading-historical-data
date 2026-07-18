@@ -92,6 +92,28 @@ class TestPartitionedParquetStore(unittest.TestCase):
         loaded = pd.read_parquet(path)
         self.assertEqual(str(loaded.loc[0, "time"]), "2026-01-02 00:00:00")
 
+    def test_day_partition_layout(self):
+        store = PartitionedParquetStore(["options", "test", "snapshot_5m"], partition="day")
+        df = pd.DataFrame(
+            {
+                "snapshot_time": ["2026-07-01 00:00:00", "2026-07-02 00:00:00"],
+                "underlying": ["BTC", "BTC"],
+                "symbol": ["BTC-260925-100000-C", "BTC-260925-100000-C"],
+                "close": [1.0, 2.0],
+            }
+        )
+        store.append(
+            df,
+            time_col="snapshot_time",
+            dedupe_cols=["snapshot_time", "symbol"],
+            attrs={"underlying": "BTC"},
+            lock_name="test_parquet/options_BTC",
+        )
+        root = Path(os.environ["DATA_ROOT"]) / "options" / "test" / "snapshot_5m" / "underlying=BTC" / "year=2026" / "month=07"
+        self.assertTrue((root / "day=01" / "part.parquet").exists())
+        self.assertTrue((root / "day=02" / "part.parquet").exists())
+        self.assertEqual(store.latest_time(attrs={"underlying": "BTC"}, time_col="snapshot_time"), pd.Timestamp("2026-07-02 00:00:00"))
+
     def test_append_reads_existing_csv_fallback_before_writing_parquet(self):
         csv_path = (
             Path(os.environ["DATA_ROOT"])

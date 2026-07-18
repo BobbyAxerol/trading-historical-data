@@ -7,7 +7,7 @@ from pathlib import Path
 import pandas as pd
 
 import data_loader
-from data_loader import CryptoDailyMatrix, MarketDataLoaderBase, VNDailyMatrix
+from data_loader import BinanceOptions5m, CryptoDailyMatrix, MarketDataLoaderBase, VNDailyMatrix
 
 
 class TempParquetLoader(MarketDataLoaderBase):
@@ -167,6 +167,45 @@ class TestOhlcvProjectionAndResample(unittest.TestCase):
         self.assertEqual(float(duck.loc[0, "low"]), 9.5)
         self.assertEqual(float(duck.loc[0, "close"]), 14.25)
         self.assertEqual(float(duck.loc[0, "volume"]), 5.0)
+
+
+class TestDailyPartitionDiscovery(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.old_storage_dir = data_loader.STORAGE_DIR
+        data_loader.STORAGE_DIR = Path(self.tmp.name) / "storage"
+        self.day_dir = (
+            data_loader.STORAGE_DIR
+            / "options"
+            / "binance"
+            / "snapshot_5m"
+            / "underlying=BTC"
+            / "year=2026"
+            / "month=07"
+            / "day=01"
+        )
+        self.day_dir.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(
+            {
+                "snapshot_time": [pd.Timestamp("2026-07-01 00:00:00")],
+                "underlying": ["BTC"],
+                "symbol": ["BTC-260925-100000-C"],
+                "mark_price": [100.0],
+            }
+        ).to_parquet(self.day_dir / "part.parquet", index=False, engine="pyarrow", compression="zstd")
+
+    def tearDown(self):
+        data_loader.STORAGE_DIR = self.old_storage_dir
+        self.tmp.cleanup()
+
+    def test_loader_discovers_daily_option_partitions(self):
+        df = BinanceOptions5m().load(symbols="BTC", start_date="2026-07-01", end_date="2026-07-01 23:59:59", check_val=True)
+        self.assertEqual(len(df), 1)
+        self.assertEqual(df.loc[0, "symbol"], "BTC-260925-100000-C")
+        self.assertTrue(pd.api.types.is_datetime64_any_dtype(df["snapshot_time"]))
+
+        empty = BinanceOptions5m().load(symbols="BTC", start_date="2026-07-02", end_date="2026-07-02 23:59:59", check_val=False)
+        self.assertTrue(empty.empty)
 
 
 class TestCryptoDailyMatrixParquetFirst(unittest.TestCase):
