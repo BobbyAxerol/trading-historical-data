@@ -1,16 +1,27 @@
 from __future__ import annotations
 
+import gc
 import os
 from pathlib import Path
 from typing import Iterable
 
 import pandas as pd
+import pyarrow as pa
 
 from .discovery import latest_time_from_files
 from .env import data_root
 from .locks import FileLock
 
 DATETIME_COLUMNS = ("time", "close_time", "sample_time", "snapshot_time", "ingested_at")
+
+
+def release_unused_memory() -> None:
+    """Best-effort release after large partition rewrites."""
+    gc.collect()
+    try:
+        pa.default_memory_pool().release_unused()
+    except Exception:
+        pass
 
 
 def normalize_datetime(series: pd.Series, *, utc: bool = False) -> pd.Series:
@@ -123,8 +134,10 @@ class PartitionedCsvGzStore:
         for key, value in attrs.items():
             path = path / f"{key}={value}"
         path = path / f"year={when.year:04d}"
-        if self.partition == "month":
+        if self.partition in {"month", "day"}:
             path = path / f"month={when.month:02d}"
+        if self.partition == "day":
+            path = path / f"day={when.day:02d}"
         return path / self.filename
 
     def files(self, attrs: dict[str, str]) -> list[Path]:
@@ -212,8 +225,10 @@ class PartitionedParquetStore:
         for key, value in attrs.items():
             path = path / f"{key}={value}"
         path = path / f"year={when.year:04d}"
-        if self.partition == "month":
+        if self.partition in {"month", "day"}:
             path = path / f"month={when.month:02d}"
+        if self.partition == "day":
+            path = path / f"day={when.day:02d}"
         return path / self.filename
 
     def files(self, attrs: dict[str, str]) -> list[Path]:
@@ -221,7 +236,7 @@ class PartitionedParquetStore:
         for key, value in attrs.items():
             path = path / f"{key}={value}"
         files: list[Path] = []
-        for partition_dir in list(path.glob("year=*")) + list(path.glob("year=*/month=*")):
+        for partition_dir in list(path.glob("year=*")) + list(path.glob("year=*/month=*")) + list(path.glob("year=*/month=*/day=*")):
             if not partition_dir.is_dir():
                 continue
             parquet = partition_dir / self.filename
@@ -259,13 +274,15 @@ class PartitionedParquetStore:
             latest = existing_latest
         rows_written = 0
         work["_partition_year"] = work[time_col].dt.year
-        work["_partition_month"] = work[time_col].dt.month if self.partition == "month" else 1
+        work["_partition_month"] = work[time_col].dt.month if self.partition in {"month", "day"} else 1
+        work["_partition_day"] = work[time_col].dt.day if self.partition == "day" else 1
 
         with FileLock(lock_name):
-            for _, part_df in work.groupby(["_partition_year", "_partition_month"], sort=True):
-                part_df = part_df.drop(columns=["_partition_year", "_partition_month"])
+            for _, part_df in work.groupby(["_partition_year", "_partition_month", "_partition_day"], sort=True):
+                part_df = part_df.drop(columns=["_partition_year", "_partition_month", "_partition_day"])
                 part_when = pd.Timestamp(part_df[time_col].iloc[0])
                 path = self._partition_path(part_when, attrs)
+                existing = None
 
                 existing_path = _select_existing_partition_file(path)
                 if existing_path is not None:
@@ -287,5 +304,12 @@ class PartitionedParquetStore:
                 )
                 _atomic_to_parquet(combined, path, compression=self.compression)
                 rows_written += len(part_df)
+                del part_df, combined
+                if existing is not None:
+                    del existing
+                release_unused_memory()
+
+        del work
+        release_unused_memory()
 
         return {"rows_written": rows_written, "latest_time": latest.isoformat()}

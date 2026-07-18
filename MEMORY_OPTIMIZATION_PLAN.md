@@ -44,15 +44,25 @@ Raw `1m` vẫn là canonical storage. Phase này không tạo cache/materialized
 
 ## Phase 2: Collector And Writer Memory Reduction
 
-Trạng thái: planned.
+Trạng thái: implemented.
 
-Scope dự kiến:
+Thay đổi:
 
-- `PartitionedParquetStore.append`: cleanup memory sau mỗi partition write, có threshold tránh gọi release quá dày.
+- `PartitionedParquetStore.append`: hỗ trợ partition `day` và cleanup memory sau mỗi partition write bằng `gc.collect()` + release PyArrow memory pool best-effort.
 - Options snapshot đổi write partition từ monthly sang daily: `year=YYYY/month=MM/day=DD/part.parquet`.
-- Loader options đọc được cả monthly legacy và daily mới.
-- Migration/split monthly options sang daily với validation key `snapshot_time,symbol`.
-- Backfill collectors lớn bỏ pattern `frames=[] -> concat all`, chuyển sang fetch chunk nào append chunk đó.
-- Matrix collectors release intermediate sau từng feature.
+- Loader options đọc được cả monthly legacy và daily mới trong giai đoạn chuyển đổi.
+- `BinanceOptions5m` dùng `snapshot_time` là time-column canonical để filter/sort/validate.
+- Migration/split monthly options sang daily qua `tools.migrate_options_snapshot_daily`, validate đủ key `snapshot_time,symbol` trước khi cho phép cleanup monthly.
+- `collectors.audit_continuity` scan được partition daily để audit gap/duplicate options snapshot.
 
-Phase 2 phải có migration/cleanup guard riêng vì có đổi layout options.
+Phase 2 có migration/cleanup guard riêng vì đổi layout options. Quy trình chuẩn:
+
+```bash
+python -m tools.migrate_options_snapshot_daily --dry-run
+python -m tools.migrate_options_snapshot_daily
+python -m tools.migrate_options_snapshot_daily --cleanup-monthly --confirm
+```
+
+Report được ghi vào `state/options_snapshot_daily_migration_report.json`.
+
+Phần còn lại cho Phase 3+: tiếp tục giảm pattern `frames=[] -> concat all` trong các collector backfill rất lớn nếu benchmark thực tế còn tạo peak RSS cao.

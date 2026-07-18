@@ -149,9 +149,25 @@ def _get_new_symbol_files(
             if end_ts is not None:
                 if year > end_ts.year or (year == end_ts.year and month > end_ts.month):
                     continue
-            part_file = _select_partition_file(month_dir)
-            if part_file is not None:
-                paths.append(part_file)
+            day_dirs = list(month_dir.glob("day=*"))
+            if day_dirs:
+                for day_dir in day_dirs:
+                    try:
+                        day = int(day_dir.name.split("=")[1])
+                    except (IndexError, ValueError):
+                        continue
+                    day_start = pd.Timestamp(year=year, month=month, day=day)
+                    if start_ts is not None and day_start.normalize() < start_ts.normalize():
+                        continue
+                    if end_ts is not None and day_start.normalize() > end_ts.normalize():
+                        continue
+                    part_file = _select_partition_file(day_dir)
+                    if part_file is not None:
+                        paths.append(part_file)
+            else:
+                part_file = _select_partition_file(month_dir)
+                if part_file is not None:
+                    paths.append(part_file)
     return sorted(paths)
 
 
@@ -202,6 +218,7 @@ class MarketDataLoaderBase:
     TZ_INFO: str = "UTC"  # Either "Asia/Ho_Chi_Minh" (naive) or "UTC" (naive)
     DEFAULT_COLUMNS: tuple[str, ...] | None = None
     RESAMPLE_SUPPORTED: bool = False
+    TIME_COLUMN: str = "time"
 
     def _get_new_path(self) -> Path:
         return STORAGE_DIR.joinpath(*self.NEW_PATH_PARTS)
@@ -246,6 +263,13 @@ class MarketDataLoaderBase:
             df = df.sort_values(sort_cols).reset_index(drop=True)
 
         return df
+
+    def _filter_time_column(self, df: pd.DataFrame) -> str | None:
+        if self.TIME_COLUMN in df.columns:
+            return self.TIME_COLUMN
+        if "time" in df.columns:
+            return "time"
+        return None
 
     def load(
         self,
@@ -315,13 +339,14 @@ class MarketDataLoaderBase:
                             logger.error("Failed to read partition %s: %s", f, exc)
                     if sym_dfs:
                         df_sym = pd.concat(sym_dfs, ignore_index=True)
-                        if "time" in df_sym.columns:
-                            df_sym["time"] = pd.to_datetime(df_sym["time"], errors="coerce")
-                            df_sym = df_sym.dropna(subset=["time"])
+                        filter_col = self._filter_time_column(df_sym)
+                        if filter_col is not None:
+                            df_sym[filter_col] = pd.to_datetime(df_sym[filter_col], errors="coerce")
+                            df_sym = df_sym.dropna(subset=[filter_col])
                             if start_ts is not None:
-                                df_sym = df_sym[df_sym["time"] >= start_ts]
+                                df_sym = df_sym[df_sym[filter_col] >= start_ts]
                             if end_ts is not None:
-                                df_sym = df_sym[df_sym["time"] <= end_ts]
+                                df_sym = df_sym[df_sym[filter_col] <= end_ts]
 
             if not df_sym.empty:
                 if "symbol" not in df_sym.columns:
@@ -655,6 +680,29 @@ class BinanceOptions5m(MarketDataLoaderBase):
     NEW_PATH_PARTS = ("options", "binance", "snapshot_5m")
     IS_OPTION = True
     TZ_INFO = "UTC"
+    TIME_COLUMN = "snapshot_time"
+
+    def _normalize(self, df: pd.DataFrame) -> pd.DataFrame:
+        result = df.copy()
+        if "snapshot_time" not in result.columns:
+            return result
+        result["snapshot_time"] = pd.to_datetime(result["snapshot_time"], errors="coerce")
+        result = result.dropna(subset=["snapshot_time"])
+        try:
+            if result["snapshot_time"].dt.tz is not None:
+                result["snapshot_time"] = result["snapshot_time"].dt.tz_convert(self.TZ_INFO).dt.tz_localize(None)
+        except Exception:
+            pass
+        if "time" in result.columns:
+            result["time"] = pd.to_datetime(result["time"], errors="coerce")
+
+        for col in result.columns:
+            if col in {"snapshot_time", "time", "underlying", "symbol", "source", "ingested_at"}:
+                continue
+            result[col] = pd.to_numeric(result[col], errors="coerce")
+
+        sort_cols = ["underlying", "snapshot_time", "symbol"] if "underlying" in result.columns else ["snapshot_time", "symbol"]
+        return result.sort_values([col for col in sort_cols if col in result.columns]).reset_index(drop=True)
 
 
 class BinanceOrderBookSnapshot1h(MarketDataLoaderBase):
@@ -1137,6 +1185,35 @@ def validate_data(df: pd.DataFrame, dataset: str) -> dict[str, Any]:
         report["info"]["symbols"] = list(df["symbol"].unique())
         report["info"]["min_time"] = str(df["time"].min())
         report["info"]["max_time"] = str(df["time"].max())
+        return report
+
+    if dataset in ("options_5m", "binance_options_5m", "options_binance_snapshot_5m"):
+        required_cols = ["snapshot_time", "underlying", "symbol"]
+        missing_cols = [c for c in required_cols if c not in df.columns]
+        if missing_cols:
+            report["valid"] = False
+            report["errors"].append(f"Missing required columns: {missing_cols}")
+            return report
+        if not pd.api.types.is_datetime64_any_dtype(df["snapshot_time"]):
+            try:
+                pd.to_datetime(df["snapshot_time"])
+            except Exception as exc:
+                report["valid"] = False
+                report["errors"].append(f"Column 'snapshot_time' is not parseable as datetime: {exc}")
+        for col in df.columns:
+            if col in {"snapshot_time", "time", "underlying", "symbol", "expiry", "type", "source", "ingested_at"}:
+                continue
+            if not pd.api.types.is_numeric_dtype(df[col]):
+                report["valid"] = False
+                report["errors"].append(f"Column '{col}' is not numeric.")
+        dup_count = df.duplicated(subset=["snapshot_time", "symbol"]).sum()
+        report["info"]["duplicate_count"] = int(dup_count)
+        if dup_count > 0:
+            report["valid"] = False
+            report["errors"].append(f"Found {dup_count} duplicate rows by symbol and snapshot_time.")
+        report["info"]["underlyings"] = list(df["underlying"].unique())
+        report["info"]["min_time"] = str(df["snapshot_time"].min())
+        report["info"]["max_time"] = str(df["snapshot_time"].max())
         return report
 
     # Standard OHLCV validation

@@ -138,7 +138,7 @@ def run_once(args, logger) -> None:
         logger.warning("No option rows after filter")
         return
 
-    store = PartitionedParquetStore(["options", "binance", "snapshot_5m"], partition="month")
+    store = PartitionedParquetStore(["options", "binance", "snapshot_5m"], partition="day")
     total = 0
     for underlying, part in df.groupby("underlying"):
         state = manifest.symbol_state(underlying)

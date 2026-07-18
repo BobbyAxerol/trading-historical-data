@@ -27,7 +27,7 @@ Hiện storage chính dùng **Parquet**. Sau phase cleanup, `storage/` không c�
 | Binance Daily Matrix | `1d` | Top/liquid USD-M perpetual symbols, policy chỉ thêm trong universe hợp lệ | Backfill từ `2020-01-01` | Hằng ngày `00:05 UTC` | `CryptoDailyMatrix`, `load_data("binance_daily_matrix", feature=...)` |
 | Binance Futures Metrics | `5m` | `BTCUSDT`, `ETHUSDT`, relation symbols, active BTC/ETH quarterlies | Binance Vision `daily/metrics`, scan full coverage | Định kỳ cuối ngày/REST tail perpetual | `BinanceFuturesMetrics5m`, `load_data("binance_futures_metrics_5m")` |
 | Binance Order Book Snapshot | `1h` | `BTCUSDT` perpetual + active BTCUSDT quarterlies | Rolling 30 ngày từ Vision `bookDepth` + REST current snapshot | Mỗi giờ | `BinanceOrderBookSnapshot1h`, `load_data("binance_orderbook_snapshot_1h")` |
-| Binance Options Snapshot | `5m` | Options Binance theo cấu hình hiện tại | Snapshot incremental | Mỗi 5 phút | `BinanceOptions5m`, `load_data("options_5m")` |
+| Binance Options Snapshot | `5m` | Options Binance theo cấu hình hiện tại | Snapshot incremental, append theo ngày | Mỗi 5 phút | `BinanceOptions5m`, `load_data("options_5m")` |
 | VN Equity Daily raw | `1d` | Universe VN curated khoảng 300 symbols | Provider VN daily, lưu partition theo symbol/year | Hằng ngày `16:30 Asia/Ho_Chi_Minh` | `VnStockDaily`, `load_data("vn_stock_daily")` |
 | VN Daily Matrix | `1d` | Các symbols có raw daily trong `storage/vn/equity/1d` | Build từ canonical raw Parquet | Chạy builder khi cần sau raw daily update | `VNDailyMatrix`, `load_data("vn_daily_matrix", feature=...)` |
 | VN Equity Intraday | `1m` | VN stock symbols trong config | Provider VN intraday | Hằng ngày `16:30 Asia/Ho_Chi_Minh` | `VnStock1m`, `load_data("vn_stock_1m")` |
@@ -60,7 +60,7 @@ storage/
 │   │   └── volume.parquet
 │   └── futures/1m/symbol=VN30F1M/year=YYYY/month=MM/part.parquet
 └── options/
-    └── binance/snapshot_5m/underlying=BTC/year=YYYY/month=MM/part.parquet
+    └── binance/snapshot_5m/underlying=BTC/year=YYYY/month=MM/day=DD/part.parquet
 ```
 
 Partitioned datasets lưu schema dài theo dòng. Matrix datasets lưu wide table: `index=time`, `columns=symbols`, value là từng feature.
@@ -84,6 +84,18 @@ Các loader OHLCV dài trả về DataFrame chuẩn:
 | `ingested_at` | `str`, optional | ISO UTC ingest timestamp |
 
 Crypto dùng naive UTC. VN dùng naive `Asia/Ho_Chi_Minh`.
+
+### Options Snapshot Format
+
+`BinanceOptions5m` dùng `snapshot_time` làm timestamp canonical, timezone-normalized thành naive UTC. `symbols` ở endpoint này là `underlying` (`BTC`, `ETH`, ...), còn cột `symbol` trong output là option contract cụ thể như `BTC-260925-100000-C`.
+
+Storage hiện tại là daily partition để append không phải rewrite cả tháng:
+
+```text
+storage/options/binance/snapshot_5m/underlying=BTC/year=YYYY/month=MM/day=DD/part.parquet
+```
+
+Loader vẫn đọc được monthly legacy `year=YYYY/month=MM/part.parquet` nếu còn tồn tại trong giai đoạn chuyển đổi, nhưng writer mới chỉ ghi vào daily partition.
 
 ### Matrix Format
 
@@ -278,6 +290,15 @@ from data_loader import BinanceFuturesMetrics5m
 metrics = BinanceFuturesMetrics5m().load(symbols=["BTCUSDT", "ETHUSDT"], check_val=True)
 open_interest = BinanceFuturesMetrics5m().load_open_interest(symbols="BTCUSDT")
 long_short = BinanceFuturesMetrics5m().load_long_short_ratios(symbols="BTCUSDT")
+
+# Binance options snapshot 5m. symbols là underlying, timestamp chính là snapshot_time.
+from data_loader import BinanceOptions5m
+
+btc_options = BinanceOptions5m().load(
+    symbols="BTC",
+    start_date="2026-07-01",
+    check_val=True,
+)
 ```
 
 ### Bind Mount From Another Project
