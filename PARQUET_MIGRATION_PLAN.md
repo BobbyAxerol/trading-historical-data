@@ -193,5 +193,44 @@ Kết quả cleanup đã chạy:
 - Confirm cleanup: `total=4431`, `deleted=4431`, `blocked=0`, `errors=0`, `deleted_bytes=1397226950`.
 - Post-check: `storage/**/part.csv.gz = 0`.
 - Post-check: `storage/**/part.parquet = 4472` tại thời điểm kiểm tra sau cleanup, vì services live tiếp tục ghi thêm Parquet.
-- `*.csv.gz` còn lại là matrix wide-format (`open.csv.gz`, `close.csv.gz`, ...), thuộc phase riêng và không bị xoá trong Phase 6.
+- `*.csv.gz` còn lại lúc đó là matrix wide-format (`open.csv.gz`, `close.csv.gz`, ...), thuộc phase riêng và không bị xoá trong Phase 6.
 - Smoke `data_loader` sau cleanup pass cho futures 1m, spot 1m, VN 1m, VN daily, futures metrics 5m, orderbook snapshot 1h.
+
+## Phase 7: Binance Daily Matrix Parquet
+
+Trạng thái: implemented.
+
+Scope phase này chỉ là wide-format Binance daily matrix:
+
+```text
+storage/crypto/binance_daily_matrix/open.parquet
+storage/crypto/binance_daily_matrix/high.parquet
+storage/crypto/binance_daily_matrix/low.parquet
+storage/crypto/binance_daily_matrix/close.parquet
+storage/crypto/binance_daily_matrix/volume.parquet
+```
+
+Quy ước:
+
+- Collector `binance_daily_matrix` đọc CSV fallback nếu chưa có Parquet, nhưng ghi Parquet.
+- `CryptoDailyMatrix` loader ưu tiên Parquet fresh, fallback CSV nếu Parquet chưa có hoặc cũ hơn CSV.
+- Public endpoint giữ nguyên: `load(feature)`, `load_features()`, `load_ohlcv()`, `load_ohlcv_frame()`.
+- CSV cleanup matrix chạy bằng tool riêng, không dùng cleanup `part.csv.gz` long-format.
+
+Tool:
+
+```bash
+python -m tools.migrate_binance_daily_matrix_parquet --dry-run
+python -m tools.migrate_binance_daily_matrix_parquet
+python -m tools.migrate_binance_daily_matrix_parquet --cleanup-csv --confirm
+```
+
+Guard:
+
+- So sánh shape.
+- So sánh column order.
+- So sánh DatetimeIndex.
+- So sánh giá trị numeric với `equal_nan=True`.
+- Chỉ xoá CSV nếu validation pass và Parquet không cũ hơn CSV.
+
+Report được ghi tại `state/binance_daily_matrix_parquet_migration_report.json`.

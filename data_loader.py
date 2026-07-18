@@ -429,7 +429,20 @@ class CryptoDailyMatrix:
     FEATURES = ("open", "high", "low", "close", "volume")
 
     def _get_path(self, feature: str) -> Path:
-        return STORAGE_DIR / "crypto" / "binance_daily_matrix" / f"{feature.lower()}.csv.gz"
+        matrix_dir = STORAGE_DIR / "crypto" / "binance_daily_matrix"
+        parquet_path = matrix_dir / f"{feature.lower()}.parquet"
+        csv_path = matrix_dir / f"{feature.lower()}.csv.gz"
+        if parquet_path.exists():
+            if not csv_path.exists() or parquet_path.stat().st_mtime >= csv_path.stat().st_mtime:
+                return parquet_path
+        if csv_path.exists():
+            return csv_path
+        return parquet_path
+
+    def _read_matrix(self, path: Path) -> pd.DataFrame:
+        if path.suffix == ".parquet":
+            return pd.read_parquet(path, engine="pyarrow")
+        return pd.read_csv(path, compression="gzip", index_col=0)
 
     def _normalize_ohlcv(self, df: pd.DataFrame) -> pd.DataFrame:
         return df
@@ -471,7 +484,7 @@ class CryptoDailyMatrix:
             logger.warning("Matrix file not found: %s", path)
             return pd.DataFrame()
 
-        df = pd.read_csv(path, compression="gzip", index_col=0)
+        df = self._read_matrix(path)
 
         # Normalize index to DatetimeIndex (naive UTC)
         df.index = pd.to_datetime(df.index)
