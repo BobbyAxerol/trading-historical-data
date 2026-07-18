@@ -16,6 +16,14 @@ class TempParquetLoader(MarketDataLoaderBase):
     TZ_INFO = "UTC"
 
 
+class TempOhlcvLoader(MarketDataLoaderBase):
+    DATASET_NAME = "crypto_1m"
+    NEW_PATH_PARTS = ("crypto", "test", "1m")
+    TZ_INFO = "UTC"
+    DEFAULT_COLUMNS = data_loader.OHLCV_COLUMNS
+    RESAMPLE_SUPPORTED = True
+
+
 class TestDataLoaderParquetFirst(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -97,6 +105,68 @@ class TestDataLoaderParquetFirst(unittest.TestCase):
 
         df = TempParquetLoader().load(symbols="BTCUSDT", check_val=False)
         self.assertEqual(df.loc[0, "close"], 4.0)
+
+
+class TestOhlcvProjectionAndResample(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.old_storage_dir = data_loader.STORAGE_DIR
+        data_loader.STORAGE_DIR = Path(self.tmp.name) / "storage"
+        self.part_dir = (
+            data_loader.STORAGE_DIR
+            / "crypto"
+            / "test"
+            / "1m"
+            / "symbol=BTCUSDT"
+            / "year=2026"
+            / "month=07"
+        )
+        self.part_dir.mkdir(parents=True, exist_ok=True)
+        times = pd.date_range("2026-07-01 00:00:00", periods=10, freq="min")
+        df = pd.DataFrame(
+            {
+                "time": times,
+                "symbol": ["BTCUSDT"] * len(times),
+                "open": [x + 10 for x in range(10)],
+                "high": [x + 10.5 for x in range(10)],
+                "low": [x + 9.5 for x in range(10)],
+                "close": [x + 10.25 for x in range(10)],
+                "volume": [1] * len(times),
+                "source": ["unit_test"] * len(times),
+                "ingested_at": ["2026-07-01T00:00:00Z"] * len(times),
+            }
+        )
+        df.to_parquet(self.part_dir / "part.parquet", index=False, engine="pyarrow", compression="zstd")
+
+    def tearDown(self):
+        data_loader.STORAGE_DIR = self.old_storage_dir
+        self.tmp.cleanup()
+
+    def test_ohlcv_loader_defaults_to_ohlcv_projection(self):
+        df = TempOhlcvLoader().load(symbols="BTCUSDT", check_val=True)
+        self.assertEqual(list(df.columns), list(data_loader.OHLCV_COLUMNS))
+        self.assertNotIn("source", df.columns)
+        self.assertNotIn("ingested_at", df.columns)
+
+    def test_full_and_custom_columns_are_opt_in(self):
+        full = TempOhlcvLoader().load(symbols="BTCUSDT", check_val=False, columns="full")
+        self.assertIn("source", full.columns)
+        self.assertIn("ingested_at", full.columns)
+
+        close_only = TempOhlcvLoader().load(symbols="BTCUSDT", check_val=False, columns=["time", "symbol", "close"])
+        self.assertEqual(list(close_only.columns), ["time", "symbol", "close"])
+
+    def test_duckdb_resample_matches_pandas_chunk_fallback(self):
+        duck = TempOhlcvLoader().load_resampled(symbols="BTCUSDT", timeframe="5min", check_val=True, engine="duckdb")
+        pandas_df = TempOhlcvLoader().load_resampled(symbols="BTCUSDT", timeframe="5min", check_val=True, engine="pandas")
+
+        pd.testing.assert_frame_equal(duck.reset_index(drop=True), pandas_df.reset_index(drop=True), check_dtype=False)
+        self.assertEqual(len(duck), 2)
+        self.assertEqual(float(duck.loc[0, "open"]), 10.0)
+        self.assertEqual(float(duck.loc[0, "high"]), 14.5)
+        self.assertEqual(float(duck.loc[0, "low"]), 9.5)
+        self.assertEqual(float(duck.loc[0, "close"]), 14.25)
+        self.assertEqual(float(duck.loc[0, "volume"]), 5.0)
 
 
 class TestCryptoDailyMatrixParquetFirst(unittest.TestCase):

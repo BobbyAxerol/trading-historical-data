@@ -190,12 +190,16 @@ Tham số chung:
 - `start_date`, `end_date`: inclusive datetime filter.
 - `limit`: giới hạn số dòng sau khi sort.
 - `check_val`: mặc định `True`; không tự tắt validation trong service downstream.
+- `columns`: với OHLCV loaders, mặc định chỉ đọc `time/symbol/open/high/low/close/volume` để giảm RAM. Truyền `columns="full"` nếu cần toàn bộ schema như `source`, `ingested_at`, `quote_volume`.
+- `timeframe`: khi gọi qua `load_data`, truyền `timeframe="5min"`/`"15min"`/`"1h"` để dùng endpoint resample-on-read.
 - `feature`: bắt buộc khi dùng router cho matrix datasets.
+
+Raw `1m` vẫn là canonical storage. Endpoint resample không tạo thêm timeframe file mặc định; nó query Parquet 1m bằng DuckDB, chỉ đọc OHLCV columns, aggregate trước rồi mới trả về Pandas. Nếu DuckDB không khả dụng, loader fallback sang Pandas chunk theo partition.
 
 ### Common Examples
 
 ```python
-from data_loader import CryptoDailyMatrix, VNDailyMatrix, load_data
+from data_loader import CryptoBinance1m, CryptoDailyMatrix, VNDailyMatrix, load_data
 
 # Binance daily close matrix
 daily_close = CryptoDailyMatrix().load(
@@ -232,6 +236,31 @@ spot = load_data(
     "binance_spot_1m",
     symbols="BTCUSDT",
     start_date="2018-01-01",
+    check_val=True,
+)
+
+# Binance futures 1m nhưng trả thẳng OHLCV 5m, không load full 1m vào RAM trước
+sol_5m = CryptoBinance1m().load_resampled(
+    symbols="SOLUSDT",
+    timeframe="5min",
+    start_date="2020-01-01",
+    check_val=True,
+)
+
+# Router tương đương
+sol_15m = load_data(
+    "crypto_1m",
+    symbols="SOLUSDT",
+    timeframe="15min",
+    start_date="2020-01-01",
+    check_val=True,
+)
+
+# Opt-in full schema nếu downstream thật sự cần metadata/source columns
+sol_full = CryptoBinance1m().load(
+    symbols="SOLUSDT",
+    start_date="2026-07-01",
+    columns="full",
     check_val=True,
 )
 
@@ -284,6 +313,7 @@ from data_loader import CryptoDailyMatrix, load_data
 ## Detailed Design Notes
 
 - [PARQUET_MIGRATION_PLAN.md](PARQUET_MIGRATION_PLAN.md): migration CSV.GZ -> Parquet và cleanup guard.
+- [MEMORY_OPTIMIZATION_PLAN.md](MEMORY_OPTIMIZATION_PLAN.md): loader projection, resample-on-read và Phase 2 giảm RAM collectors.
 - [BINANCE_DAILY_MATRIX_REPAIR_2026-06-16.md](BINANCE_DAILY_MATRIX_REPAIR_2026-06-16.md): repair/backfill Binance daily matrix.
 - [BINANCE_SPOT_1M.md](BINANCE_SPOT_1M.md): BTCUSDT spot 1m, gap policy và futures proxy fill.
 - [BINANCE_USDM_QUARTERLY_1M.md](BINANCE_USDM_QUARTERLY_1M.md): quarterly contracts.

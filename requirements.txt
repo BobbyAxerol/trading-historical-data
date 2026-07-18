@@ -5,7 +5,7 @@ python-binance==1.0.32
 vnstock==3.3.1
 PyYAML
 pyarrow>=15,<21
+duckdb>=1.1,<2
 websockets
 msgpack
 certifi
-

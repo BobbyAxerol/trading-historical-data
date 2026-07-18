@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import gc
 import logging
+import re
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 # Setup Logger
 logger = logging.getLogger("data_loader")
@@ -19,6 +23,50 @@ if not logger.handlers:
 # Base directories resolved relative to this module file location
 BASE_DIR = Path(__file__).parent.resolve()
 STORAGE_DIR = BASE_DIR / "storage"
+OHLCV_COLUMNS = ("time", "symbol", "open", "high", "low", "close", "volume")
+_TIMEFRAME_RE = re.compile(r"^(?P<count>\d+)\s*(?P<unit>s|sec|secs|second|seconds|min|minute|minutes|h|hour|hours|d|day|days)$")
+
+
+def _release_unused_memory() -> None:
+    """Best-effort release of Python and Arrow memory after large materializations."""
+    gc.collect()
+    try:
+        pa.default_memory_pool().release_unused()
+    except Exception:
+        pass
+
+
+def _ordered_unique(values: list[str] | tuple[str, ...]) -> list[str]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for value in values:
+        if value not in seen:
+            seen.add(value)
+            ordered.append(value)
+    return ordered
+
+
+def _resolve_columns_arg(columns: str | list[str] | tuple[str, ...] | None, default_columns: tuple[str, ...] | None) -> list[str] | None:
+    if columns == "full":
+        return None
+    if columns is None:
+        return list(default_columns) if default_columns else None
+    if isinstance(columns, str):
+        return [columns]
+    return _ordered_unique([str(col) for col in columns])
+
+
+def _file_columns(path: Path) -> list[str]:
+    if path.name.endswith(".parquet"):
+        return list(pq.ParquetFile(path).schema.names)
+    return list(pd.read_csv(path, compression="gzip", nrows=0).columns)
+
+
+def _existing_columns(path: Path, columns: list[str] | None) -> list[str] | None:
+    if columns is None:
+        return None
+    available = set(_file_columns(path))
+    return [col for col in columns if col in available]
 
 
 def _select_partition_file(partition_dir: Path) -> Path | None:
@@ -33,20 +81,21 @@ def _select_partition_file(partition_dir: Path) -> Path | None:
     return None
 
 
-def _read_partition_file(path: Path) -> pd.DataFrame:
+def _read_partition_file(path: Path, columns: list[str] | None = None) -> pd.DataFrame:
+    read_columns = _existing_columns(path, columns)
     if path.name.endswith(".parquet"):
-        return pd.read_parquet(path, engine="pyarrow")
-    return pd.read_csv(path, compression="gzip")
+        return pd.read_parquet(path, columns=read_columns, engine="pyarrow")
+    return pd.read_csv(path, compression="gzip", usecols=read_columns)
 
 
-def _read_partition_with_fallback(path: Path) -> pd.DataFrame:
+def _read_partition_with_fallback(path: Path, columns: list[str] | None = None) -> pd.DataFrame:
     try:
-        return _read_partition_file(path)
+        return _read_partition_file(path, columns=columns)
     except Exception:
         if path.name.endswith(".parquet"):
             csv_fallback = path.with_name("part.csv.gz")
             if csv_fallback.exists():
-                return pd.read_csv(csv_fallback, compression="gzip")
+                return _read_partition_file(csv_fallback, columns=columns)
         raise
 
 
@@ -106,6 +155,44 @@ def _get_new_symbol_files(
     return sorted(paths)
 
 
+def _normalize_timeframe(timeframe: str) -> tuple[str, timedelta]:
+    value = str(timeframe).strip().lower()
+    if value.endswith("t"):
+        value = f"{value[:-1]}min"
+    elif value.endswith("m") and not value.endswith("min"):
+        value = f"{value[:-1]}min"
+    match = _TIMEFRAME_RE.match(value)
+    if not match:
+        raise ValueError(f"Invalid timeframe: {timeframe}")
+    count = int(match.group("count"))
+    unit = match.group("unit")
+    if count <= 0:
+        raise ValueError(f"Invalid timeframe: {timeframe}")
+    if unit in {"s", "sec", "secs", "second", "seconds"}:
+        return f"{count}s", timedelta(seconds=count)
+    if unit in {"min", "minute", "minutes"}:
+        return f"{count}min", timedelta(minutes=count)
+    if unit in {"h", "hour", "hours"}:
+        return f"{count}h", timedelta(hours=count)
+    return f"{count}D", timedelta(days=count)
+
+
+def _duckdb_interval_literal(step: timedelta) -> str:
+    seconds = int(step.total_seconds())
+    if seconds % 86400 == 0:
+        return f"INTERVAL '{seconds // 86400} days'"
+    if seconds % 3600 == 0:
+        return f"INTERVAL '{seconds // 3600} hours'"
+    if seconds % 60 == 0:
+        return f"INTERVAL '{seconds // 60} minutes'"
+    return f"INTERVAL '{seconds} seconds'"
+
+
+def _duckdb_path_list(paths: list[Path]) -> str:
+    quoted = [f"'{str(path).replace(chr(39), chr(39) + chr(39))}'" for path in paths]
+    return "[" + ", ".join(quoted) + "]"
+
+
 class MarketDataLoaderBase:
     """Base reader class handling path routing, loading, normalization, and validation."""
 
@@ -113,6 +200,8 @@ class MarketDataLoaderBase:
     NEW_PATH_PARTS: tuple[str, ...] = ()
     IS_OPTION: bool = False
     TZ_INFO: str = "UTC"  # Either "Asia/Ho_Chi_Minh" (naive) or "UTC" (naive)
+    DEFAULT_COLUMNS: tuple[str, ...] | None = None
+    RESAMPLE_SUPPORTED: bool = False
 
     def _get_new_path(self) -> Path:
         return STORAGE_DIR.joinpath(*self.NEW_PATH_PARTS)
@@ -165,6 +254,7 @@ class MarketDataLoaderBase:
         end_date: str | None = None,
         limit: int | None = None,
         check_val: bool = True,
+        columns: str | list[str] | tuple[str, ...] | None = None,
     ) -> pd.DataFrame:
         """
         Load, normalize, and validate dataset.
@@ -181,6 +271,10 @@ class MarketDataLoaderBase:
             Limit row count of resulting DataFrame.
         check_val : bool, default True
             If True, run logical data validation and log warnings for anomalies.
+        columns : {"full"}, list of str, str, or None
+            Columns to read. None uses the loader default projection. For OHLCV
+            loaders this is time/symbol/open/high/low/close/volume. Pass
+            "full" to read every stored column.
 
         Returns
         -------
@@ -189,6 +283,8 @@ class MarketDataLoaderBase:
         """
         start_ts = pd.to_datetime(start_date) if start_date else None
         end_ts = pd.to_datetime(end_date) if end_date else None
+
+        read_columns = _resolve_columns_arg(columns, self.DEFAULT_COLUMNS)
 
         # Resolve symbol list
         if symbols is not None:
@@ -214,7 +310,7 @@ class MarketDataLoaderBase:
                     sym_dfs = []
                     for f in files:
                         try:
-                            sym_dfs.append(_read_partition_with_fallback(f))
+                            sym_dfs.append(_read_partition_with_fallback(f, columns=read_columns))
                         except Exception as exc:
                             logger.error("Failed to read partition %s: %s", f, exc)
                     if sym_dfs:
@@ -246,7 +342,228 @@ class MarketDataLoaderBase:
         if limit is not None:
             combined_df = combined_df.head(limit)
 
+        _release_unused_memory()
         return combined_df
+
+    def _resolve_symbol_list(self, symbols: str | list[str] | None) -> list[str]:
+        if symbols is not None:
+            symbol_list = [symbols] if isinstance(symbols, str) else list(symbols)
+            return [s.strip().upper() for s in symbol_list]
+        return self._discover_symbols()
+
+    def _resampled_files(self, symbols: str | list[str] | None, start_ts: pd.Timestamp | None, end_ts: pd.Timestamp | None) -> tuple[list[str], dict[str, list[Path]]]:
+        symbol_list = self._resolve_symbol_list(symbols)
+        new_path = self._get_new_path()
+        files_by_symbol: dict[str, list[Path]] = {}
+        if not new_path.exists():
+            return symbol_list, files_by_symbol
+        for sym in symbol_list:
+            files = _get_new_symbol_files(new_path, self.IS_OPTION, sym, start_ts, end_ts)
+            if files:
+                files_by_symbol[sym] = files
+        return symbol_list, files_by_symbol
+
+    def _load_resampled_duckdb(
+        self,
+        *,
+        symbols: str | list[str] | None,
+        timeframe: str,
+        start_ts: pd.Timestamp | None,
+        end_ts: pd.Timestamp | None,
+        limit: int | None,
+    ) -> pd.DataFrame:
+        import duckdb
+
+        _, step = _normalize_timeframe(timeframe)
+        _, files_by_symbol = self._resampled_files(symbols, start_ts, end_ts)
+        all_paths = [path for files in files_by_symbol.values() for path in files]
+        if not all_paths:
+            return pd.DataFrame(columns=list(OHLCV_COLUMNS))
+        if any(not path.name.endswith(".parquet") for path in all_paths):
+            raise RuntimeError("DuckDB resample requires Parquet partitions; use pandas fallback for legacy CSV partitions.")
+        paths = all_paths
+
+        interval = _duckdb_interval_literal(step)
+        path_list = _duckdb_path_list(paths)
+        where = ["time IS NOT NULL"]
+        params: list[Any] = []
+        if start_ts is not None:
+            where.append("time >= ?")
+            params.append(start_ts.to_pydatetime())
+        if end_ts is not None:
+            where.append("time <= ?")
+            params.append(end_ts.to_pydatetime())
+        where_sql = " AND ".join(where)
+        limit_sql = f" LIMIT {int(limit)}" if limit is not None else ""
+        query = f"""
+            WITH src AS (
+                SELECT
+                    CAST(time AS TIMESTAMP) AS time,
+                    upper(CAST(symbol AS VARCHAR)) AS symbol,
+                    CAST(open AS DOUBLE) AS open,
+                    CAST(high AS DOUBLE) AS high,
+                    CAST(low AS DOUBLE) AS low,
+                    CAST(close AS DOUBLE) AS close,
+                    CAST(volume AS DOUBLE) AS volume
+                FROM read_parquet({path_list})
+            ),
+            filtered AS (
+                SELECT * FROM src WHERE {where_sql}
+            )
+            SELECT
+                time_bucket({interval}, time) AS time,
+                symbol,
+                arg_min(open, time) AS open,
+                max(high) AS high,
+                min(low) AS low,
+                arg_max(close, time) AS close,
+                sum(volume) AS volume
+            FROM filtered
+            GROUP BY symbol, time_bucket({interval}, time)
+            HAVING open IS NOT NULL AND high IS NOT NULL AND low IS NOT NULL AND close IS NOT NULL
+            ORDER BY symbol, time
+            {limit_sql}
+        """
+        con = duckdb.connect(database=":memory:")
+        try:
+            try:
+                con.execute("SET memory_limit='1024MB'")
+            except Exception:
+                pass
+            return con.execute(query, params).fetchdf()
+        finally:
+            con.close()
+
+    def _load_resampled_pandas(
+        self,
+        *,
+        symbols: str | list[str] | None,
+        timeframe: str,
+        start_ts: pd.Timestamp | None,
+        end_ts: pd.Timestamp | None,
+        limit: int | None,
+    ) -> pd.DataFrame:
+        pandas_rule, _ = _normalize_timeframe(timeframe)
+        _, files_by_symbol = self._resampled_files(symbols, start_ts, end_ts)
+        pieces: list[pd.DataFrame] = []
+        read_columns = list(OHLCV_COLUMNS)
+
+        for sym, files in files_by_symbol.items():
+            symbol_pieces: list[pd.DataFrame] = []
+            for path in files:
+                try:
+                    chunk = _read_partition_with_fallback(path, columns=read_columns)
+                except Exception as exc:
+                    logger.error("Failed to read partition %s for resample: %s", path, exc)
+                    continue
+                if chunk.empty or "time" not in chunk.columns:
+                    continue
+                if "symbol" not in chunk.columns:
+                    chunk["symbol"] = sym
+                chunk["time"] = pd.to_datetime(chunk["time"], errors="coerce")
+                chunk = chunk.dropna(subset=["time"])
+                if start_ts is not None:
+                    chunk = chunk[chunk["time"] >= start_ts]
+                if end_ts is not None:
+                    chunk = chunk[chunk["time"] <= end_ts]
+                if chunk.empty:
+                    continue
+                for col in ["open", "high", "low", "close", "volume"]:
+                    chunk[col] = pd.to_numeric(chunk[col], errors="coerce")
+                chunk = chunk.dropna(subset=["open", "high", "low", "close"])
+                if chunk.empty:
+                    continue
+                chunk = chunk.sort_values("time").set_index("time")
+                resampled = chunk.resample(pandas_rule).agg(
+                    {
+                        "open": "first",
+                        "high": "max",
+                        "low": "min",
+                        "close": "last",
+                        "volume": "sum",
+                    }
+                )
+                resampled = resampled.dropna(subset=["open", "high", "low", "close"]).reset_index()
+                resampled["symbol"] = sym
+                symbol_pieces.append(resampled[["time", "symbol", "open", "high", "low", "close", "volume"]])
+                del chunk, resampled
+                _release_unused_memory()
+
+            if symbol_pieces:
+                symbol_df = pd.concat(symbol_pieces, ignore_index=True)
+                symbol_df = (
+                    symbol_df.sort_values(["symbol", "time"])
+                    .groupby(["symbol", "time"], as_index=False, sort=True)
+                    .agg({"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"})
+                )
+                pieces.append(symbol_df[["time", "symbol", "open", "high", "low", "close", "volume"]])
+                del symbol_df, symbol_pieces
+                _release_unused_memory()
+
+        if not pieces:
+            return pd.DataFrame(columns=list(OHLCV_COLUMNS))
+
+        result = pd.concat(pieces, ignore_index=True)
+        result = result.sort_values(["symbol", "time"]).reset_index(drop=True)
+        if limit is not None:
+            result = result.head(limit)
+        return result
+
+    def load_resampled(
+        self,
+        symbols: str | list[str] | None = None,
+        timeframe: str = "5min",
+        start_date: str | None = None,
+        end_date: str | None = None,
+        limit: int | None = None,
+        check_val: bool = True,
+        engine: str = "duckdb",
+    ) -> pd.DataFrame:
+        """Load OHLCV resampled from canonical 1m Parquet without materializing full 1m history first."""
+        if not self.RESAMPLE_SUPPORTED or self.DEFAULT_COLUMNS != OHLCV_COLUMNS:
+            raise NotImplementedError(f"load_resampled is only supported for OHLCV loaders, got {self.DATASET_NAME}")
+
+        start_ts = pd.to_datetime(start_date) if start_date else None
+        end_ts = pd.to_datetime(end_date) if end_date else None
+
+        if engine == "duckdb":
+            try:
+                result = self._load_resampled_duckdb(
+                    symbols=symbols,
+                    timeframe=timeframe,
+                    start_ts=start_ts,
+                    end_ts=end_ts,
+                    limit=limit,
+                )
+            except Exception as exc:
+                logger.warning("DuckDB resample failed for %s; falling back to pandas chunks: %s", self.DATASET_NAME, exc)
+                result = self._load_resampled_pandas(
+                    symbols=symbols,
+                    timeframe=timeframe,
+                    start_ts=start_ts,
+                    end_ts=end_ts,
+                    limit=limit,
+                )
+        elif engine == "pandas":
+            result = self._load_resampled_pandas(
+                symbols=symbols,
+                timeframe=timeframe,
+                start_ts=start_ts,
+                end_ts=end_ts,
+                limit=limit,
+            )
+        else:
+            raise ValueError(f"Unsupported resample engine: {engine}")
+
+        result = self._normalize(result)
+        result = result.dropna(subset=["open", "high", "low", "close"])
+        result = result[["time", "symbol", "open", "high", "low", "close", "volume"]]
+        if check_val:
+            report = validate_data(result, "resampled_ohlcv")
+            if not report["valid"]:
+                logger.warning("Validation warnings for resampled dataset %s: %s", self.DATASET_NAME, report["errors"])
+        _release_unused_memory()
+        return result
 
 
 # =====================================================================
@@ -260,6 +577,8 @@ class VnStock1m(MarketDataLoaderBase):
     DATASET_NAME = "vn_stock_1m"
     NEW_PATH_PARTS = ("vn", "equity", "1m")
     TZ_INFO = "Asia/Ho_Chi_Minh"
+    DEFAULT_COLUMNS = OHLCV_COLUMNS
+    RESAMPLE_SUPPORTED = True
 
 
 class VnStockDaily(MarketDataLoaderBase):
@@ -268,6 +587,7 @@ class VnStockDaily(MarketDataLoaderBase):
     DATASET_NAME = "vn_stock_daily"
     NEW_PATH_PARTS = ("vn", "equity", "1d")
     TZ_INFO = "Asia/Ho_Chi_Minh"
+    DEFAULT_COLUMNS = OHLCV_COLUMNS
 
 
 class VnFutures1m(MarketDataLoaderBase):
@@ -276,6 +596,8 @@ class VnFutures1m(MarketDataLoaderBase):
     DATASET_NAME = "vn_futures_1m"
     NEW_PATH_PARTS = ("vn", "futures", "1m")
     TZ_INFO = "Asia/Ho_Chi_Minh"
+    DEFAULT_COLUMNS = OHLCV_COLUMNS
+    RESAMPLE_SUPPORTED = True
 
 
 class CryptoBinance1m(MarketDataLoaderBase):
@@ -284,6 +606,8 @@ class CryptoBinance1m(MarketDataLoaderBase):
     DATASET_NAME = "crypto_1m"
     NEW_PATH_PARTS = ("crypto", "binance_futures", "1m")
     TZ_INFO = "UTC"
+    DEFAULT_COLUMNS = OHLCV_COLUMNS
+    RESAMPLE_SUPPORTED = True
 
 
 class CryptoBinanceQuarterly1m(CryptoBinance1m):
@@ -298,6 +622,8 @@ class CryptoBinanceSpot1m(MarketDataLoaderBase):
     DATASET_NAME = "crypto_binance_spot_1m"
     NEW_PATH_PARTS = ("crypto", "binance_spot", "1m")
     TZ_INFO = "UTC"
+    DEFAULT_COLUMNS = OHLCV_COLUMNS
+    RESAMPLE_SUPPORTED = True
 
     def _normalize(self, df: pd.DataFrame) -> pd.DataFrame:
         result = df.copy()
@@ -394,7 +720,7 @@ class BinanceFuturesMetrics5m(MarketDataLoaderBase):
         check_val: bool = True,
     ) -> pd.DataFrame:
         cols = ["time", "market", "symbol", "contract_type", "sum_open_interest", "sum_open_interest_value", "source", "ingested_at"]
-        df = self.load(symbols=symbols, start_date=start_date, end_date=end_date, limit=limit, check_val=check_val)
+        df = self.load(symbols=symbols, start_date=start_date, end_date=end_date, limit=limit, check_val=check_val, columns=cols)
         return df[[col for col in cols if col in df.columns]] if not df.empty else df
 
     def load_long_short_ratios(
@@ -417,7 +743,7 @@ class BinanceFuturesMetrics5m(MarketDataLoaderBase):
             "source",
             "ingested_at",
         ]
-        df = self.load(symbols=symbols, start_date=start_date, end_date=end_date, limit=limit, check_val=check_val)
+        df = self.load(symbols=symbols, start_date=start_date, end_date=end_date, limit=limit, check_val=check_val, columns=cols)
         return df[[col for col in cols if col in df.columns]] if not df.empty else df
 
 
@@ -942,27 +1268,43 @@ def load_data(
     limit: int | None = None,
     feature: str | None = None,
     check_val: bool = True,
+    columns: str | list[str] | tuple[str, ...] | None = None,
+    timeframe: str | None = None,
+    engine: str = "duckdb",
 ) -> pd.DataFrame:
     """Master routing wrapper to invoke the correct reader subclass."""
     dataset_lower = dataset.lower()
+    if timeframe is not None:
+        if dataset_lower in ("vn_stock_1m", "vn_equity_1m"):
+            return VnStock1m().load_resampled(symbols, timeframe, start_date, end_date, limit, check_val, engine)
+        elif dataset_lower in ("vn_futures_1m",):
+            return VnFutures1m().load_resampled(symbols, timeframe, start_date, end_date, limit, check_val, engine)
+        elif dataset_lower in ("crypto_1m",):
+            return CryptoBinance1m().load_resampled(symbols, timeframe, start_date, end_date, limit, check_val, engine)
+        elif dataset_lower in ("crypto_binance_quarterly_1m", "binance_usdm_quarterly_1m"):
+            return CryptoBinanceQuarterly1m().load_resampled(symbols, timeframe, start_date, end_date, limit, check_val, engine)
+        elif dataset_lower in ("crypto_binance_spot_1m", "binance_spot_1m", "crypto_spot_1m"):
+            return CryptoBinanceSpot1m().load_resampled(symbols, timeframe, start_date, end_date, limit, check_val, engine)
+        raise ValueError(f"timeframe resampling is not supported for dataset: {dataset}")
+
     if dataset_lower in ("vn_stock_1m", "vn_equity_1m"):
-        return VnStock1m().load(symbols, start_date, end_date, limit, check_val)
+        return VnStock1m().load(symbols, start_date, end_date, limit, check_val, columns=columns)
     elif dataset_lower in ("vn_stock_daily", "vn_equity_1d", "vn_stock_1d"):
-        return VnStockDaily().load(symbols, start_date, end_date, limit, check_val)
+        return VnStockDaily().load(symbols, start_date, end_date, limit, check_val, columns=columns)
     elif dataset_lower in ("vn_futures_1m",):
-        return VnFutures1m().load(symbols, start_date, end_date, limit, check_val)
+        return VnFutures1m().load(symbols, start_date, end_date, limit, check_val, columns=columns)
     elif dataset_lower in ("crypto_1m",):
-        return CryptoBinance1m().load(symbols, start_date, end_date, limit, check_val)
+        return CryptoBinance1m().load(symbols, start_date, end_date, limit, check_val, columns=columns)
     elif dataset_lower in ("crypto_binance_quarterly_1m", "binance_usdm_quarterly_1m"):
-        return CryptoBinanceQuarterly1m().load(symbols, start_date, end_date, limit, check_val)
+        return CryptoBinanceQuarterly1m().load(symbols, start_date, end_date, limit, check_val, columns=columns)
     elif dataset_lower in ("crypto_binance_spot_1m", "binance_spot_1m", "crypto_spot_1m"):
-        return CryptoBinanceSpot1m().load(symbols, start_date, end_date, limit, check_val)
+        return CryptoBinanceSpot1m().load(symbols, start_date, end_date, limit, check_val, columns=columns)
     elif dataset_lower in ("crypto_binance_orderbook_snapshot_1h", "binance_orderbook_snapshot_1h", "orderbook_snapshot_1h"):
-        return BinanceOrderBookSnapshot1h().load(symbols, start_date, end_date, limit, check_val)
+        return BinanceOrderBookSnapshot1h().load(symbols, start_date, end_date, limit, check_val, columns=columns)
     elif dataset_lower in ("crypto_binance_futures_metrics_5m", "binance_futures_metrics_5m", "futures_metrics_5m"):
-        return BinanceFuturesMetrics5m().load(symbols, start_date, end_date, limit, check_val)
+        return BinanceFuturesMetrics5m().load(symbols, start_date, end_date, limit, check_val, columns=columns)
     elif dataset_lower in ("options_5m",):
-        return BinanceOptions5m().load(symbols, start_date, end_date, limit, check_val)
+        return BinanceOptions5m().load(symbols, start_date, end_date, limit, check_val, columns=columns)
     elif dataset_lower in ("binance_daily_matrix",):
         if not feature:
             raise ValueError("Parameter 'feature' is required for binance_daily_matrix.")
