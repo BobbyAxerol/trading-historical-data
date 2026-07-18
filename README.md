@@ -52,31 +52,31 @@ storage/
 │   │   ├── 1d/
 │   │   │   └── symbol=FPT/
 │   │   │       └── year=2026/
-│   │   │           └── part.csv.gz
+│   │   │           └── part.parquet
 │   │   ├── daily_matrix/
-│   │   │   ├── open.csv.gz
-│   │   │   ├── high.csv.gz
-│   │   │   ├── low.csv.gz
-│   │   │   ├── close.csv.gz
-│   │   │   └── volume.csv.gz
+│   │   │   ├── open.parquet
+│   │   │   ├── high.parquet
+│   │   │   ├── low.parquet
+│   │   │   ├── close.parquet
+│   │   │   └── volume.parquet
 │   │   └── 1m/
 │   │       └── symbol=FPT/
 │   │           └── year=2026/
 │   │               └── month=06/
-│   │                   └── part.csv.gz
+│   │                   └── part.parquet
 │   └── futures/
 │       └── 1m/
 │           └── symbol=VN30F1M/
 │               └── year=2026/
 │                   └── month=06/
-│                       └── part.csv.gz
+│                       └── part.parquet
 └── options/
     └── binance/
         └── snapshot_5m/
             └── underlying=BTC/
                 └── year=2026/
                     └── month=06/
-                        └── part.csv.gz
+                        └── part.parquet
 ```
 
 ### 1.2 Quy chuẩn Schema & Kiểu dữ liệu (VN Stocks & Futures 1m)
@@ -118,7 +118,7 @@ Danh sách symbol được theo dõi lưu trong tệp trạng thái `state/binan
 Concrete USD-M quarterly contracts như `BTCUSDT_240329` và `ETHUSDT_260925` được lưu chung schema/path với Binance futures 1m:
 
 ```text
-storage/crypto/binance_futures/1m/symbol=BTCUSDT_240329/year=2024/month=03/part.csv.gz
+storage/crypto/binance_futures/1m/symbol=BTCUSDT_240329/year=2024/month=03/part.parquet
 ```
 
 Collector [`collectors/binance_usdm_quarterly_1m.py`](collectors/binance_usdm_quarterly_1m.py) tự discover active `CURRENT_QUARTER`/`NEXT_QUARTER` từ Binance `/fapi/v1/exchangeInfo`, discover historical concrete contracts từ Binance Vision S3, rồi đồng bộ theo thứ tự: monthly ZIP -> daily ZIP -> REST active tail. `_get_data` chỉ lưu raw contract-level data, không tự build continuous contract. Chi tiết vận hành nằm tại [`BINANCE_USDM_QUARTERLY_1M.md`](BINANCE_USDM_QUARTERLY_1M.md).
@@ -128,7 +128,7 @@ Collector [`collectors/binance_usdm_quarterly_1m.py`](collectors/binance_usdm_qu
 Binance Spot 1m hiện được cấu hình mặc định cho `BTCUSDT` từ `2018-01-01`:
 
 ```text
-storage/crypto/binance_spot/1m/symbol=BTCUSDT/year=YYYY/month=MM/part.csv.gz
+storage/crypto/binance_spot/1m/symbol=BTCUSDT/year=YYYY/month=MM/part.parquet
 ```
 
 Collector [`collectors/binance_spot_1m.py`](collectors/binance_spot_1m.py) sync theo thứ tự: Binance Vision spot monthly ZIP -> Vision spot daily ZIP đoạn gần hiện tại -> Binance Spot REST `/api/v3/klines` để bù tail tới candle đã đóng mới nhất. Append luôn dedupe theo `symbol,time`, đọc tail storage để resume, và audit continuity 1 phút khi validation chạy.
@@ -140,7 +140,7 @@ Với BTCUSDT spot, một số gap lịch sử official spot không có kline/tr
 Order book snapshot 1h hiện được cấu hình cho `BTCUSDT` perpetual và active BTCUSDT quarterly contracts:
 
 ```text
-storage/crypto/binance_orderbook_snapshot/1h/symbol=BTCUSDT/year=YYYY/month=MM/part.csv.gz
+storage/crypto/binance_orderbook_snapshot/1h/symbol=BTCUSDT/year=YYYY/month=MM/part.parquet
 ```
 
 Collector [`collectors/binance_orderbook_snapshot_1h.py`](collectors/binance_orderbook_snapshot_1h.py) seed rolling `30 days` từ Binance Vision USD-M `daily/bookDepth`, downsample về bucket 1h, rồi gọi REST `/fapi/v1/depth` với `depth_limit=20` để append giờ hiện tại. Service live tự quét lại rolling window và tự bù các ngày Vision publish trễ; không cần chạy tay lại nếu container vẫn chạy và không bật `--no-vision`. Feature chính gồm `bid_depth_1pct`, `ask_depth_1pct`, `q_bid_depth_1pct`, `q_ask_depth_1pct`; trong đó `q_` nghĩa là quote-notional depth, không phải quarterly. Quarterly được xác định bằng `symbol`/`contract_type`. Các band đang bật là `0.2%`, `1%`, `2%`, `5%`, với `1%` là primary band. Chi tiết vận hành nằm tại [`BINANCE_ORDERBOOK_SNAPSHOT_1H.md`](BINANCE_ORDERBOOK_SNAPSHOT_1H.md).
@@ -150,14 +150,14 @@ Collector [`collectors/binance_orderbook_snapshot_1h.py`](collectors/binance_ord
 Binance Futures Metrics 5m lưu open interest và long/short ratios từ cùng một file Binance Vision `daily/metrics`:
 
 ```text
-storage/crypto/binance_futures_metrics/5m/symbol=BTCUSDT/year=YYYY/month=MM/part.csv.gz
+storage/crypto/binance_futures_metrics/5m/symbol=BTCUSDT/year=YYYY/month=MM/part.parquet
 ```
 
 Collector [`collectors/binance_futures_metrics_5m.py`](collectors/binance_futures_metrics_5m.py) chuẩn hoá dữ liệu legacy BTC/ETH nếu có, discover earliest/latest keys có thật trên Binance Vision `data/futures/um/daily/metrics/{SYMBOL}/`, rồi repair coverage toàn range cho `BTCUSDT`, `ETHUSDT`, nhóm relation symbols (`LINKUSDT`, `ARBUSDT`, `OPUSDT`, `POLUSDT`, `AAVEUSDT`) và active BTC/ETH quarterly contracts. Một canonical dataset chứa cả `sum_open_interest`, `sum_open_interest_value`, `count_toptrader_long_short_ratio`, `sum_toptrader_long_short_ratio`, `count_long_short_ratio`, `sum_taker_long_short_vol_ratio`; downstream có thể gọi helper loader để lấy riêng OI hoặc ratios. Perpetual symbols có thêm REST tail vài ngày cuối nếu Vision publish trễ. Chi tiết vận hành nằm tại [`BINANCE_FUTURES_METRICS_5M.md`](BINANCE_FUTURES_METRICS_5M.md).
 
 ### 1.4 Cấu trúc Ma trận Dữ liệu Ngày VN (VN Daily Matrix)
 
-VN Daily Matrix được build từ canonical storage `storage/vn/equity/1d/` sang `storage/vn/equity/daily_matrix/`, gồm 5 ma trận `open/high/low/close/volume` cùng schema pivot: index là ngày giao dịch, columns là mã cổ phiếu.
+VN Daily Matrix được build từ canonical storage `storage/vn/equity/1d/` sang `storage/vn/equity/daily_matrix/`, gồm 5 ma trận Parquet `open/high/low/close/volume` cùng schema pivot: index là ngày giao dịch, columns là mã cổ phiếu. Loader `VNDailyMatrix` ưu tiên Parquet và chỉ fallback CSV nếu file CSV cũ còn tồn tại trong giai đoạn chuyển đổi.
 
 Universe nằm tại `configs/symbols.vn_daily.yml`, hiện là curated large/liquid seed từ legacy HOSE/VN30/VN100/VN200-style universe. Thứ tự cột ưu tiên nhóm VN30/large-cap ở đầu. Matrix builder không tạo cột rỗng: mã nào vendor/storage chưa có dữ liệu sẽ được ghi vào `state/vn_daily_matrix_symbols.json` trong `missing_symbols`.
 
@@ -238,7 +238,7 @@ PYTHONPATH=. python -m collectors.binance_futures_metrics_5m --mode once
 
 ### 4.4 Audit continuity & repair crypto gaps
 
-Với crypto 1m, audit phải nối toàn bộ partition của từng symbol rồi mới kiểm tra gap. Không được chỉ kiểm tra từng `part.csv.gz` riêng lẻ vì sẽ bỏ sót gap giữa các partition.
+Với crypto 1m, audit phải nối toàn bộ partition của từng symbol rồi mới kiểm tra gap. Không được chỉ kiểm tra từng `part.parquet` riêng lẻ vì sẽ bỏ sót gap giữa các partition.
 
 ```bash
 # Quét toàn bộ symbols crypto trong storage

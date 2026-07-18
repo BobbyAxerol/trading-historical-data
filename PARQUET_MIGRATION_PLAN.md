@@ -122,7 +122,7 @@ Quy ước triển khai:
 - `PartitionedParquetStore` vẫn đọc `part.csv.gz` cũ nếu partition đó chưa có Parquet, rồi merge/dedupe và ghi Parquet mới.
 - Các audit/repair nội bộ dùng helper đọc/ghi partition chung để đọc được cả Parquet và CSV fallback.
 - Không dual-write CSV trong Phase 4.
-- Matrix wide-format (`open.csv.gz`, `close.csv.gz`, ...) vẫn để phase riêng.
+- Matrix wide-format (`open/high/low/close/volume`) được xử lý riêng ở Phase 7/8.
 
 ## Phase 5: Validation
 
@@ -193,7 +193,7 @@ Kết quả cleanup đã chạy:
 - Confirm cleanup: `total=4431`, `deleted=4431`, `blocked=0`, `errors=0`, `deleted_bytes=1397226950`.
 - Post-check: `storage/**/part.csv.gz = 0`.
 - Post-check: `storage/**/part.parquet = 4472` tại thời điểm kiểm tra sau cleanup, vì services live tiếp tục ghi thêm Parquet.
-- `*.csv.gz` còn lại lúc đó là matrix wide-format (`open.csv.gz`, `close.csv.gz`, ...), thuộc phase riêng và không bị xoá trong Phase 6.
+- `*.csv.gz` còn lại lúc đó là matrix wide-format (`open/high/low/close/volume`), sau đó đã được xử lý ở Phase 7/8.
 - Smoke `data_loader` sau cleanup pass cho futures 1m, spot 1m, VN 1m, VN daily, futures metrics 5m, orderbook snapshot 1h.
 
 ## Phase 7: Binance Daily Matrix Parquet
@@ -234,3 +234,36 @@ Guard:
 - Chỉ xoá CSV nếu validation pass và Parquet không cũ hơn CSV.
 
 Report được ghi tại `state/binance_daily_matrix_parquet_migration_report.json`.
+
+## Phase 8: VN Daily Matrix Parquet And Final CSV Cleanup
+
+Trạng thái: implemented.
+
+Scope phase này là wide-format VN daily matrix:
+
+```text
+storage/vn/equity/daily_matrix/open.parquet
+storage/vn/equity/daily_matrix/high.parquet
+storage/vn/equity/daily_matrix/low.parquet
+storage/vn/equity/daily_matrix/close.parquet
+storage/vn/equity/daily_matrix/volume.parquet
+```
+
+Quy ước:
+
+- Collector `vn_daily_matrix` đọc canonical raw `storage/vn/equity/1d/**/part.parquet` trước, fallback `part.csv.gz` nếu còn legacy.
+- Collector ghi matrix Parquet trực tiếp.
+- `VNDailyMatrix` loader ưu tiên Parquet fresh, fallback CSV nếu Parquet chưa có hoặc cũ hơn CSV.
+- Public endpoint giữ nguyên: `load(feature)`, `load_features()`, `load_ohlcv()`, `load_ohlcv_frame()`.
+
+Cleanup CSV cuối:
+
+```bash
+python -m tools.migrate_binance_daily_matrix_parquet --dataset vn_daily_matrix --dry-run
+python -m tools.migrate_binance_daily_matrix_parquet --dataset vn_daily_matrix
+python -m tools.migrate_binance_daily_matrix_parquet --dataset vn_daily_matrix --cleanup-csv --confirm
+```
+
+Guard giống Phase 7: shape, column order, DatetimeIndex và numeric values phải khớp; chỉ xoá CSV nếu validation pass và Parquet không cũ hơn CSV.
+
+Report được ghi tại `state/vn_daily_matrix_parquet_migration_report.json`.
