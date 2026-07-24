@@ -29,6 +29,8 @@ class DownloaderOptions:
     run_id: str | None = None
     discover_first: bool = False
     allow_unprobed: bool = False
+    require_pilot_pass: bool = False
+    allow_blocked_pilot: bool = False
 
 
 @dataclass
@@ -94,6 +96,22 @@ class DeribitTradeDownloader:
                     "reason": "api_probe_report.json is missing or production_backfill_allowed=false",
                     "probe_report_path": str(self._probe_report_path()),
                 }
+            pilot_block = self._pilot_block_reason()
+            if pilot_block is not None:
+                if not self.options.allow_blocked_pilot:
+                    return {
+                        "status": "blocked",
+                        "phase": "Phase 3",
+                        "reason": pilot_block,
+                        "pilot_summary_path": str(self._pilot_summary_path()),
+                    }
+                if self.options.max_tasks > 20 or not self.options.symbols:
+                    return {
+                        "status": "blocked",
+                        "phase": "Phase 3",
+                        "reason": "blocked pilot override is limited to explicit symbols and max_tasks<=20",
+                        "pilot_summary_path": str(self._pilot_summary_path()),
+                    }
 
         if self.options.discover_first or not self.store.instrument_states():
             discovery = DeribitInstrumentDiscovery(self.config).run()
@@ -247,6 +265,23 @@ class DeribitTradeDownloader:
 
     def _probe_report_path(self) -> Path:
         return state_root() / "deribit_options" / f"version={self.config.version}" / "api_probe_report.json"
+
+    def _pilot_block_reason(self) -> str | None:
+        if not self.options.require_pilot_pass:
+            return None
+        path = self._pilot_summary_path()
+        if not path.exists():
+            return "pilot_summary.json is missing; run Phase 5 pilot before broad backfill"
+        try:
+            payload = json.loads(path.read_text())
+        except json.JSONDecodeError:
+            return "pilot_summary.json is malformed; rerun Phase 5 pilot"
+        if payload.get("status") != "ok":
+            return "pilot_summary.json status is not ok; Phase 6 full historical backfill remains blocked"
+        return None
+
+    def _pilot_summary_path(self) -> Path:
+        return state_root() / "deribit_options" / f"version={self.config.version}" / "pilot_summary.json"
 
 
 def _run_id() -> str:

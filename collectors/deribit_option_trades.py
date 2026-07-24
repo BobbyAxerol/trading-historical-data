@@ -56,6 +56,7 @@ def build_parser() -> argparse.ArgumentParser:
         ingest_parser.add_argument("--run-id", default=None)
         ingest_parser.add_argument("--discover-first", action="store_true")
         ingest_parser.add_argument("--allow-unprobed", action="store_true")
+        ingest_parser.add_argument("--allow-blocked-pilot", action="store_true")
 
     compact_parser = subparsers.add_parser("compact", help="Compact Deribit staging trades into canonical daily Parquet.")
     _add_common_args(compact_parser)
@@ -149,6 +150,8 @@ def _run_downloader(args: argparse.Namespace) -> dict[str, Any]:
         run_id=args.run_id,
         discover_first=bool(args.discover_first) or str(args.command) == "sync-once",
         allow_unprobed=bool(args.allow_unprobed),
+        require_pilot_pass=True,
+        allow_blocked_pilot=bool(args.allow_blocked_pilot),
     )
     return DeribitTradeDownloader(config, options=options).run()
 
