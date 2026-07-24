@@ -7,13 +7,12 @@ from typing import Any
 from collectors.common.env import load_environment
 from collectors.deribit.checkpoints import DeribitCheckpointStore
 from collectors.deribit.config import SUPPORTED_VERSION, load_deribit_config
+from collectors.deribit.engine import DeribitTradeDownloader, DownloaderOptions
 from collectors.deribit.instruments import DeribitInstrumentDiscovery
 from collectors.deribit.probe import DeribitApiProbeRunner, ProbeOptions
 from collectors.deribit.tasks import plan_sequence_tasks
 
 RESERVED_COMMANDS = {
-    "backfill": "Phase 3",
-    "sync-once": "Phase 3",
     "compact": "Phase 4",
     "validate": "Phase 4",
     "repair": "Phase 4",
@@ -48,6 +47,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     discover_parser = subparsers.add_parser("discover", help="Discover Deribit BTC option instruments and initialize checkpoint state.")
     _add_common_args(discover_parser)
+
+    for command in ("backfill", "sync-once"):
+        ingest_parser = subparsers.add_parser(command, help=f"Run Deribit Phase 3 {command} staging downloader.")
+        _add_common_args(ingest_parser)
+        ingest_parser.add_argument("--max-tasks", type=int, default=1)
+        ingest_parser.add_argument("--symbols", default=None, help="Comma-separated instrument names. Default scans checkpoint order.")
+        ingest_parser.add_argument("--run-id", default=None)
+        ingest_parser.add_argument("--discover-first", action="store_true")
+        ingest_parser.add_argument("--allow-unprobed", action="store_true")
 
     for command, phase in RESERVED_COMMANDS.items():
         sub = subparsers.add_parser(command, help=f"Reserved command for {phase}.")
@@ -112,6 +120,27 @@ def _run_discover(args: argparse.Namespace) -> dict[str, Any]:
     return payload
 
 
+def _run_downloader(args: argparse.Namespace) -> dict[str, Any]:
+    config = _config_from_args(args)
+    symbols = _parse_symbols(args.symbols)
+    options = DownloaderOptions(
+        mode=str(args.command),
+        max_tasks=max(1, int(args.max_tasks)),
+        symbols=symbols,
+        run_id=args.run_id,
+        discover_first=bool(args.discover_first) or str(args.command) == "sync-once",
+        allow_unprobed=bool(args.allow_unprobed),
+    )
+    return DeribitTradeDownloader(config, options=options).run()
+
+
+def _parse_symbols(value: str | None) -> list[str] | None:
+    if value is None:
+        return None
+    symbols = [item.strip().upper() for item in value.split(",") if item.strip()]
+    return symbols or None
+
+
 def _not_implemented(command: str) -> dict[str, Any]:
     return {
         "status": "blocked",
@@ -157,6 +186,18 @@ def main(argv: list[str] | None = None) -> int:
             print(f"total_rows: {payload['total_rows']}")
             print(f"planned_initial_tasks: {payload['planned_initial_tasks']}")
         return 0
+
+    if args.command in {"backfill", "sync-once"}:
+        payload = _run_downloader(args)
+        if args.json:
+            print(json.dumps(payload, indent=2, sort_keys=True))
+        else:
+            print(f"Deribit {args.command} status: {payload['status']}")
+            print(f"run_id: {payload.get('run_id')}")
+            print(f"tasks_attempted: {payload.get('tasks_attempted')}")
+            print(f"files_written: {payload.get('files_written')}")
+            print(f"retained_rows: {payload.get('retained_rows')}")
+        return 0 if payload.get("status") in {"ok", "partial"} else 2
 
     payload = _not_implemented(args.command)
     if args.json:

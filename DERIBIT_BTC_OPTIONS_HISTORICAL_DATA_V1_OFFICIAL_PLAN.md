@@ -4768,6 +4768,55 @@ Open issues:
 Commit:
 - Included in Phase 2 commit `Add Deribit instrument discovery`.
 
+### 2026-07-24 UTC — Phase 3: Disk-First Downloader
+
+Status: completed
+
+Changed:
+- Added `collectors/deribit/engine.py` for bounded sync `backfill`/`sync-once` staging downloads.
+- Added `collectors/deribit/normalize.py` to sort by `trade_seq`, encode minimal staging fields, and apply broad activation/retention.
+- Added `collectors/deribit/filters.py` for V1 broad DTE/moneyness policy helpers.
+- Added `collectors/deribit/staging.py` and `collectors/deribit/parquet_parts.py` for immutable staging Parquet writes with temp file, atomic rename, fsync, and checksum.
+- Extended SQLite checkpoint schema to version 2 with `activated_at_ms` and `activation_seq`; migration is idempotent for Phase 2 DBs.
+- Added checkpoint transition helpers for retryable failure and success coverage commits.
+- Enabled CLI commands `backfill` and `sync-once`; default `--max-tasks=1` keeps first runs/smokes bounded.
+- Added Phase 3 unit tests.
+
+Commands:
+- `python -m unittest tests.test_deribit_phase0 tests.test_deribit_phase1 tests.test_deribit_phase2 tests.test_deribit_phase3`
+- `python -m unittest discover tests`
+- `python -m compileall collectors/deribit collectors/deribit_option_trades.py loaders data_loader.py tests/test_deribit_phase3.py`
+- Optional live smoke after probe/discover: `python -m collectors.deribit_option_trades backfill --version v1 --symbols BTC-25JUN27-160000-C --max-tasks 1 --json`
+
+Validation:
+- No checkpoint advance happens before durable staging file write when retained rows exist.
+- Empty retained chunks with response rows commit coverage without writing empty Parquet.
+- UNKNOWN/API failure records retryable state and never inserts `download_ranges` or advances `last_processed_seq`.
+- Active instruments become `CAUGHT_UP_ACTIVE`, not permanently complete, when API confirms no more current rows.
+- Expired empty instruments become `EMPTY_CONFIRMED`; expired exhausted instruments become `COMPLETE_EXPIRED`.
+- Activation state is persisted in SQLite so subsequent chunks retain post-activation trades until expiry.
+- Memory cleanup is called after each attempted task.
+
+Metrics:
+- Unit tests use fake Deribit client only.
+- Default CLI task count: 1.
+- Data writes are staging-only under `storage/_staging/options/deribit/version=v1/...`.
+- Live smoke `BTC-25SEP26-115000-C`, `--max-tasks 1`: response rows `1,854`, retained rows `333`, discarded rows `1,521`, files written `1`, peak RSS `339.96 MB`, cursor advanced to `trade_seq=1,854`.
+
+Decisions:
+- Phase 3 is synchronous and bounded; worker pool/RSS pilot belongs to Phase 5.
+- Page size and RPS are read from `api_probe_report.json` when production probe is available.
+- `--allow-unprobed` is test/manual-only; normal CLI blocks before discovery/download if probe report is missing or not production-allowed.
+- `sync-once` refreshes instrument discovery before task planning; `backfill` refreshes only with `--discover-first`.
+- Checksum uses `blake2b_128` from stdlib for now; xxhash can be added later if dependency is approved.
+
+Open issues:
+- Phase 4 must compact staging into canonical daily Parquet and dedupe `(instrument_id, trade_seq)`.
+- Phase 5 should benchmark worker counts and enforce RSS targets with real market-regime samples.
+
+Commit:
+- Included in Phase 3 commit `Add Deribit disk-first downloader`.
+
 ## 5. Test Plan Theo Phase
 
 ### Phase 0 Tests
