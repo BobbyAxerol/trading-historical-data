@@ -4908,6 +4908,7 @@ Decisions:
 - Strategy package coverage is a proxy in Phase 5 based on trade-day coverage until Phase 7 snapshot tape exists.
 - Permanent size projection is `null` when pilot windows have no measured rows; this intentionally fails acceptance.
 - Pilot exit code is non-zero when summary status is `blocked`, so automation cannot proceed to Phase 6 accidentally.
+- `backfill` and `sync-once` now require `pilot_summary.json` status `ok` for normal broad runs. Blocked-pilot override is restricted to explicit symbols and `max_tasks<=20` for targeted pilot sampling only.
 
 Open issues:
 - Need targeted pilot data for low/normal/high windows before Phase 6 full historical backfill.
@@ -4915,6 +4916,27 @@ Open issues:
 
 Commit:
 - Included in Phase 5 commit `Add Deribit pilot benchmark`.
+
+### 2026-07-24 UTC — Pre-Phase 6 Readiness Audit
+
+Status: blocked
+
+Checked:
+- API probe report exists and has `status=ok`, `production_backfill_allowed=true`, `selected_page_size=10000`, `safe_trade_rps=2.0`.
+- Phase 4 validation returns `status=ok`, `canonical_files=1`, `canonical_rows=9`, `duplicate_keys=0`.
+- Repair planner returns `status=ok`, `retryable_instruments=0`, `missing_output_ranges=0`.
+- Pilot summary exists but returns `status=blocked`.
+
+Blocking reason:
+- Phase 5 pilot has not passed because low/normal/high deterministic windows currently have no representative canonical rows.
+- Permanent size projection is `null`; strategy package coverage proxy is `0.0%`.
+
+Added guard:
+- Normal `backfill`/`sync-once` now blocks when `pilot_summary.json` is missing or not `ok`.
+- Targeted pilot sampling is still possible with `--allow-blocked-pilot`, but only with explicit symbols and `max_tasks<=20`.
+
+Decision:
+- Do not start Phase 6 full historical backfill until targeted pilot windows have enough samples and `pilot` returns `status=ok`.
 
 ## 5. Test Plan Theo Phase
 

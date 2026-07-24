@@ -174,9 +174,12 @@ PYTHONPATH=. python -m collectors.deribit_option_trades probe --version v1 --rat
 # Deribit BTC option instrument dimension + checkpoint state
 PYTHONPATH=. python -m collectors.deribit_option_trades discover --version v1 --json
 
-# Deribit trades staging downloader. Default max-tasks=1 để smoke an toàn.
+# Deribit trades staging downloader. Broad backfill/sync bị chặn nếu Phase 5 pilot chưa pass.
 PYTHONPATH=. python -m collectors.deribit_option_trades backfill --version v1 --max-tasks 1 --json
 PYTHONPATH=. python -m collectors.deribit_option_trades sync-once --version v1 --max-tasks 1 --json
+
+# Targeted pilot sampling khi pilot đang blocked: bắt buộc explicit symbols và max-tasks<=20.
+PYTHONPATH=. python -m collectors.deribit_option_trades backfill --version v1 --symbols BTC-25SEP26-115000-C --max-tasks 1 --allow-blocked-pilot --json
 
 # Deribit staging -> canonical daily Parquet, validation, repair planning, cleanup guard
 PYTHONPATH=. python -m collectors.deribit_option_trades compact --version v1 --max-days 1 --json
@@ -259,7 +262,7 @@ state/deribit_options/version=v1/BTC.sqlite
 
 Do path có thư mục hive-style `version=v1`, code nội bộ đọc physical file bằng `pyarrow.parquet.ParquetFile(...).read()` khi cần schema chính xác, tránh PyArrow tự thêm virtual column `version`.
 
-Phase 3 `backfill`/`sync-once` tải trade chunks vào immutable staging Parquet, chưa compact sang canonical trades. `sync-once` refresh discovery trước khi lập task; `backfill` chỉ refresh khi truyền `--discover-first`. Mỗi chunk đi theo thứ tự: API success -> normalize/filter -> write temp parquet -> atomic rename/fsync -> commit `download_ranges` -> advance `instrument_state`. API error/unknown chỉ tăng retry state, không advance cursor.
+Phase 3 `backfill`/`sync-once` tải trade chunks vào immutable staging Parquet, chưa compact sang canonical trades. Sau Phase 5, broad backfill/sync yêu cầu `pilot_summary.json` status `ok`; khi pilot đang blocked, chỉ cho phép targeted sampling với `--allow-blocked-pilot`, explicit `--symbols`, và `--max-tasks<=20`. `sync-once` refresh discovery trước khi lập task; `backfill` chỉ refresh khi truyền `--discover-first`. Mỗi chunk đi theo thứ tự: API success -> normalize/filter -> write temp parquet -> atomic rename/fsync -> commit `download_ranges` -> advance `instrument_state`. API error/unknown chỉ tăng retry state, không advance cursor.
 
 Phase 4 `compact` dùng DuckDB memory/temp limits để publish canonical daily Parquet. `validate` kiểm coverage ledger, checksum staging, canonical schema, duplicate key, basic finance fields, và FK sang instrument dimension. `cleanup` mặc định dry-run; chỉ xoá staging khi validate pass và có `--confirm`.
 

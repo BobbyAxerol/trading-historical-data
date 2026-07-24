@@ -1,4 +1,5 @@
 import os
+import json
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -11,6 +12,7 @@ import pyarrow as pa
 
 from collectors.deribit.config import load_deribit_config
 from collectors.deribit.checkpoints import DeribitCheckpointStore
+from collectors.deribit.engine import DeribitTradeDownloader, DownloaderOptions
 from collectors.deribit.instruments import write_instrument_dimension
 from collectors.deribit.parquet_parts import write_parquet_atomic
 from collectors.deribit.pilot import DEFAULT_WINDOWS, DeribitPilotRunner
@@ -125,6 +127,45 @@ class TestDeribitPilotPhase5(EnvCase):
                 code = deribit_cli_main(["pilot", "--json", "--window-days", "1"])
         self.assertEqual(code, 0)
         pilot_cls.return_value.run.assert_called_once()
+
+    def test_backfill_is_blocked_until_pilot_passes(self):
+        config = load_deribit_config()
+        self._write_probe_report(config, production_allowed=True)
+        summary = DeribitTradeDownloader(config, options=DownloaderOptions(require_pilot_pass=True)).run()
+        self.assertEqual(summary["status"], "blocked")
+        self.assertIn("pilot_summary.json", summary["reason"])
+
+        self._write_pilot_summary(config, status="blocked")
+        summary = DeribitTradeDownloader(config, options=DownloaderOptions(require_pilot_pass=True)).run()
+        self.assertEqual(summary["status"], "blocked")
+        self.assertIn("Phase 6 full historical backfill remains blocked", summary["reason"])
+
+    def test_blocked_pilot_override_requires_small_explicit_symbols(self):
+        config = load_deribit_config()
+        self._write_probe_report(config, production_allowed=True)
+        self._write_pilot_summary(config, status="blocked")
+        broad = DeribitTradeDownloader(
+            config,
+            options=DownloaderOptions(require_pilot_pass=True, allow_blocked_pilot=True, max_tasks=21, symbols=["BTC-25JUN27-100000-C"]),
+        ).run()
+        self.assertEqual(broad["status"], "blocked")
+        self.assertIn("max_tasks<=20", broad["reason"])
+        missing_symbols = DeribitTradeDownloader(
+            config,
+            options=DownloaderOptions(require_pilot_pass=True, allow_blocked_pilot=True, max_tasks=1, symbols=None),
+        ).run()
+        self.assertEqual(missing_symbols["status"], "blocked")
+        self.assertIn("explicit symbols", missing_symbols["reason"])
+
+    def _write_probe_report(self, config, *, production_allowed: bool):
+        path = Path(os.environ["STATE_ROOT"]) / "deribit_options" / f"version={config.version}" / "api_probe_report.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"production_backfill_allowed": production_allowed, "selected_page_size": 10000, "safe_trade_rps": 2.0}))
+
+    def _write_pilot_summary(self, config, *, status: str):
+        path = Path(os.environ["STATE_ROOT"]) / "deribit_options" / f"version={config.version}" / "pilot_summary.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"status": status}))
 
 
 if __name__ == "__main__":
