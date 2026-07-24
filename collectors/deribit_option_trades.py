@@ -7,10 +7,11 @@ from typing import Any
 from collectors.common.env import load_environment
 from collectors.deribit.checkpoints import DeribitCheckpointStore
 from collectors.deribit.config import SUPPORTED_VERSION, load_deribit_config
+from collectors.deribit.instruments import DeribitInstrumentDiscovery
 from collectors.deribit.probe import DeribitApiProbeRunner, ProbeOptions
+from collectors.deribit.tasks import plan_sequence_tasks
 
 RESERVED_COMMANDS = {
-    "discover": "Phase 2",
     "backfill": "Phase 3",
     "sync-once": "Phase 3",
     "compact": "Phase 4",
@@ -44,6 +45,9 @@ def build_parser() -> argparse.ArgumentParser:
     probe_parser.add_argument("--rate-ramp", action="store_true")
     probe_parser.add_argument("--max-rps", type=float, default=5.0)
     probe_parser.add_argument("--requests-per-rps", type=int, default=2)
+
+    discover_parser = subparsers.add_parser("discover", help="Discover Deribit BTC option instruments and initialize checkpoint state.")
+    _add_common_args(discover_parser)
 
     for command, phase in RESERVED_COMMANDS.items():
         sub = subparsers.add_parser(command, help=f"Reserved command for {phase}.")
@@ -91,6 +95,23 @@ def _run_probe(args: argparse.Namespace) -> dict[str, Any]:
     return DeribitApiProbeRunner(config, options=options).run()
 
 
+def _run_discover(args: argparse.Namespace) -> dict[str, Any]:
+    config = _config_from_args(args)
+    result = DeribitInstrumentDiscovery(config).run()
+    store = DeribitCheckpointStore(config)
+    import pyarrow.parquet as pq
+
+    table = pq.ParquetFile(result.instrument_path).read()
+    instruments = table.to_pylist()
+    checkpoint_rows = store.upsert_instruments(instruments)
+    planned_tasks = len(plan_sequence_tasks(config, store))
+    payload = result.as_payload()
+    payload["checkpoint_path"] = str(store.path)
+    payload["checkpoint_rows_upserted"] = checkpoint_rows
+    payload["planned_initial_tasks"] = planned_tasks
+    return payload
+
+
 def _not_implemented(command: str) -> dict[str, Any]:
     return {
         "status": "blocked",
@@ -123,6 +144,18 @@ def main(argv: list[str] | None = None) -> int:
             print(f"report: {DeribitApiProbeRunner(_config_from_args(args)).report_path}")
             print(f"selected_page_size: {payload.get('selected_page_size')}")
             print(f"safe_trade_rps: {payload.get('safe_trade_rps')}")
+        return 0
+
+    if args.command == "discover":
+        payload = _run_discover(args)
+        if args.json:
+            print(json.dumps(payload, indent=2, sort_keys=True))
+        else:
+            print(f"Deribit instrument discovery status: {payload['status']}")
+            print(f"instruments: {payload['instrument_path']}")
+            print(f"checkpoint: {payload['checkpoint_path']}")
+            print(f"total_rows: {payload['total_rows']}")
+            print(f"planned_initial_tasks: {payload['planned_initial_tasks']}")
         return 0
 
     payload = _not_implemented(args.command)

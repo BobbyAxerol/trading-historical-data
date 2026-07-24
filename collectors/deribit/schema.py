@@ -51,6 +51,7 @@ INSTRUMENT_COLUMNS = [
     "activation_seq",
     "metadata_source",
     "parse_status",
+    "quality_flags",
     "dataset_version_id",
 ]
 
@@ -129,6 +130,7 @@ def instrument_schema() -> pa.Schema:
             pa.field("activation_seq", pa.int64(), nullable=True),
             pa.field("metadata_source", pa.int8(), nullable=False),
             pa.field("parse_status", pa.int8(), nullable=False),
+            pa.field("quality_flags", pa.uint16(), nullable=False),
             pa.field("dataset_version_id", pa.uint16(), nullable=False),
         ]
     )

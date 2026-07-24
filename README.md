@@ -166,6 +166,9 @@ PYTHONPATH=. python -m collectors.deribit_option_trades probe --version v1 --jso
 # Deribit probe with lightweight rate verification before production backfill phases
 PYTHONPATH=. python -m collectors.deribit_option_trades probe --version v1 --rate-ramp --max-rps 2 --requests-per-rps 1 --json
 
+# Deribit BTC option instrument dimension + checkpoint state
+PYTHONPATH=. python -m collectors.deribit_option_trades discover --version v1 --json
+
 # VN daily matrix rebuild từ raw Parquet
 PYTHONPATH=. python -m collectors.vn_daily_matrix
 ```
@@ -228,6 +231,15 @@ state/deribit_options/version=v1/api_probe_report.json
 ```
 
 `probe` không tải historical backfill. Nếu chạy không có `--rate-ramp`, report có thể có `status=blocked`; đây là guardrail nghĩa là chưa đủ điều kiện cho production backfill, không phải lỗi loader endpoint. Production backfill chỉ được mở khi report có đủ mandatory fields và rate ramp đã verify thật.
+
+Phase 2 `discover` tạo instrument dimension và checkpoint state, vẫn chưa tải option trades:
+
+```text
+storage/options/deribit/instruments/version=v1/instruments.parquet
+state/deribit_options/version=v1/BTC.sqlite
+```
+
+Do path có thư mục hive-style `version=v1`, code nội bộ đọc physical file bằng `pyarrow.parquet.ParquetFile(...).read()` khi cần schema chính xác, tránh PyArrow tự thêm virtual column `version`.
 - `timeframe`: khi gọi qua `load_data`, truyền `timeframe="5min"`/`"15min"`/`"1h"` để dùng endpoint resample-on-read.
 - `feature`: bắt buộc khi dùng router cho matrix datasets.
 
