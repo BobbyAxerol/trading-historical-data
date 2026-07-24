@@ -11,13 +11,13 @@ from collectors.deribit.compact import DeribitCompactor
 from collectors.deribit.config import SUPPORTED_VERSION, load_deribit_config
 from collectors.deribit.engine import DeribitTradeDownloader, DownloaderOptions
 from collectors.deribit.instruments import DeribitInstrumentDiscovery
+from collectors.deribit.pilot import DeribitPilotRunner
 from collectors.deribit.probe import DeribitApiProbeRunner, ProbeOptions
 from collectors.deribit.repair import DeribitRepairPlanner
 from collectors.deribit.tasks import plan_sequence_tasks
 from collectors.deribit.validate import DeribitValidator
 
 RESERVED_COMMANDS = {
-    "pilot": "Phase 5",
     "build-snapshot-5m": "Phase 7",
     "build-snapshot-1m": "Phase 9",
     "fit-execution": "Phase 8",
@@ -72,6 +72,11 @@ def build_parser() -> argparse.ArgumentParser:
     cleanup_parser = subparsers.add_parser("cleanup", help="Cleanup Deribit staging files after validation passes.")
     _add_common_args(cleanup_parser)
     cleanup_parser.add_argument("--confirm", action="store_true")
+
+    pilot_parser = subparsers.add_parser("pilot", help="Run Deribit Phase 5 benchmark reports and acceptance gate.")
+    _add_common_args(pilot_parser)
+    pilot_parser.add_argument("--window-days", type=int, default=30)
+    pilot_parser.add_argument("--min-rows-per-window", type=int, default=1)
 
     for command, phase in RESERVED_COMMANDS.items():
         sub = subparsers.add_parser(command, help=f"Reserved command for {phase}.")
@@ -164,6 +169,14 @@ def _run_cleanup(args: argparse.Namespace) -> dict[str, Any]:
     return DeribitCleanup(_config_from_args(args)).run(confirm=bool(args.confirm))
 
 
+def _run_pilot(args: argparse.Namespace) -> dict[str, Any]:
+    return DeribitPilotRunner(
+        _config_from_args(args),
+        window_days=max(1, int(args.window_days)),
+        min_rows_per_window=max(1, int(args.min_rows_per_window)),
+    ).run()
+
+
 def _parse_symbols(value: str | None) -> list[str] | None:
     if value is None:
         return None
@@ -242,6 +255,15 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(f"Deribit {args.command} status: {payload['status']}")
         return 0 if payload.get("status") in {"ok", "warning", "needs_repair"} else 2
+
+    if args.command == "pilot":
+        payload = _run_pilot(args)
+        if args.json:
+            print(json.dumps(payload, indent=2, sort_keys=True))
+        else:
+            print(f"Deribit pilot status: {payload['status']}")
+            print(f"summary: {payload.get('pilot_summary_path')}")
+        return 0 if payload.get("status") == "ok" else 2
 
     payload = _not_implemented(args.command)
     if args.json:

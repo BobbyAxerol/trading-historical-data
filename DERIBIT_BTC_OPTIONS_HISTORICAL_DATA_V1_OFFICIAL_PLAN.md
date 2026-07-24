@@ -4868,6 +4868,54 @@ Open issues:
 Commit:
 - Included in Phase 4 commit `Add Deribit canonical compactor`.
 
+### 2026-07-24 UTC — Phase 5: Pilot Benchmark
+
+Status: completed
+
+Changed:
+- Added `collectors/deribit/pilot.py` for deterministic three-regime pilot reports.
+- Enabled CLI command `python -m collectors.deribit_option_trades pilot --version v1`.
+- Pilot writes:
+  - `state/deribit_options/version=v1/pilot_report_low.json`
+  - `state/deribit_options/version=v1/pilot_report_normal.json`
+  - `state/deribit_options/version=v1/pilot_report_high.json`
+  - `state/deribit_options/version=v1/pilot_summary.json`
+- Pilot measures canonical rows/bytes, bytes per trade, trade-day coverage proxy, contracts, validation status, repair/unresolved state, duplicate conflicts, RSS, and projected permanent size when representative samples exist.
+- Added Phase 5 unit tests.
+
+Commands:
+- `python -m unittest tests.test_deribit_phase5`
+- `python -m unittest tests.test_deribit_phase0 tests.test_deribit_phase1 tests.test_deribit_phase2 tests.test_deribit_phase3 tests.test_deribit_phase4 tests.test_deribit_phase5`
+- `python -m unittest discover tests`
+- `python -m compileall collectors/deribit collectors/deribit_option_trades.py loaders data_loader.py tests/test_deribit_phase5.py`
+- Live smoke: `python -m collectors.deribit_option_trades pilot --version v1 --json`
+
+Validation:
+- Pilot windows are deterministic and non-overlapping.
+- Pilot does not run full history or mutate ingestion/checkpoint state.
+- Status remains `blocked` until all three windows have representative samples and acceptance gates pass.
+- Full historical Phase 6 must not treat a blocked pilot as approval.
+
+Metrics:
+- Unit tests use synthetic canonical files for all three windows and a blocked/no-sample case.
+- Live pilot status on current partial smoke data: `blocked`.
+- Live current canonical rows: `9`, canonical files: `1`, duplicate keys: `0`, validation status: `ok`.
+- Live three pilot windows have `0` rows each because only 2026 smoke data exists so far.
+- Live ingestion RSS observed by pilot: `158.28 MB`.
+- Post-test/live cleanup: `gc.collect()` collected `10`, PyArrow memory pool `0` bytes allocated.
+
+Decisions:
+- Strategy package coverage is a proxy in Phase 5 based on trade-day coverage until Phase 7 snapshot tape exists.
+- Permanent size projection is `null` when pilot windows have no measured rows; this intentionally fails acceptance.
+- Pilot exit code is non-zero when summary status is `blocked`, so automation cannot proceed to Phase 6 accidentally.
+
+Open issues:
+- Need targeted pilot data for low/normal/high windows before Phase 6 full historical backfill.
+- Phase 7 will replace the temporary strategy coverage proxy with snapshot-package coverage.
+
+Commit:
+- Included in Phase 5 commit `Add Deribit pilot benchmark`.
+
 ## 5. Test Plan Theo Phase
 
 ### Phase 0 Tests
