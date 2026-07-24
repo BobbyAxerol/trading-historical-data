@@ -174,6 +174,10 @@ PYTHONPATH=. python -m collectors.deribit_option_trades probe --version v1 --rat
 # Deribit BTC option instrument dimension + checkpoint state
 PYTHONPATH=. python -m collectors.deribit_option_trades discover --version v1 --json
 
+# Deribit trades staging downloader. Default max-tasks=1 để smoke an toàn.
+PYTHONPATH=. python -m collectors.deribit_option_trades backfill --version v1 --max-tasks 1 --json
+PYTHONPATH=. python -m collectors.deribit_option_trades sync-once --version v1 --max-tasks 1 --json
+
 # VN daily matrix rebuild từ raw Parquet
 PYTHONPATH=. python -m collectors.vn_daily_matrix
 ```
@@ -245,6 +249,8 @@ state/deribit_options/version=v1/BTC.sqlite
 ```
 
 Do path có thư mục hive-style `version=v1`, code nội bộ đọc physical file bằng `pyarrow.parquet.ParquetFile(...).read()` khi cần schema chính xác, tránh PyArrow tự thêm virtual column `version`.
+
+Phase 3 `backfill`/`sync-once` tải trade chunks vào immutable staging Parquet, chưa compact sang canonical trades. `sync-once` refresh discovery trước khi lập task; `backfill` chỉ refresh khi truyền `--discover-first`. Mỗi chunk đi theo thứ tự: API success -> normalize/filter -> write temp parquet -> atomic rename/fsync -> commit `download_ranges` -> advance `instrument_state`. API error/unknown chỉ tăng retry state, không advance cursor.
 - `timeframe`: khi gọi qua `load_data`, truyền `timeframe="5min"`/`"15min"`/`"1h"` để dùng endpoint resample-on-read.
 - `feature`: bắt buộc khi dùng router cho matrix datasets.
 
