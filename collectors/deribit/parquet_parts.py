@@ -23,6 +23,17 @@ def write_parquet_atomic(table: pa.Table, path: Path, *, metadata: dict[str, Any
     return {"path": path, "bytes": path.stat().st_size, "checksum": checksum}
 
 
+def publish_existing_file_atomic(tmp: Path, path: Path) -> dict[str, Any]:
+    if not tmp.exists():
+        raise FileNotFoundError(tmp)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _fsync_file(tmp)
+    os.replace(tmp, path)
+    _fsync_directory(path.parent)
+    checksum = file_checksum(path)
+    return {"path": path, "bytes": path.stat().st_size, "checksum": checksum}
+
+
 def file_checksum(path: Path) -> str:
     h = hashlib.blake2b(digest_size=16)
     with path.open("rb") as fh:

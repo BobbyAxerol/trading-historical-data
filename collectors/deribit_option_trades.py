@@ -6,21 +6,21 @@ from typing import Any
 
 from collectors.common.env import load_environment
 from collectors.deribit.checkpoints import DeribitCheckpointStore
+from collectors.deribit.cleanup import DeribitCleanup
+from collectors.deribit.compact import DeribitCompactor
 from collectors.deribit.config import SUPPORTED_VERSION, load_deribit_config
 from collectors.deribit.engine import DeribitTradeDownloader, DownloaderOptions
 from collectors.deribit.instruments import DeribitInstrumentDiscovery
 from collectors.deribit.probe import DeribitApiProbeRunner, ProbeOptions
+from collectors.deribit.repair import DeribitRepairPlanner
 from collectors.deribit.tasks import plan_sequence_tasks
+from collectors.deribit.validate import DeribitValidator
 
 RESERVED_COMMANDS = {
-    "compact": "Phase 4",
-    "validate": "Phase 4",
-    "repair": "Phase 4",
     "pilot": "Phase 5",
     "build-snapshot-5m": "Phase 7",
     "build-snapshot-1m": "Phase 9",
     "fit-execution": "Phase 8",
-    "cleanup": "Phase 10",
     "storage-report": "Phase 10",
 }
 
@@ -57,12 +57,26 @@ def build_parser() -> argparse.ArgumentParser:
         ingest_parser.add_argument("--discover-first", action="store_true")
         ingest_parser.add_argument("--allow-unprobed", action="store_true")
 
+    compact_parser = subparsers.add_parser("compact", help="Compact Deribit staging trades into canonical daily Parquet.")
+    _add_common_args(compact_parser)
+    compact_parser.add_argument("--max-days", type=int, default=None)
+
+    validate_parser = subparsers.add_parser("validate", help="Validate Deribit coverage ledger and canonical trades.")
+    _add_common_args(validate_parser)
+
+    repair_parser = subparsers.add_parser("repair", help="Plan Deribit exact-range repairs for unresolved state.")
+    _add_common_args(repair_parser)
+    repair_parser.add_argument("--only-unresolved", action="store_true")
+    repair_parser.add_argument("--limit", type=int, default=100)
+
+    cleanup_parser = subparsers.add_parser("cleanup", help="Cleanup Deribit staging files after validation passes.")
+    _add_common_args(cleanup_parser)
+    cleanup_parser.add_argument("--confirm", action="store_true")
+
     for command, phase in RESERVED_COMMANDS.items():
         sub = subparsers.add_parser(command, help=f"Reserved command for {phase}.")
         _add_common_args(sub)
-        if command == "repair":
-            sub.add_argument("--only-unresolved", action="store_true")
-        elif command == "build-snapshot-1m":
+        if command == "build-snapshot-1m":
             sub.add_argument("--start", default=None)
             sub.add_argument("--end", default=None)
     return parser
@@ -134,6 +148,22 @@ def _run_downloader(args: argparse.Namespace) -> dict[str, Any]:
     return DeribitTradeDownloader(config, options=options).run()
 
 
+def _run_compact(args: argparse.Namespace) -> dict[str, Any]:
+    return DeribitCompactor(_config_from_args(args)).run(max_days=args.max_days)
+
+
+def _run_validate(args: argparse.Namespace) -> dict[str, Any]:
+    return DeribitValidator(_config_from_args(args)).run()
+
+
+def _run_repair(args: argparse.Namespace) -> dict[str, Any]:
+    return DeribitRepairPlanner(_config_from_args(args)).run(only_unresolved=bool(args.only_unresolved), limit=max(1, int(args.limit)))
+
+
+def _run_cleanup(args: argparse.Namespace) -> dict[str, Any]:
+    return DeribitCleanup(_config_from_args(args)).run(confirm=bool(args.confirm))
+
+
 def _parse_symbols(value: str | None) -> list[str] | None:
     if value is None:
         return None
@@ -198,6 +228,20 @@ def main(argv: list[str] | None = None) -> int:
             print(f"files_written: {payload.get('files_written')}")
             print(f"retained_rows: {payload.get('retained_rows')}")
         return 0 if payload.get("status") in {"ok", "partial"} else 2
+
+    if args.command in {"compact", "validate", "repair", "cleanup"}:
+        runners = {
+            "compact": _run_compact,
+            "validate": _run_validate,
+            "repair": _run_repair,
+            "cleanup": _run_cleanup,
+        }
+        payload = runners[args.command](args)
+        if args.json:
+            print(json.dumps(payload, indent=2, sort_keys=True))
+        else:
+            print(f"Deribit {args.command} status: {payload['status']}")
+        return 0 if payload.get("status") in {"ok", "warning", "needs_repair"} else 2
 
     payload = _not_implemented(args.command)
     if args.json:

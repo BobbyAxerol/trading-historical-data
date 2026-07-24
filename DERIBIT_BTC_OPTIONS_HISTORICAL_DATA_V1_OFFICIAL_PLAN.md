@@ -4817,6 +4817,57 @@ Open issues:
 Commit:
 - Included in Phase 3 commit `Add Deribit disk-first downloader`.
 
+### 2026-07-24 UTC — Phase 4: Compactor + Canonical Events
+
+Status: completed
+
+Changed:
+- Added `collectors/deribit/compact.py` using DuckDB with configured memory limit and temp directory.
+- Added canonical daily publish to `storage/options/deribit/trades/version=v1/currency=BTC/year=YYYY/month=MM/day=DD/part-00000.parquet`.
+- Added deterministic dedupe by `(instrument_id, trade_seq)` ordered by `source_priority DESC, ingested_at DESC`.
+- Added conflict detection for duplicate keys with payload variants; conflict samples are written under `state/deribit_options/version=v1/conflicts/`.
+- Added `collectors/deribit/validate.py` for acquisition ledger checks, checksum verification, canonical schema, duplicate key, basic financial-field checks, and instrument dimension FK checks.
+- Added `collectors/deribit/repair.py` as a non-destructive repair planner for unresolved/retryable state.
+- Added `collectors/deribit/cleanup.py`; cleanup is dry-run by default and requires validation pass plus `--confirm` to delete staging.
+- Enabled CLI commands `compact`, `validate`, `repair`, and `cleanup`.
+- Added Phase 4 unit tests.
+
+Commands:
+- `python -m unittest tests.test_deribit_phase4`
+- `python -m unittest tests.test_deribit_phase0 tests.test_deribit_phase1 tests.test_deribit_phase2 tests.test_deribit_phase3 tests.test_deribit_phase4`
+- `python -m unittest discover tests`
+- `python -m compileall collectors/deribit collectors/deribit_option_trades.py loaders data_loader.py tests/test_deribit_phase4.py`
+- Live smoke: `python -m collectors.deribit_option_trades compact --version v1 --max-days 1 --json`
+- Live smoke: `python -m collectors.deribit_option_trades validate --version v1 --json`
+- Live smoke: `python -m collectors.deribit_option_trades cleanup --version v1 --json`
+
+Validation:
+- DuckDB memory limit and temp directory are set before compaction.
+- No Pandas full-history concat is used.
+- Daily partitions publish through temp file then atomic replace/fsync.
+- Duplicate canonical keys are removed by compaction and checked by validator.
+- Payload conflicts are recorded under state and reported as `status=warning`.
+- Cleanup does not delete staging unless validator returns `ok` and `--confirm` is passed.
+
+Metrics:
+- Unit tests use synthetic staging files only.
+- Live compact smoke from Phase 3 staging: staging files `1`, days compacted `1`, canonical output files `1`, output rows `9`, conflict groups `0`.
+- Live validate smoke: canonical files `1`, canonical rows `9`, duplicate keys `0`, status `ok`.
+- Live cleanup dry-run: staging files seen `1`, bytes seen `18,891`, files deleted `0`.
+- Post-test/live cleanup: `gc.collect()` collected `10`, PyArrow memory pool `0` bytes allocated.
+
+Decisions:
+- Repair in Phase 4 is a planner/report, not a mutating auto-repair; exact refetch execution belongs with downloader/repair expansion.
+- Cleanup is intentionally conservative and dry-run-first.
+- Canonical compaction currently writes one output file per day; multi-file target sizing can be tuned after pilot.
+
+Open issues:
+- Phase 5 must benchmark compaction/day sizing on larger pilot windows.
+- Full conflict quarantine payload can be expanded if pilot finds real conflicts.
+
+Commit:
+- Included in Phase 4 commit `Add Deribit canonical compactor`.
+
 ## 5. Test Plan Theo Phase
 
 ### Phase 0 Tests
