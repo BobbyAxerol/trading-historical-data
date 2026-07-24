@@ -103,7 +103,7 @@ class TestDeribitCliPhase0(EnvCase):
 
     def test_reserved_command_blocks_in_phase0(self):
         with redirect_stdout(StringIO()):
-            self.assertEqual(deribit_cli_main(["discover", "--json"]), 2)
+            self.assertEqual(deribit_cli_main(["backfill", "--json"]), 2)
 
 
 class TestDeribitLoaderPhase0(EnvCase):

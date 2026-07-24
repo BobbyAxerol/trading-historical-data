@@ -59,6 +59,71 @@ class DeribitCheckpointStore:
             rows = con.execute("SELECT key, value FROM metadata").fetchall()
         return {str(row["key"]): row["value"] for row in rows}
 
+    def upsert_instruments(self, instruments: list[dict[str, Any]]) -> int:
+        if not instruments:
+            return 0
+        with self.connect() as con:
+            self._configure_connection(con)
+            self._create_schema(con)
+            self._upsert_metadata(con)
+            rows = [
+                (
+                    str(item["instrument_name"]),
+                    int(item["instrument_id"]),
+                    1 if bool(item["is_expired"]) else 0,
+                    "NEW",
+                    self.config.version,
+                    self.config.config_hash,
+                )
+                for item in instruments
+            ]
+            con.executemany(
+                """
+                INSERT INTO instrument_state (
+                    instrument_name,
+                    instrument_id,
+                    is_expired,
+                    status,
+                    dataset_version,
+                    config_hash
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(instrument_name) DO UPDATE SET
+                    instrument_id=excluded.instrument_id,
+                    is_expired=excluded.is_expired,
+                    dataset_version=excluded.dataset_version,
+                    config_hash=excluded.config_hash,
+                    status=CASE
+                        WHEN excluded.is_expired = 0
+                             AND instrument_state.status IN ('COMPLETE_EXPIRED', 'EMPTY_CONFIRMED')
+                        THEN 'CAUGHT_UP_ACTIVE'
+                        ELSE instrument_state.status
+                    END
+                """,
+                rows,
+            )
+            con.commit()
+            return len(rows)
+
+    def instrument_states(self) -> list[dict[str, Any]]:
+        with self.connect() as con:
+            rows = con.execute(
+                """
+                SELECT
+                    instrument_name,
+                    instrument_id,
+                    is_expired,
+                    status,
+                    last_processed_seq,
+                    failure_count,
+                    dataset_version,
+                    config_hash
+                FROM instrument_state
+                ORDER BY instrument_name
+                """
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def _configure_connection(self, con: sqlite3.Connection) -> None:
         checkpoint = self.config.raw["checkpoint"]
         con.execute(f"PRAGMA journal_mode={checkpoint.get('journal_mode', 'WAL')}")

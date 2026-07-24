@@ -4724,6 +4724,50 @@ Open issues:
 Commit:
 - Included in Phase 1 commit `Add Deribit API probe`.
 
+### 2026-07-24 UTC — Phase 2: Instrument Discovery + Checkpoint
+
+Status: completed
+
+Changed:
+- Added `collectors/deribit/instruments.py` for deterministic instrument discovery, Deribit option-name parsing, metadata fallback, stable `instrument_id`, and atomic dimension Parquet write.
+- Added `quality_flags` to instrument dimension schema so invalid/fallback metadata is explicit.
+- Added SQLite checkpoint upsert helper for `instrument_state` that preserves cursors/status across reruns.
+- Added `collectors/deribit/tasks.py` for initial sequence task planning from checkpoint state.
+- Enabled CLI command `python -m collectors.deribit_option_trades discover --version v1`.
+- Updated README operational commands and Deribit notes.
+- Added Phase 2 unit tests.
+
+Commands:
+- `python -m unittest tests.test_deribit_phase0 tests.test_deribit_phase1 tests.test_deribit_phase2`
+- `python -m unittest discover tests`
+- `python -m compileall collectors/deribit collectors/deribit_option_trades.py loaders data_loader.py tests/test_deribit_phase2.py`
+- Optional live discovery: `python -m collectors.deribit_option_trades discover --version v1 --json`
+
+Validation:
+- `instrument_id` is hash-based from `instrument_name`, so adding future contracts does not renumber existing IDs.
+- Instrument dimension writes to `storage/options/deribit/instruments/version=v1/instruments.parquet`.
+- Missing API expiry/strike/type can be filled from instrument name, with `quality_flags` marking the fallback.
+- Invalid metadata uses `parse_status=INVALID` and quality flags; no silent zero.
+- Re-running discovery does not reset `last_processed_seq`, failure count, or non-terminal status.
+- Active instruments start as resumable `NEW`/existing non-terminal state, never permanent complete.
+- If `history.deribit.com` returns future contracts through `expired=true`, Phase 2 treats them as active/resumable by comparing expiry timestamp to current UTC.
+
+Metrics:
+- Unit tests use fake Deribit client only.
+- Live discovery reads instrument master only; it does not download trades.
+- Data backfill rows: 0.
+
+Decisions:
+- Store physical instrument Parquet under `version=v1`; code reads it via `ParquetFile(...).read()` to avoid PyArrow auto-adding hive partition column `version`.
+- Phase 2 task planning creates first sequence ranges only; actual downloader/coverage commit remains Phase 3.
+
+Open issues:
+- Full expired instrument coverage is still only as complete as Deribit `get_instruments(expired=true)` returns.
+- Phase 3 must use `api_probe_report.json` before deciding page size/RPS for downloader workers.
+
+Commit:
+- Included in Phase 2 commit `Add Deribit instrument discovery`.
+
 ## 5. Test Plan Theo Phase
 
 ### Phase 0 Tests
