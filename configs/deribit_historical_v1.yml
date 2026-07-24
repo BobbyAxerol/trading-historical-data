@@ -1,0 +1,275 @@
+dataset:
+  name: deribit_btc_options
+  version: v1
+  universe_version: compact_liquid_v1
+  schema_version: trade_schema_v1
+  snapshot_version: compact_5m_v1
+  pricing_version: anchored_iv_v1
+  execution_proxy_version: trade_mark_v1
+
+scope:
+  currency: BTC
+  kind: option
+  historical_trades_only: true
+  streaming: false
+  orderbook: false
+
+api:
+  base_url: https://history.deribit.com/api/v2/public
+  instruments_method: get_instruments
+  trades_method: get_last_trades_by_instrument
+  chunk_size: 5000
+  max_supported_chunk_size: 10000
+  timeout_seconds: 60
+  connect_timeout_seconds: 10
+  target_requests_per_second: 12
+  max_requests_per_second: 18
+  retry:
+    max_attempts: 10
+    prefer_retry_after: true
+    exponential_backoff: true
+    min_delay_seconds: 1
+    max_delay_seconds: 60
+    jitter: true
+
+runtime:
+  api_workers: 4
+  task_queue_size: 16
+  write_queue_size: 8
+  writer_workers: 1
+  max_inflight_chunks: 8
+
+memory:
+  ingestion_target_rss_mb: 500
+  ingestion_hard_rss_mb: 750
+  compactor_memory_limit_mb: 1024
+  snapshot_target_rss_mb: 1000
+  snapshot_hard_rss_mb: 1400
+
+checkpoint:
+  backend: sqlite
+  path: state/deribit_options/version=v1/BTC.sqlite
+  journal_mode: WAL
+  synchronous: NORMAL
+  disk_before_checkpoint: true
+
+instrument_discovery:
+  include_active: true
+  include_expired: true
+  refresh_before_sync: true
+  parse_name_fallback: true
+
+broad_ingestion:
+  max_dte_days: 120
+  moneyness:
+    min_strike_to_index: 0.50
+    max_strike_to_index: 2.00
+  emergency_moneyness:
+    enabled: false
+    min_strike_to_index: 0.40
+    max_strike_to_index: 2.50
+    min_regular_trades: 2
+  require:
+    valid_expiry: true
+    positive_index: true
+    nonnegative_price: true
+    nonnegative_mark: true
+    positive_iv: true
+    positive_amount: true
+  activation:
+    stateful: true
+    retain_subsequent_trades_until_expiry: true
+
+staging:
+  format: parquet
+  jsonl_enabled: false
+  root: storage/_staging/options/deribit/version=v1
+  shard_count: 64
+  atomic_rename: true
+  checksum: xxh64
+
+canonical_trades:
+  root: storage/options/deribit/trades/version=v1
+  partition_by:
+    - currency
+    - year
+    - month
+    - day
+  compression: zstd
+  compression_level: 6
+  target_file_size_mb: 192
+  static_fields_in_dimension: true
+  keep_full_trade_id: false
+  keep_trade_id_hash: true
+  keep_rare_identifiers: false
+
+compaction:
+  engine: duckdb
+  memory_limit_mb: 1024
+  temp_directory: storage/_tmp/duckdb
+  dedup_key:
+    - instrument_id
+    - trade_seq
+  sort_by:
+    - timestamp_ms
+    - instrument_id
+    - trade_seq
+
+snapshot_5m:
+  persistent: true
+  resolution: 5m
+  root: storage/options/deribit/snapshot_5m/version=v1
+  max_rows_per_timestamp: 64
+  expiry_rebalance: 1d
+  target_dte_days:
+    - 0
+    - 7
+    - 14
+    - 30
+    - 60
+    - 90
+  far_calendar:
+    enabled: true
+    target_dte: 120
+    max_expiries: 1
+  max_core_expiries: 6
+  max_total_expiries: 7
+  tiers:
+    - dte_min: 0
+      dte_max: 14
+      min_abs_delta: 0.12
+      max_abs_delta: 0.88
+      atm_strikes_each_side: 3
+      max_contracts_per_expiry: 16
+      include_15_delta_if_active: true
+      activity_window_hours: 6
+      min_regular_trades: 2
+      min_volume_btc: 1.0
+      anchor_ttl_hours: 2
+    - dte_min: 14
+      dte_max: 45
+      min_abs_delta: 0.15
+      max_abs_delta: 0.85
+      atm_strikes_each_side: 2
+      max_contracts_per_expiry: 12
+      include_25_delta_if_active: true
+      activity_window_hours: 12
+      min_regular_trades: 2
+      min_volume_btc: 1.0
+      anchor_ttl_hours: 4
+    - dte_min: 45
+      dte_max: 90
+      min_abs_delta: 0.20
+      max_abs_delta: 0.80
+      atm_strikes_each_side: 2
+      max_contracts_per_expiry: 10
+      activity_window_hours: 24
+      min_regular_trades: 2
+      anchor_ttl_hours: 8
+    - dte_min: 90
+      dte_max: 120
+      min_abs_delta: 0.40
+      max_abs_delta: 0.60
+      atm_strikes_each_side: 1
+      max_contracts_per_expiry: 6
+      activity_window_hours: 72
+      min_regular_trades: 2
+      anchor_ttl_hours: 24
+  columns:
+    persist_full_greeks: false
+    persist_execution_proxy: false
+    persist_model_delta: true
+    static_fields_in_dimension: true
+
+snapshot_1m:
+  persistent_full_history: false
+  build_on_demand: true
+  cache_root: storage/_cache/deribit_options/snapshot_1m
+  max_dte_days: 2
+  min_abs_delta: 0.30
+  max_abs_delta: 0.70
+  atm_strikes_each_side: 2
+  max_expiries: 2
+  max_rows_per_timestamp: 20
+  anchor_ttl_minutes: 30
+  cache:
+    max_size_mib: 512
+    ttl_days: 30
+    lru: true
+    delete_after_experiment: true
+
+pricing:
+  method: anchored_relative_iv
+  default_iv: null
+  index_source: option_trade_observation_v1
+  index_max_age_minutes: 30
+  persist_delta_only: true
+  calculate_other_greeks_on_load: true
+  prohibit_after_expiry: true
+
+execution_proxy:
+  source: trade_vs_exchange_mark
+  exclude:
+    block: true
+    combo: true
+    liquidation: true
+  buckets:
+    - side
+    - dte
+    - abs_delta
+    - premium_btc
+    - activity
+    - trade_amount
+  quantiles:
+    - 0.50
+    - 0.60
+    - 0.75
+    - 0.90
+    - 0.95
+  default_quantile: 0.75
+  min_bucket_samples: 100
+  rolling_lookback_days: 90
+  refit_frequency: 1d
+  prevent_future_leakage: true
+
+held_overlay:
+  enabled: true
+  build_on_demand: true
+  cache_root: storage/_cache/deribit_options/held_overlay
+  cache_max_mib: 512
+  cache_ttl_days: 30
+
+disk_budget:
+  canonical_target_gib: 8.0
+  warning_gib: 8.5
+  hard_stop_gib: 9.0
+  post_cleanup_filesystem_limit_gib: 10.0
+
+cleanup:
+  delete_staging_after_validation: true
+  delete_jsonl_after_validation: true
+  delete_compaction_temp: true
+  delete_orphan_tmp: true
+  delete_experiment_cache_after_run: true
+  cache_ttl_cleanup: true
+  rotate_logs_days: 14
+  vacuum_sqlite: true
+
+validation:
+  verify_coverage_ranges: true
+  verify_output_checksums: true
+  verify_dedup: true
+  verify_dimension_fk: true
+  quarantine_conflicts: true
+  auto_repair_ranges: true
+
+monitoring:
+  log_api_requests: true
+  log_retry_count: true
+  log_response_rows: true
+  log_retained_rows: true
+  log_discarded_rows: true
+  log_bytes_written: true
+  log_peak_rss: true
+  log_disk_budget: true
+  log_snapshot_rows: true

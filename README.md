@@ -28,6 +28,7 @@ Hiện storage chính dùng **Parquet**. Sau phase cleanup, `storage/` không c�
 | Binance Futures Metrics | `5m` | `BTCUSDT`, `ETHUSDT`, relation symbols, active BTC/ETH quarterlies | Binance Vision `daily/metrics`, scan full coverage | Định kỳ cuối ngày/REST tail perpetual | `BinanceFuturesMetrics5m`, `load_data("binance_futures_metrics_5m")` |
 | Binance Order Book Snapshot | `1h` | `BTCUSDT` perpetual + active BTCUSDT quarterlies | Rolling 30 ngày từ Vision `bookDepth` + REST current snapshot | Mỗi giờ | `BinanceOrderBookSnapshot1h`, `load_data("binance_orderbook_snapshot_1h")` |
 | Binance Options Snapshot | `5m` | Options Binance theo cấu hình hiện tại | Snapshot incremental, append theo ngày | Mỗi 5 phút | `BinanceOptions5m`, `load_data("options_5m")` |
+| Deribit BTC Options V1 | trades + `5m` snapshots | BTC inverse options compact-liquid universe | Deribit History API trades-only, gated by probe/pilot | Planned phased build | `DeribitOptionTrades`, `DeribitOptionSnapshots5m`, `load_data("deribit_option_trades")` |
 | VN Equity Daily raw | `1d` | Universe VN curated khoảng 300 symbols | Provider VN daily, lưu partition theo symbol/year | Hằng ngày `16:30 Asia/Ho_Chi_Minh` | `VnStockDaily`, `load_data("vn_stock_daily")` |
 | VN Daily Matrix | `1d` | Các symbols có raw daily trong `storage/vn/equity/1d` | Build từ canonical raw Parquet | Chạy builder khi cần sau raw daily update | `VNDailyMatrix`, `load_data("vn_daily_matrix", feature=...)` |
 | VN Equity Intraday | `1m` | VN stock symbols trong config | Provider VN intraday | Hằng ngày `16:30 Asia/Ho_Chi_Minh` | `VnStock1m`, `load_data("vn_stock_1m")` |
@@ -60,7 +61,11 @@ storage/
 │   │   └── volume.parquet
 │   └── futures/1m/symbol=VN30F1M/year=YYYY/month=MM/part.parquet
 └── options/
-    └── binance/snapshot_5m/underlying=BTC/year=YYYY/month=MM/day=DD/part.parquet
+    ├── binance/snapshot_5m/underlying=BTC/year=YYYY/month=MM/day=DD/part.parquet
+    └── deribit/
+        ├── instruments/version=v1/instruments.parquet
+        ├── trades/version=v1/currency=BTC/year=YYYY/month=MM/day=DD/part-*.parquet
+        └── snapshot_5m/version=v1/currency=BTC/year=YYYY/month=MM/day=DD/part-*.parquet
 ```
 
 Partitioned datasets lưu schema dài theo dòng. Matrix datasets lưu wide table: `index=time`, `columns=symbols`, value là từng feature.
@@ -172,6 +177,8 @@ from data_loader import (
     CryptoBinanceQuarterly1m,
     CryptoBinanceSpot1m,
     CryptoDailyMatrix,
+    DeribitOptionSnapshots5m,
+    DeribitOptionTrades,
     VNDailyMatrix,
     VnFutures1m,
     VnStock1m,
@@ -195,6 +202,8 @@ from data_loader import (
 | `BinanceOrderBookSnapshot1h` | `crypto_binance_orderbook_snapshot_1h`, `binance_orderbook_snapshot_1h`, `orderbook_snapshot_1h` | Long feature table |
 | `BinanceFuturesMetrics5m` | `crypto_binance_futures_metrics_5m`, `binance_futures_metrics_5m`, `futures_metrics_5m` | Long metrics table |
 | `BinanceOptions5m` | `options_5m` | Long options snapshot |
+| `DeribitOptionTrades` | `deribit_option_trades`, `deribit_btc_option_trades`, `deribit_options_trades_v1` | Long canonical option trade events |
+| `DeribitOptionSnapshots5m` | `deribit_option_snapshots_5m`, `deribit_btc_option_snapshots_5m`, `deribit_options_5m` | Long compact-liquid option snapshot tape |
 
 Tham số chung:
 
@@ -290,6 +299,22 @@ from data_loader import BinanceFuturesMetrics5m
 metrics = BinanceFuturesMetrics5m().load(symbols=["BTCUSDT", "ETHUSDT"], check_val=True)
 open_interest = BinanceFuturesMetrics5m().load_open_interest(symbols="BTCUSDT")
 long_short = BinanceFuturesMetrics5m().load_long_short_ratios(symbols="BTCUSDT")
+
+# Deribit BTC options V1. Phase 0 freezes endpoint/schema; data appears after probe/pilot/backfill phases.
+from data_loader import DeribitOptionSnapshots5m, DeribitOptionTrades
+
+deribit_trades = DeribitOptionTrades().load(
+    start_date="2024-01-01",
+    currency="BTC",
+    version="v1",
+)
+
+deribit_5m = DeribitOptionSnapshots5m().load(
+    start_date="2024-01-01",
+    currency="BTC",
+    entry_eligible_only=False,
+    version="v1",
+)
 
 # Binance options snapshot 5m. symbols là underlying, timestamp chính là snapshot_time.
 from data_loader import BinanceOptions5m
