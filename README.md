@@ -17,6 +17,11 @@ Hiện storage chính dùng **Parquet**. Sau phase cleanup, `storage/` không c�
 | Validation | Schema, duplicate key, monotonic time, OHLC logic, continuity theo dataset |
 | Loader SDK | [`data_loader.py`](data_loader.py) |
 
+## Agent Operating Rules
+
+- Sau mỗi lượt test/compile/live smoke có đọc/ghi Parquet hoặc gọi loader lớn, agent phải cleanup RAM rác bằng `gc.collect()` và `pyarrow.default_memory_pool().release_unused()` best-effort trước khi kết luận hoặc chuyển phase.
+- Báo cáo ngắn kết quả cleanup nếu task vừa chạy có nguy cơ giữ RAM, ví dụ: `gc.collect()` thu được bao nhiêu object và PyArrow memory pool còn bao nhiêu bytes allocated.
+
 ## Supported Data Sources
 
 | Dataset | Độ phân giải | Universe hiện tại | Historical/warmup | Update | Loader endpoint |

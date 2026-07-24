@@ -4898,6 +4898,7 @@ Technical debt to track:
 - Correctness is coverage-ledger based, not canonical dense sequence based.
 - Observed exchange mark and reconstructed mark remain separate fields/provenance.
 - Block/combo/liquidation trades are excluded from regular liquidity/execution calibration by default.
+- After test/compile/live smoke runs that touch Parquet or large loaders, agent must run best-effort memory cleanup with `gc.collect()` and `pyarrow.default_memory_pool().release_unused()`, then report collected object count and PyArrow bytes allocated when relevant.
 
 ### Open Questions For Probe/Pilot
 
