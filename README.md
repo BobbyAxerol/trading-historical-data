@@ -160,6 +160,12 @@ PYTHONPATH=. python -m collectors.binance_orderbook_snapshot_1h --mode once
 # Futures metrics 5m
 PYTHONPATH=. python -m collectors.binance_futures_metrics_5m --mode once
 
+# Deribit BTC options V1 API probe
+PYTHONPATH=. python -m collectors.deribit_option_trades probe --version v1 --json
+
+# Deribit probe with lightweight rate verification before production backfill phases
+PYTHONPATH=. python -m collectors.deribit_option_trades probe --version v1 --rate-ramp --max-rps 2 --requests-per-rps 1 --json
+
 # VN daily matrix rebuild từ raw Parquet
 PYTHONPATH=. python -m collectors.vn_daily_matrix
 ```
@@ -212,6 +218,16 @@ Tham số chung:
 - `limit`: giới hạn số dòng sau khi sort.
 - `check_val`: mặc định `True`; không tự tắt validation trong service downstream.
 - `columns`: với OHLCV loaders, mặc định chỉ đọc `time/symbol/open/high/low/close/volume` để giảm RAM. Truyền `columns="full"` nếu cần toàn bộ schema như `source`, `ingested_at`, `quote_volume`.
+
+### Deribit BTC Options V1 Notes
+
+Deribit V1 hiện đi theo phase riêng vì dữ liệu option trades rất lớn. Phase 1 chỉ probe API behavior và ghi report:
+
+```text
+state/deribit_options/version=v1/api_probe_report.json
+```
+
+`probe` không tải historical backfill. Nếu chạy không có `--rate-ramp`, report có thể có `status=blocked`; đây là guardrail nghĩa là chưa đủ điều kiện cho production backfill, không phải lỗi loader endpoint. Production backfill chỉ được mở khi report có đủ mandatory fields và rate ramp đã verify thật.
 - `timeframe`: khi gọi qua `load_data`, truyền `timeframe="5min"`/`"15min"`/`"1h"` để dùng endpoint resample-on-read.
 - `feature`: bắt buộc khi dùng router cho matrix datasets.
 

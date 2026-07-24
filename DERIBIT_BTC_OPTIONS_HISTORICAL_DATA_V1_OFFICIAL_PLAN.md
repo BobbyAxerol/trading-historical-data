@@ -4684,6 +4684,46 @@ Open issues:
 Commit:
 - Included in Phase 0 commit `Add Deribit option ingestion phase 0`.
 
+### 2026-07-24 UTC — Phase 1: API Probe
+
+Status: completed
+
+Changed:
+- Added synchronous Deribit JSON-RPC client wrapper with rate limiting, retry/backoff, `Retry-After` parsing, and explicit result classification.
+- Added probe runner that writes `state/deribit_options/version=v1/api_probe_report.json`.
+- Added CLI command `python -m collectors.deribit_option_trades probe --version v1`.
+- Probe report records `selected_page_size`, `verified_sorting`, `sequence_boundary_semantics`, `expired_instrument_coverage`, `has_more_semantics`, `safe_trade_rps`, `get_instruments_rps`, `retry_after_behavior`, `field_presence_statistics`, and `oldest_accessible_trade`.
+- Added Phase 1 unit tests for client success/error/malformed payload behavior and probe report guardrails.
+
+Commands:
+- `python -m unittest tests.test_deribit_phase0 tests.test_deribit_phase1`
+- `python -m unittest discover tests`
+- `python -m compileall collectors/deribit collectors/deribit_option_trades.py loaders data_loader.py tests/test_deribit_phase1.py`
+- Optional live probe: `python -m collectors.deribit_option_trades probe --version v1 --rate-ramp --max-rps 2 --requests-per-rps 1 --json`
+
+Validation:
+- `EMPTY_CONFIRMED` only means HTTP/JSON-RPC success with `result.trades == []`.
+- HTTP/JSON-RPC/network/decode failures remain `UNKNOWN`, not empty data.
+- `probe` without `--rate-ramp` writes a diagnostic report but keeps `production_backfill_allowed=false`.
+- Production backfill is allowed only when mandatory fields exist and rate ramp is actually verified.
+
+Metrics:
+- Unit tests use fake clients only.
+- No data backfill rows.
+- Storage writes: probe report only when command/test runs.
+
+Decisions:
+- Phase 1 stays on `requests` to avoid adding async dependencies before API behavior is known.
+- Conservative default RPS can be used for diagnostics but is not a production guarantee.
+- Sequence boundaries are recorded as observed semantics; downloader phases must still use overlap + dedupe.
+
+Open issues:
+- Live Deribit probe should be rerun before Phase 2/3 on the production host/network.
+- Expired instrument coverage remains observed coverage, not a complete-history guarantee.
+
+Commit:
+- Included in Phase 1 commit `Add Deribit API probe`.
+
 ## 5. Test Plan Theo Phase
 
 ### Phase 0 Tests

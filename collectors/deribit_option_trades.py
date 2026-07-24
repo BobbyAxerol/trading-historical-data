@@ -7,9 +7,9 @@ from typing import Any
 from collectors.common.env import load_environment
 from collectors.deribit.checkpoints import DeribitCheckpointStore
 from collectors.deribit.config import SUPPORTED_VERSION, load_deribit_config
+from collectors.deribit.probe import DeribitApiProbeRunner, ProbeOptions
 
-PHASE0_ONLY_COMMANDS = {
-    "probe": "Phase 1",
+RESERVED_COMMANDS = {
     "discover": "Phase 2",
     "backfill": "Phase 3",
     "sync-once": "Phase 3",
@@ -38,7 +38,14 @@ def build_parser() -> argparse.ArgumentParser:
     init_parser = subparsers.add_parser("init", help="Initialize Phase 0 config paths and SQLite checkpoint schema.")
     _add_common_args(init_parser)
 
-    for command, phase in PHASE0_ONLY_COMMANDS.items():
+    probe_parser = subparsers.add_parser("probe", help="Run Phase 1 Deribit API behavior probe.")
+    _add_common_args(probe_parser)
+    probe_parser.add_argument("--sample-instruments", type=int, default=24)
+    probe_parser.add_argument("--rate-ramp", action="store_true")
+    probe_parser.add_argument("--max-rps", type=float, default=5.0)
+    probe_parser.add_argument("--requests-per-rps", type=int, default=2)
+
+    for command, phase in RESERVED_COMMANDS.items():
         sub = subparsers.add_parser(command, help=f"Reserved command for {phase}.")
         _add_common_args(sub)
         if command == "repair":
@@ -73,11 +80,22 @@ def _run_init(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def _run_probe(args: argparse.Namespace) -> dict[str, Any]:
+    config = _config_from_args(args)
+    options = ProbeOptions(
+        sample_instruments=max(1, int(args.sample_instruments)),
+        rate_ramp=bool(args.rate_ramp),
+        max_rps=max(1.0, float(args.max_rps)),
+        requests_per_rps=max(1, int(args.requests_per_rps)),
+    )
+    return DeribitApiProbeRunner(config, options=options).run()
+
+
 def _not_implemented(command: str) -> dict[str, Any]:
     return {
         "status": "blocked",
         "command": command,
-        "reason": f"{command} is reserved for {PHASE0_ONLY_COMMANDS[command]} and is not implemented in Phase 0.",
+        "reason": f"{command} is reserved for {RESERVED_COMMANDS[command]} and is not implemented yet.",
     }
 
 
@@ -94,6 +112,17 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Deribit {payload['dataset_version']} initialized")
             print(f"config: {payload['config_path']}")
             print(f"checkpoint: {payload['checkpoint_path']}")
+        return 0
+
+    if args.command == "probe":
+        payload = _run_probe(args)
+        if args.json:
+            print(json.dumps(payload, indent=2, sort_keys=True))
+        else:
+            print(f"Deribit API probe status: {payload['status']}")
+            print(f"report: {DeribitApiProbeRunner(_config_from_args(args)).report_path}")
+            print(f"selected_page_size: {payload.get('selected_page_size')}")
+            print(f"safe_trade_rps: {payload.get('safe_trade_rps')}")
         return 0
 
     payload = _not_implemented(args.command)
