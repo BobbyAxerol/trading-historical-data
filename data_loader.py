@@ -10,6 +10,7 @@ from typing import Any
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
+from loaders.deribit_options import DeribitOptionOverlayLoader, DeribitOptionSnapshots5mLoader, DeribitOptionTradesLoader
 
 # Setup Logger
 logger = logging.getLogger("data_loader")
@@ -806,6 +807,104 @@ class BinanceFuturesMetrics5m(MarketDataLoaderBase):
         return df[[col for col in cols if col in df.columns]] if not df.empty else df
 
 
+class DeribitOptionTrades:
+    """Loads Deribit BTC option canonical trade events (V1, compact-liquid trades-only)."""
+
+    DATASET_NAME = "deribit_option_trades"
+    TZ_INFO = "UTC"
+
+    def __init__(self):
+        self._loader = DeribitOptionTradesLoader()
+
+    def load(
+        self,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        currency: str = "BTC",
+        instruments: list[int] | int | None = None,
+        option_type: str | None = None,
+        dte_min: int | None = None,
+        dte_max: int | None = None,
+        columns: str | list[str] | tuple[str, ...] | None = None,
+        version: str = "v1",
+        limit: int | None = None,
+        check_val: bool = True,
+    ) -> pd.DataFrame:
+        return self._loader.load(
+            start_date=start_date,
+            end_date=end_date,
+            currency=currency,
+            instruments=instruments,
+            option_type=option_type,
+            dte_min=dte_min,
+            dte_max=dte_max,
+            columns=columns,
+            version=version,
+            limit=limit,
+            check_val=check_val,
+        )
+
+
+class DeribitOptionSnapshots5m:
+    """Loads Deribit BTC option compact-liquid 5m candidate snapshots (V1)."""
+
+    DATASET_NAME = "deribit_option_snapshots_5m"
+    TZ_INFO = "UTC"
+
+    def __init__(self):
+        self._loader = DeribitOptionSnapshots5mLoader()
+
+    def load(
+        self,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        currency: str = "BTC",
+        entry_eligible_only: bool = False,
+        columns: str | list[str] | tuple[str, ...] | None = None,
+        version: str = "v1",
+        limit: int | None = None,
+        check_val: bool = True,
+    ) -> pd.DataFrame:
+        return self._loader.load(
+            start_date=start_date,
+            end_date=end_date,
+            currency=currency,
+            entry_eligible_only=entry_eligible_only,
+            columns=columns,
+            version=version,
+            limit=limit,
+            check_val=check_val,
+        )
+
+
+class DeribitOptionOverlay:
+    """Builds held-position overlay rows on demand. Phase 0 returns an empty schema-compatible frame."""
+
+    DATASET_NAME = "deribit_option_overlay"
+    TZ_INFO = "UTC"
+
+    def __init__(self):
+        self._loader = DeribitOptionOverlayLoader()
+
+    def load(
+        self,
+        instrument_ids: list[int],
+        start_date: str | None = None,
+        end_date: str | None = None,
+        currency: str = "BTC",
+        resolution: str = "5m",
+        version: str = "v1",
+    ) -> pd.DataFrame:
+        return self._loader.load(
+            instrument_ids=instrument_ids,
+            start_date=start_date,
+            end_date=end_date,
+            currency=currency,
+            resolution=resolution,
+            version=version,
+        )
+
+
 class CryptoDailyMatrix:
     """Loads pivoted daily matrices (open, high, low, close, volume) for top 400 Binance futures."""
 
@@ -1359,6 +1458,13 @@ def load_data(
     columns: str | list[str] | tuple[str, ...] | None = None,
     timeframe: str | None = None,
     engine: str = "duckdb",
+    currency: str = "BTC",
+    instruments: list[int] | int | None = None,
+    option_type: str | None = None,
+    dte_min: int | None = None,
+    dte_max: int | None = None,
+    version: str = "v1",
+    entry_eligible_only: bool = False,
 ) -> pd.DataFrame:
     """Master routing wrapper to invoke the correct reader subclass."""
     dataset_lower = dataset.lower()
@@ -1393,6 +1499,31 @@ def load_data(
         return BinanceFuturesMetrics5m().load(symbols, start_date, end_date, limit, check_val, columns=columns)
     elif dataset_lower in ("options_5m",):
         return BinanceOptions5m().load(symbols, start_date, end_date, limit, check_val, columns=columns)
+    elif dataset_lower in ("deribit_option_trades", "deribit_btc_option_trades", "deribit_options_trades_v1"):
+        return DeribitOptionTrades().load(
+            start_date=start_date,
+            end_date=end_date,
+            currency=currency,
+            instruments=instruments,
+            option_type=option_type,
+            dte_min=dte_min,
+            dte_max=dte_max,
+            columns=columns,
+            version=version,
+            limit=limit,
+            check_val=check_val,
+        )
+    elif dataset_lower in ("deribit_option_snapshots_5m", "deribit_btc_option_snapshots_5m", "deribit_options_5m"):
+        return DeribitOptionSnapshots5m().load(
+            start_date=start_date,
+            end_date=end_date,
+            currency=currency,
+            entry_eligible_only=entry_eligible_only,
+            columns=columns,
+            version=version,
+            limit=limit,
+            check_val=check_val,
+        )
     elif dataset_lower in ("binance_daily_matrix",):
         if not feature:
             raise ValueError("Parameter 'feature' is required for binance_daily_matrix.")
