@@ -184,6 +184,9 @@ PYTHONPATH=. python -m collectors.deribit_option_trades validate --version v1 --
 PYTHONPATH=. python -m collectors.deribit_option_trades repair --version v1 --only-unresolved --json
 PYTHONPATH=. python -m collectors.deribit_option_trades cleanup --version v1 --json
 
+# Deribit pilot benchmark acceptance gate trước full historical backfill
+PYTHONPATH=. python -m collectors.deribit_option_trades pilot --version v1 --json
+
 # VN daily matrix rebuild từ raw Parquet
 PYTHONPATH=. python -m collectors.vn_daily_matrix
 ```
@@ -259,6 +262,8 @@ Do path có thư mục hive-style `version=v1`, code nội bộ đọc physical 
 Phase 3 `backfill`/`sync-once` tải trade chunks vào immutable staging Parquet, chưa compact sang canonical trades. `sync-once` refresh discovery trước khi lập task; `backfill` chỉ refresh khi truyền `--discover-first`. Mỗi chunk đi theo thứ tự: API success -> normalize/filter -> write temp parquet -> atomic rename/fsync -> commit `download_ranges` -> advance `instrument_state`. API error/unknown chỉ tăng retry state, không advance cursor.
 
 Phase 4 `compact` dùng DuckDB memory/temp limits để publish canonical daily Parquet. `validate` kiểm coverage ledger, checksum staging, canonical schema, duplicate key, basic finance fields, và FK sang instrument dimension. `cleanup` mặc định dry-run; chỉ xoá staging khi validate pass và có `--confirm`.
+
+Phase 5 `pilot` ghi ba report deterministic cho low/normal/high volatility windows và `pilot_summary.json`. Command này không chạy full history; nếu ba window chưa có representative samples hoặc acceptance chưa pass thì status là `blocked` để chặn Phase 6.
 - `timeframe`: khi gọi qua `load_data`, truyền `timeframe="5min"`/`"15min"`/`"1h"` để dùng endpoint resample-on-read.
 - `feature`: bắt buộc khi dùng router cho matrix datasets.
 
