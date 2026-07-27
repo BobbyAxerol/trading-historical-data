@@ -102,3 +102,21 @@ load_data("crypto_binance_orderbook_snapshot_1h", symbols="BTCUSDT")
 load_data("binance_orderbook_snapshot_1h", symbols="BTCUSDT")
 load_data("orderbook_snapshot_1h", symbols="BTCUSDT")
 ```
+
+
+## Downstream Contract: VPS2 basis_arb_binance
+
+Consumer currently using this dataset:
+
+```text
+/root/bobby/execution_alpha/alphas/basis_arb_binance
+```
+
+Basis-arb loads two concrete symbols separately, for example `BTCUSDT` and `BTCUSDT_260925`, then maps quote-notional 1pct depth into the research feature names:
+
+- perp `q_bid_depth_1pct` / `q_ask_depth_1pct` -> `bid_depth_1` / `ask_depth_1`;
+- delivery `q_bid_depth_1pct` / `q_ask_depth_1pct` -> `q_bid_depth_1` / `q_ask_depth_1`.
+
+This preserves the mandatory naming rule that source `q_` means quote-notional, not quarterly. Quarterly identity must always come from the concrete `symbol`/`contract_type` rows.
+
+The consumer expects about 30 days of hourly rows. Temporary Vision catch-up gaps are acceptable if the latest rows are fresh enough, but the consumer may fail closed if the local cache is missing or stale.
