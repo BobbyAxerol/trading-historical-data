@@ -139,6 +139,11 @@ class DeribitPilotRunner:
                 validation["status"] == "ok",
             ]
         ) else "blocked"
+        notes = ["Pilot does not run full history."]
+        if status == "ok":
+            notes.append("Pilot acceptance passed; Phase 6 full historical backfill gate is open.")
+        else:
+            notes.append("Status remains blocked until all three deterministic windows have representative samples and acceptance checks pass.")
         return {
             "status": status,
             "phase": "Phase 5",
@@ -154,10 +159,7 @@ class DeribitPilotRunner:
             "measured_rows": measured_rows,
             "measured_bytes": measured_bytes,
             "bytes_per_trade": bytes_per_trade,
-            "notes": [
-                "Pilot does not run full history.",
-                "Status remains blocked until all three deterministic windows have representative samples and acceptance checks pass.",
-            ],
+            "notes": notes,
         }
 
     def _project_permanent_gib(self, bytes_per_trade: float | None) -> float | None:

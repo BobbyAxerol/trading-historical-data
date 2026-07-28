@@ -105,6 +105,7 @@ class TestDeribitPilotPhase5(EnvCase):
         self.assertEqual(set(summary["reports"]), {"low", "normal", "high"})
         self.assertTrue(summary["acceptance"]["all_windows_have_samples"])
         self.assertEqual(summary["acceptance"]["strategy_package_coverage_pct"], 100.0)
+        self.assertIn("Phase 6 full historical backfill gate is open", " ".join(summary["notes"]))
         for path in summary["reports"].values():
             self.assertTrue(Path(path).exists())
         self.assertTrue(Path(summary["pilot_summary_path"]).exists())
@@ -117,6 +118,7 @@ class TestDeribitPilotPhase5(EnvCase):
             summary = DeribitPilotRunner(config, window_days=1, min_rows_per_window=1).run()
         self.assertEqual(summary["status"], "blocked")
         self.assertFalse(summary["acceptance"]["all_windows_have_samples"])
+        self.assertIn("Status remains blocked", " ".join(summary["notes"]))
         self.assertTrue(Path(summary["pilot_summary_path"]).exists())
 
     def test_cli_pilot_invokes_runner(self):

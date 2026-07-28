@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -53,6 +54,7 @@ class DeribitValidator:
         if not self.config.checkpoint_path.exists():
             report.acquisition_errors.append(f"checkpoint missing: {self.config.checkpoint_path}")
             return
+        cleaned_files = self._cleanup_manifest_files()
         with sqlite3.connect(self.config.checkpoint_path) as con:
             con.row_factory = sqlite3.Row
             rows = con.execute(
@@ -82,7 +84,9 @@ class DeribitValidator:
                     continue
                 path = Path(str(output_file))
                 if not path.exists():
-                    report.acquisition_errors.append(f"{label} output missing: {path}")
+                    if self._is_cleaned_output(path, row["output_checksum"], cleaned_files):
+                        continue
+                    report.acquisition_errors.append(f"{label} output missing and not in cleanup manifest: {path}")
                     continue
                 expected = row["output_checksum"]
                 actual = file_checksum(path)
@@ -164,6 +168,27 @@ class DeribitValidator:
         if not self.config.canonical_trades_root.exists():
             return []
         return sorted(path for path in self.config.canonical_trades_root.rglob("*.parquet") if not path.name.endswith(".tmp"))
+
+    def _cleanup_manifest_files(self) -> dict[str, Any]:
+        path = self.config.checkpoint_path.parent / "staging_cleanup_manifest.json"
+        if not path.exists():
+            return {}
+        try:
+            payload = json.loads(path.read_text())
+        except json.JSONDecodeError:
+            return {}
+        if payload.get("status") != "ok":
+            return {}
+        files = payload.get("files")
+        return dict(files) if isinstance(files, dict) else {}
+
+    def _is_cleaned_output(self, path: Path, expected_checksum: Any, cleaned_files: dict[str, Any]) -> bool:
+        entry = cleaned_files.get(str(path))
+        if not isinstance(entry, dict):
+            return False
+        expected = str(expected_checksum or "")
+        recorded = str(entry.get("checksum") or "")
+        return bool(expected and recorded and expected == recorded)
 
 
 def _sql_quote(value: str) -> str:

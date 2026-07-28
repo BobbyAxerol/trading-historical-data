@@ -135,6 +135,10 @@ class TestDeribitPhase4(EnvCase):
         confirmed = DeribitCleanup(config).run(confirm=True)
         self.assertEqual(confirmed["files_deleted"], 1)
         self.assertFalse(staging_path.exists())
+        post_cleanup_validation = DeribitValidator(config).run()
+        self.assertEqual(post_cleanup_validation["status"], "ok")
+        manifest_path = config.checkpoint_path.parent / "staging_cleanup_manifest.json"
+        self.assertTrue(manifest_path.exists())
 
     def test_repair_planner_reports_retryable_state(self):
         config, store, _ = self._prepare([staging_row(1)])

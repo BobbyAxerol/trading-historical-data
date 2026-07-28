@@ -4971,6 +4971,63 @@ Decision:
 - The next safe step is targeted pilot sampling only: run bounded `backfill` with explicit pilot-window symbols and `--allow-blocked-pilot`, then `compact`, `validate`, `repair`, and `pilot` until `pilot_summary.json` returns `status=ok`.
 - Treat any broad `backfill`/`sync-once` before an `ok` pilot as a bug or manual override violation.
 
+### 2026-07-28 UTC — Targeted Pilot Sampling Before Phase 6
+
+Status: completed
+
+Changed:
+- Ran bounded targeted pilot sampling for explicit BTC option symbols across the three deterministic Phase 5 windows.
+- Confirmed sandboxed network calls can hang/retry silently; Deribit History API sampling was run with approved network escalation.
+- Compacted targeted staging into canonical daily Parquet.
+- Added cleanup manifest support so `cleanup --confirm` can remove staging while future `validate` still accepts ledger rows whose deleted staging files are recorded with matching checksum.
+- Fixed Phase 5 pilot notes so `status=ok` reports that the Phase 6 gate is open instead of saying the run remains blocked.
+
+Targeted symbols:
+- high window `2021-05-01` to `2021-05-31`: `BTC-25JUN21-40000-P`, `BTC-25JUN21-40000-C`, `BTC-25JUN21-50000-P`, `BTC-25JUN21-50000-C`, `BTC-25JUN21-56000-P`, `BTC-25JUN21-56000-C`.
+- low window `2022-09-01` to `2022-10-01`: `BTC-30SEP22-19000-P`, `BTC-30SEP22-19000-C`, `BTC-30SEP22-20000-P`, `BTC-30SEP22-20000-C`, `BTC-30SEP22-21000-P`, `BTC-30SEP22-21000-C`.
+- normal window `2024-04-01` to `2024-05-01`: `BTC-31MAY24-65000-P`, `BTC-31MAY24-65000-C`, `BTC-31MAY24-70000-P`, `BTC-31MAY24-70000-C`, `BTC-31MAY24-75000-P`, `BTC-31MAY24-75000-C`.
+
+Commands:
+- `python -m collectors.deribit_option_trades backfill --version v1 --symbols BTC-31MAY24-70000-C --max-tasks 1 --allow-blocked-pilot --json`
+- `python -m collectors.deribit_option_trades backfill --version v1 --symbols <17 explicit pilot symbols> --max-tasks 17 --allow-blocked-pilot --json`
+- `python -m collectors.deribit_option_trades compact --version v1 --json`
+- `python -m collectors.deribit_option_trades validate --version v1 --json`
+- `python -m collectors.deribit_option_trades repair --version v1 --only-unresolved --json`
+- `python -m collectors.deribit_option_trades pilot --version v1 --json`
+- `python -m collectors.deribit_option_trades cleanup --version v1 --confirm --json`
+
+Validation:
+- Phase 0-5 unit suite passed: `37 tests`.
+- Phase 4/5 focused suite passed: `9 tests`.
+- Compile check passed for Deribit collectors, loader package, `data_loader.py`, and touched tests.
+- Post-cleanup `validate` returned `status=ok`, `canonical_files=378`, `canonical_rows=82025`, `duplicate_keys=0`.
+- Post-cleanup `repair --only-unresolved` returned `status=ok`, `retryable_instruments=0`, `missing_output_ranges=0`.
+- Post-cleanup `pilot` returned `status=ok`.
+- Staging cleanup deleted `19` files / `3,001,172` bytes; remaining staging parquet files: `0`.
+- Post-test cleanup: `gc.collect()` collected `5`, PyArrow memory pool `0` bytes allocated.
+
+Metrics:
+- Targeted API sampling wrote `18` staging files.
+- First single-symbol smoke: `response_rows=7017`, `retained_rows=7017`, `peak_rss_mb=370.98`.
+- Remaining batch: `response_rows=81217`, `retained_rows=74675`, `discarded_rows=6542`, `peak_rss_mb=369.48`.
+- Compaction: `days_compacted=378`, `output_files=378`, `output_rows=82025`, `conflict_groups=0`.
+- Pilot measured rows: `33779`.
+- Pilot measured bytes: `1102574`.
+- Pilot bytes per trade: `32.64081233902721`.
+- Pilot total canonical bytes: `3064679`.
+- Pilot ingestion RSS: about `201 MB`, below `750 MB` hard limit.
+- Pilot permanent size projection: `0.000033 GiB`, below `9 GiB` gate. This is a pilot proxy, not the final full-history storage estimate.
+
+Pilot windows:
+- low: `2022-09-01` to `2022-10-01`, `canonical_rows=16151`, `contracts=5`, `trade_days=30/30`, coverage `100%`.
+- normal: `2024-04-01` to `2024-05-01`, `canonical_rows=4401`, `contracts=6`, `trade_days=30/30`, coverage `100%`.
+- high: `2021-05-01` to `2021-05-31`, `canonical_rows=13227`, `contracts=6`, `trade_days=30/30`, coverage `100%`.
+
+Decisions:
+- Phase 6 full historical backfill gate is now open because `pilot_summary.json` is `status=ok`.
+- Do not interpret the tiny pilot permanent-size projection as the final full-history size estimate; Phase 6 must still emit final storage report after full compact/cleanup.
+- Keep broad Phase 6 backfill separate from this targeted pilot sampling commit/run.
+
 ## 5. Test Plan Theo Phase
 
 ### Phase 0 Tests
