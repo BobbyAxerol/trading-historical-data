@@ -4938,6 +4938,39 @@ Added guard:
 Decision:
 - Do not start Phase 6 full historical backfill until targeted pilot windows have enough samples and `pilot` returns `status=ok`.
 
+### 2026-07-28 UTC — Pre-Phase 6 Readiness Audit Refresh
+
+Status: blocked
+
+Checked:
+- Branch: `feat/option-ingestion`.
+- Working tree was clean before this audit note.
+- Phase 0-5 unit suite passed: `37 tests`.
+- Compile check passed for Deribit collectors, loader package, `data_loader.py`, and Phase 0-5 tests.
+- Live/current `validate` returned `status=ok`, `canonical_files=1`, `canonical_rows=9`, `duplicate_keys=0`.
+- Live/current `repair --only-unresolved` returned `status=ok`, `retryable_instruments=0`, `missing_output_ranges=0`.
+- `api_probe_report.json` still has `status=ok`, `production_backfill_allowed=true`, `selected_page_size=10000`, `safe_trade_rps=2.0`, `get_instruments_rps=1.0`.
+- Loader smoke passed for `DeribitOptionTrades().load(...)` and `load_data("deribit_option_trades", ...)` against the tiny canonical sample.
+- Phase 7+ commands such as `build-snapshot-5m` remain explicitly reserved/blocked.
+- Normal `backfill --max-tasks 1` returned `status=blocked` because `pilot_summary.json` is not `ok`.
+- Blocked-pilot override guard works: `--allow-blocked-pilot` is rejected unless symbols are explicit and `max_tasks<=20`.
+- Post-test cleanup: `gc.collect()` collected `5`, PyArrow memory pool `0` bytes allocated.
+
+Blocking reason:
+- Phase 5 implementation is complete, but Phase 5 acceptance is not complete.
+- Current `pilot` output is still `status=blocked`.
+- Low/normal/high deterministic windows still have `0` canonical rows each:
+  - low: `2022-09-01` to `2022-10-01`;
+  - normal: `2024-04-01` to `2024-05-01`;
+  - high: `2021-05-01` to `2021-05-31`.
+- `permanent_size_projection_gib` is `null`.
+- `strategy_package_coverage_pct` is `0.0`.
+
+Decision:
+- Do not start Phase 6 full historical backfill yet.
+- The next safe step is targeted pilot sampling only: run bounded `backfill` with explicit pilot-window symbols and `--allow-blocked-pilot`, then `compact`, `validate`, `repair`, and `pilot` until `pilot_summary.json` returns `status=ok`.
+- Treat any broad `backfill`/`sync-once` before an `ok` pilot as a bug or manual override violation.
+
 ## 5. Test Plan Theo Phase
 
 ### Phase 0 Tests
