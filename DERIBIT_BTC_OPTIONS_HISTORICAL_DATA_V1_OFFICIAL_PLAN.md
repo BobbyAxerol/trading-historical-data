@@ -5047,6 +5047,8 @@ Changed:
 - Added Docker Compose one-shot jobs:
   - `deribit-option-backfill-2022`;
   - `deribit-option-backfill-full`;
+  - `deribit-option-cycle-2022`;
+  - `deribit-option-cycle-full`;
   - `deribit-option-compact`;
   - `deribit-option-validate`;
   - `deribit-option-repair`;
@@ -5105,6 +5107,11 @@ Controlled 2022 Docker pilot slice:
 - Docker cleanup after pilot deleted `68` staging files.
 - Final Docker validate after cleanup remained `status=ok`.
 - Final staging parquet count: `0`.
+- Disk check after pilot:
+  - `storage/options/deribit=26M`;
+  - `state/deribit_options=23M`;
+  - staging parquet files: `0`;
+  - pilot rows are already merged into canonical storage, not left in staging.
 - Checkpoint summary after pilot:
   - `download_ranges=4131`;
   - `CAUGHT_UP_ACTIVE=1`;
@@ -5117,6 +5124,7 @@ Decision:
 - First controlled slice is expiry up to `2022-12-31` via `deribit-option-backfill-2022`.
 - The first 2022 pilot slice validates cleanly. Do not start full historical in chat; operator should inspect this slice first, then continue with Docker batches.
 - After the 2022 slice is accepted, continue remaining history with `deribit-option-backfill-full` in checkpointed batches.
+- Preferred background command is `docker compose --profile deribit-full up -d deribit-option-cycle-full` because it runs `backfill -> compact -> validate -> cleanup -> validate` and then exits the container. Re-running the same command later resumes from SQLite checkpoint.
 
 ## 5. Test Plan Theo Phase
 

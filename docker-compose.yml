@@ -139,6 +139,44 @@ services:
       STATE_ROOT: /app/state
       LOG_ROOT: /app/logs
 
+  deribit-option-cycle-2022:
+    <<: *get-data-service
+    profiles: ["bootstrap", "deribit"]
+    restart: "no"
+    command:
+      - "sh"
+      - "-c"
+      - >
+        python -m collectors.deribit_option_trades backfill --version v1 --expiry-end 2022-12-31 --max-tasks ${DERIBIT_BACKFILL_MAX_TASKS:-500} --progress-every ${DERIBIT_PROGRESS_EVERY:-25}
+        && python -m collectors.deribit_option_trades compact --version v1 --progress-every ${DERIBIT_PROGRESS_EVERY:-25}
+        && python -m collectors.deribit_option_trades validate --version v1 --json
+        && python -m collectors.deribit_option_trades cleanup --version v1 --confirm --json
+        && python -m collectors.deribit_option_trades validate --version v1 --json
+    environment:
+      TZ: UTC
+      DATA_ROOT: /app/storage
+      STATE_ROOT: /app/state
+      LOG_ROOT: /app/logs
+
+  deribit-option-cycle-full:
+    <<: *get-data-service
+    profiles: ["bootstrap", "deribit-full"]
+    restart: "no"
+    command:
+      - "sh"
+      - "-c"
+      - >
+        python -m collectors.deribit_option_trades backfill --version v1 --max-tasks ${DERIBIT_BACKFILL_MAX_TASKS:-500} --progress-every ${DERIBIT_PROGRESS_EVERY:-25}
+        && python -m collectors.deribit_option_trades compact --version v1 --progress-every ${DERIBIT_PROGRESS_EVERY:-25}
+        && python -m collectors.deribit_option_trades validate --version v1 --json
+        && python -m collectors.deribit_option_trades cleanup --version v1 --confirm --json
+        && python -m collectors.deribit_option_trades validate --version v1 --json
+    environment:
+      TZ: UTC
+      DATA_ROOT: /app/storage
+      STATE_ROOT: /app/state
+      LOG_ROOT: /app/logs
+
   deribit-option-compact:
     <<: *get-data-service
     profiles: ["bootstrap", "deribit"]

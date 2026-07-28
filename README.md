@@ -197,6 +197,13 @@ PYTHONPATH=. python -m collectors.vn_daily_matrix
 Deribit Phase 6 backfill vận hành bằng Docker one-shot jobs, không chạy raw shell dài trong chat. Job backfill có progress log dạng `deribit_task_start`, `deribit_task_done`, `deribit_backfill_done`, đọc được bằng `docker compose logs -f deribit-option-backfill-2022`.
 
 ```bash
+# Chạy nền một batch đến expiry 2022, xong tự compact/validate/cleanup rồi exit.
+DERIBIT_BACKFILL_MAX_TASKS=500 DERIBIT_PROGRESS_EVERY=25 \
+docker compose --profile deribit up -d deribit-option-cycle-2022
+
+# Xem tiến trình nền.
+docker compose --profile deribit logs -f deribit-option-cycle-2022
+
 # Backfill thử đoạn history có expiry đến hết 2022, rồi dừng theo batch checkpoint.
 DERIBIT_BACKFILL_MAX_TASKS=500 DERIBIT_PROGRESS_EVERY=25 \
 docker compose --profile deribit run --rm deribit-option-backfill-2022
@@ -210,11 +217,17 @@ docker compose --profile deribit run --rm deribit-option-cleanup
 # Chỉ dùng sau khi đoạn 2022 ổn định.
 DERIBIT_BACKFILL_MAX_TASKS=500 DERIBIT_PROGRESS_EVERY=25 \
 docker compose --profile deribit-full run --rm deribit-option-backfill-full
+
+# Chạy nền full-history một batch, xong tự compact/validate/cleanup rồi exit.
+DERIBIT_BACKFILL_MAX_TASKS=500 DERIBIT_PROGRESS_EVERY=25 \
+docker compose --profile deribit-full up -d deribit-option-cycle-full
+
+docker compose --profile deribit-full logs -f deribit-option-cycle-full
 ```
 
 `deribit-option-backfill-2022` filter theo `--expiry-end 2022-12-31`; nó không đoán bằng số task. Nếu container bị dừng, SQLite checkpoint resume từ `last_processed_seq`; nếu API treo ở một request, Docker logs vẫn cho biết đang ở `instrument/start_seq/end_seq` nào.
 
-Checkpoint Deribit lưu staging path dạng portable `storage/...`, không phụ thuộc host path `/root/...` hay container path `/app/...`. Sau mỗi batch backfill phải chạy đủ `compact -> validate -> cleanup`; cleanup chỉ xóa staging khi validate `status=ok` và ghi `staging_cleanup_manifest.json`, vì vậy validate sau cleanup vẫn audit được checkpoint.
+Checkpoint Deribit lưu staging path dạng portable `storage/...`, không phụ thuộc host path `/root/...` hay container path `/app/...`. Sau mỗi batch backfill phải chạy đủ `compact -> validate -> cleanup`; cleanup chỉ xóa staging khi validate `status=ok` và ghi `staging_cleanup_manifest.json`, vì vậy validate sau cleanup vẫn audit được checkpoint. Các service `deribit-option-cycle-*` đã tự chạy đủ chain này rồi exit; dùng lại cùng command sau này sẽ tiếp tục từ SQLite checkpoint, không backfill lại từ đầu.
 
 ## Loader Endpoints
 
