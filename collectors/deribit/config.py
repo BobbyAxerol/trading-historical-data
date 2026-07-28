@@ -86,6 +86,15 @@ class DeribitConfig:
     def snapshot_5m_root(self) -> Path:
         return _resolve_storage_path(str(self.raw["snapshot_5m"]["root"]))
 
+    def to_storage_reference(self, path: str | Path | None) -> str | None:
+        """Return a DATA_ROOT-portable storage reference when possible."""
+        if path is None:
+            return None
+        return storage_reference(path) or str(path)
+
+    def resolve_storage_reference(self, path: str | Path) -> Path:
+        return resolve_storage_reference(path)
+
 
 def _resolve_storage_path(value: str) -> Path:
     configured = Path(value)
@@ -95,6 +104,39 @@ def _resolve_storage_path(value: str) -> Path:
     if parts and parts[0] == "storage":
         return data_root().joinpath(*parts[1:])
     return data_root() / configured
+
+
+def storage_reference(path: str | Path) -> str | None:
+    """Normalize a storage path to a portable ``storage/...`` reference.
+
+    Historical pilot runs wrote host absolute paths into the checkpoint. Docker
+    jobs mount the same directory at /app/storage, so checkpoint references must
+    be portable across runtimes.
+    """
+    value = str(path)
+    configured = Path(value)
+    parts = configured.parts
+    if parts and parts[0] == "storage":
+        return Path(*parts).as_posix()
+    try:
+        relative = configured.resolve().relative_to(data_root())
+        return Path("storage", relative).as_posix()
+    except ValueError:
+        pass
+    if "storage" in parts:
+        index = parts.index("storage")
+        trailing = parts[index + 1 :]
+        if trailing:
+            return Path("storage", *trailing).as_posix()
+    return None
+
+
+def resolve_storage_reference(path: str | Path) -> Path:
+    reference = storage_reference(path)
+    if reference:
+        relative_parts = Path(reference).parts[1:]
+        return data_root().joinpath(*relative_parts)
+    return Path(str(path))
 
 
 def _stable_hash(payload: dict[str, Any]) -> str:

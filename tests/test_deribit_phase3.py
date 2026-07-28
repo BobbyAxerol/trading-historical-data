@@ -12,7 +12,7 @@ import pyarrow.parquet as pq
 from collectors.deribit.checkpoints import DeribitCheckpointStore
 from collectors.deribit.client import DeribitApiResult
 from collectors.deribit.config import load_deribit_config
-from collectors.deribit.engine import DeribitTradeDownloader, DownloaderOptions
+from collectors.deribit.engine import DeribitTradeDownloader, DownloaderOptions, date_boundary_ms
 from collectors.deribit.instruments import write_instrument_dimension
 from collectors.deribit_option_trades import main as deribit_cli_main
 
@@ -79,9 +79,10 @@ def trade(seq: int, *, timestamp_ms=1700000000000, index_price=100000.0, iv=55.0
 class FakeTradeClient:
     def __init__(self, result):
         self.result = result
+        self.calls = []
 
     def get_last_trades_by_instrument(self, instrument_name: str, **params):
-        del instrument_name, params
+        self.calls.append((instrument_name, params))
         return self.result
 
 
@@ -123,8 +124,9 @@ class TestDeribitDownloaderPhase3(EnvCase):
         self.assertEqual(len(ranges), 1)
         self.assertEqual(ranges[0]["response_trade_count"], 2)
         self.assertEqual(ranges[0]["retained_trade_count"], 2)
-        self.assertTrue(Path(ranges[0]["output_file"]).exists())
-        table = pq.ParquetFile(ranges[0]["output_file"]).read()
+        output_path = config.resolve_storage_reference(ranges[0]["output_file"])
+        self.assertTrue(output_path.exists())
+        table = pq.ParquetFile(output_path).read()
         self.assertEqual(table.column("trade_seq").to_pylist(), [1, 2])
 
         state = store.instrument_states()[0]
@@ -206,9 +208,42 @@ class TestDeribitDownloaderPhase3(EnvCase):
         with patch("collectors.deribit_option_trades.DeribitTradeDownloader") as downloader_cls:
             downloader_cls.return_value.run.return_value = payload
             with redirect_stdout(StringIO()):
-                code = deribit_cli_main(["backfill", "--json", "--max-tasks", "1"])
+                code = deribit_cli_main(["backfill", "--json", "--max-tasks", "1", "--expiry-end", "2022-12-31", "--progress-every", "10"])
         self.assertEqual(code, 0)
         downloader_cls.return_value.run.assert_called_once()
+        options = downloader_cls.call_args.kwargs["options"]
+        self.assertEqual(options.expiry_end_ms, date_boundary_ms("2022-12-31", end=True))
+        self.assertEqual(options.progress_every, 10)
+
+    def test_expiry_filter_limits_planned_tasks(self):
+        old = instrument("BTC-30DEC22-20000-C", is_expired=True)
+        old["instrument_id"] = 1002
+        old["expiry_timestamp_ms"] = date_boundary_ms("2022-12-30", end=False)
+        new = instrument("BTC-29DEC23-30000-C", is_expired=True)
+        new["instrument_id"] = 1003
+        new["expiry_timestamp_ms"] = date_boundary_ms("2023-12-29", end=False)
+        config = load_deribit_config()
+        store = DeribitCheckpointStore(config)
+        store.initialize()
+        path = Path(os.environ["DATA_ROOT"]) / "options" / "deribit" / "instruments" / "version=v1" / "instruments.parquet"
+        write_instrument_dimension([old, new], path)
+        store.upsert_instruments([old, new])
+        api_result = DeribitApiResult(
+            "get_last_trades_by_instrument",
+            {},
+            True,
+            200,
+            result={"trades": [], "has_more": False},
+        )
+        client = FakeTradeClient(api_result)
+        summary = DeribitTradeDownloader(
+            config,
+            client=client,
+            store=store,
+            options=DownloaderOptions(max_tasks=10, allow_unprobed=True, expiry_end_ms=date_boundary_ms("2022-12-31", end=True)),
+        ).run()
+        self.assertEqual(summary["tasks_planned"], 1)
+        self.assertEqual(client.calls[0][0], "BTC-30DEC22-20000-C")
 
 
 if __name__ == "__main__":

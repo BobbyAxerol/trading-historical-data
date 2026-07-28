@@ -194,6 +194,28 @@ PYTHONPATH=. python -m collectors.deribit_option_trades pilot --version v1 --jso
 PYTHONPATH=. python -m collectors.vn_daily_matrix
 ```
 
+Deribit Phase 6 backfill vận hành bằng Docker one-shot jobs, không chạy raw shell dài trong chat. Job backfill có progress log dạng `deribit_task_start`, `deribit_task_done`, `deribit_backfill_done`, đọc được bằng `docker compose logs -f deribit-option-backfill-2022`.
+
+```bash
+# Backfill thử đoạn history có expiry đến hết 2022, rồi dừng theo batch checkpoint.
+DERIBIT_BACKFILL_MAX_TASKS=500 DERIBIT_PROGRESS_EVERY=25 \
+docker compose --profile deribit run --rm deribit-option-backfill-2022
+
+# Sau mỗi backfill batch: compact -> validate -> repair -> cleanup staging đã validate.
+docker compose --profile deribit run --rm deribit-option-compact
+docker compose --profile deribit run --rm deribit-option-validate
+docker compose --profile deribit run --rm deribit-option-repair
+docker compose --profile deribit run --rm deribit-option-cleanup
+
+# Chỉ dùng sau khi đoạn 2022 ổn định.
+DERIBIT_BACKFILL_MAX_TASKS=500 DERIBIT_PROGRESS_EVERY=25 \
+docker compose --profile deribit-full run --rm deribit-option-backfill-full
+```
+
+`deribit-option-backfill-2022` filter theo `--expiry-end 2022-12-31`; nó không đoán bằng số task. Nếu container bị dừng, SQLite checkpoint resume từ `last_processed_seq`; nếu API treo ở một request, Docker logs vẫn cho biết đang ở `instrument/start_seq/end_seq` nào.
+
+Checkpoint Deribit lưu staging path dạng portable `storage/...`, không phụ thuộc host path `/root/...` hay container path `/app/...`. Sau mỗi batch backfill phải chạy đủ `compact -> validate -> cleanup`; cleanup chỉ xóa staging khi validate `status=ok` và ghi `staging_cleanup_manifest.json`, vì vậy validate sau cleanup vẫn audit được checkpoint.
+
 ## Loader Endpoints
 
 Import trực tiếp:

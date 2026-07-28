@@ -5028,6 +5028,96 @@ Decisions:
 - Do not interpret the tiny pilot permanent-size projection as the final full-history size estimate; Phase 6 must still emit final storage report after full compact/cleanup.
 - Keep broad Phase 6 backfill separate from this targeted pilot sampling commit/run.
 
+### 2026-07-28 UTC — Phase 6 Runtime Correction
+
+Status: corrected_runtime_ready
+
+Changed:
+- Stopped direct long-running shell Phase 6 backfill because it did not expose per-task progress logs and did not match the Docker service architecture.
+- Added Deribit backfill progress logging for Docker logs:
+  - `deribit_backfill_start`;
+  - `deribit_task_start`;
+  - `deribit_task_done`;
+  - `deribit_task_failed`;
+  - `deribit_backfill_done`.
+- Added CLI expiry filters for controlled Phase 6 slices:
+  - `--expiry-start`;
+  - `--expiry-end`;
+  - `--progress-every`.
+- Added Docker Compose one-shot jobs:
+  - `deribit-option-backfill-2022`;
+  - `deribit-option-backfill-full`;
+  - `deribit-option-compact`;
+  - `deribit-option-validate`;
+  - `deribit-option-repair`;
+  - `deribit-option-cleanup`.
+- Fixed compactor to merge existing canonical daily Parquet with new staging rows before publishing. This prevents data loss when staging was cleaned after a previous compact and a later batch adds more rows for the same day.
+- Fixed checkpoint storage references to be portable across host CLI and Docker:
+  - new `download_ranges.output_file` values are stored as `storage/...`;
+  - validator resolves legacy `/root/.../storage/...` paths to the active `DATA_ROOT`;
+  - cleanup manifest keys are portable and remain valid after staging files are deleted.
+- Added regression coverage for legacy absolute checkpoint paths.
+
+Partial direct-run state before correction:
+- Interrupted raw command had advanced checkpoint safely to `download_ranges=4014`.
+- Status counts at interruption:
+  - `CAUGHT_UP_ACTIVE=1`;
+  - `COMPLETE_EXPIRED=3025`;
+  - `EMPTY_CONFIRMED=988`;
+  - `NEW=115815`.
+- The direct-run partial staging must be compacted/validated/cleaned through Docker jobs before continuing.
+
+Docker correction results:
+- Rebuilt shared Docker image `get_data-collectors:latest`.
+- Compacted direct-run staging through Docker:
+  - `staging_files=2628`;
+  - `days_compacted=538`;
+  - `output_rows=527629`;
+  - `conflict_groups=0`.
+- Docker validate before cleanup:
+  - `status=ok`;
+  - `canonical_files=899`;
+  - `canonical_rows=639076`;
+  - `duplicate_keys=0`.
+- Docker cleanup deleted `2628` validated staging files and wrote cleanup manifest.
+- Docker validate after cleanup remained `status=ok`.
+
+Controlled 2022 Docker pilot slice:
+- Command shape: `DERIBIT_BACKFILL_MAX_TASKS=100 DERIBIT_PROGRESS_EVERY=10 docker compose --profile deribit run --rm deribit-option-backfill-2022`.
+- Backfill result:
+  - `tasks_attempted=100`;
+  - `tasks_succeeded=100`;
+  - `files_written=68`;
+  - `retained_rows=5314`;
+  - `discarded_rows=38`;
+  - `peak_rss_mb=351.92`.
+- Docker compact after pilot:
+  - `staging_files=68`;
+  - `days_compacted=9`;
+  - `output_files=9`;
+  - `output_rows=10148`;
+  - `conflict_groups=0`.
+- Docker validate after pilot compact:
+  - `status=ok`;
+  - `canonical_files=901`;
+  - `canonical_rows=644390`;
+  - `duplicate_keys=0`.
+- Docker cleanup after pilot deleted `68` staging files.
+- Final Docker validate after cleanup remained `status=ok`.
+- Final staging parquet count: `0`.
+- Checkpoint summary after pilot:
+  - `download_ranges=4131`;
+  - `CAUGHT_UP_ACTIVE=1`;
+  - `COMPLETE_EXPIRED=3104`;
+  - `EMPTY_CONFIRMED=1026`;
+  - `NEW=115698`.
+
+Decision:
+- Phase 6 continuation must run through Docker Compose jobs, not a raw long shell command.
+- First controlled slice is expiry up to `2022-12-31` via `deribit-option-backfill-2022`.
+- The first 2022 pilot slice validates cleanly. Do not start full historical in chat; operator should inspect this slice first, then continue with Docker batches.
+- After the 2022 slice is accepted, continue remaining history with `deribit-option-backfill-full` in checkpointed batches.
+
 ## 5. Test Plan Theo Phase
 
 ### Phase 0 Tests

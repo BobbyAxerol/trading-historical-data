@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 from typing import Any
 
 from collectors.common.env import load_environment
@@ -9,7 +10,7 @@ from collectors.deribit.checkpoints import DeribitCheckpointStore
 from collectors.deribit.cleanup import DeribitCleanup
 from collectors.deribit.compact import DeribitCompactor
 from collectors.deribit.config import SUPPORTED_VERSION, load_deribit_config
-from collectors.deribit.engine import DeribitTradeDownloader, DownloaderOptions
+from collectors.deribit.engine import DeribitTradeDownloader, DownloaderOptions, date_boundary_ms
 from collectors.deribit.instruments import DeribitInstrumentDiscovery
 from collectors.deribit.pilot import DeribitPilotRunner
 from collectors.deribit.probe import DeribitApiProbeRunner, ProbeOptions
@@ -53,14 +54,20 @@ def build_parser() -> argparse.ArgumentParser:
         _add_common_args(ingest_parser)
         ingest_parser.add_argument("--max-tasks", type=int, default=1)
         ingest_parser.add_argument("--symbols", default=None, help="Comma-separated instrument names. Default scans checkpoint order.")
+        ingest_parser.add_argument("--expiry-start", default=None, help="Optional inclusive instrument expiry lower bound, e.g. 2020-01-01.")
+        ingest_parser.add_argument("--expiry-end", default=None, help="Optional inclusive instrument expiry upper bound, e.g. 2022-12-31.")
+        ingest_parser.add_argument("--progress-every", type=int, default=25, help="Log progress every N attempted tasks.")
         ingest_parser.add_argument("--run-id", default=None)
         ingest_parser.add_argument("--discover-first", action="store_true")
         ingest_parser.add_argument("--allow-unprobed", action="store_true")
         ingest_parser.add_argument("--allow-blocked-pilot", action="store_true")
+        ingest_parser.add_argument("--log-level", default="INFO")
 
     compact_parser = subparsers.add_parser("compact", help="Compact Deribit staging trades into canonical daily Parquet.")
     _add_common_args(compact_parser)
     compact_parser.add_argument("--max-days", type=int, default=None)
+    compact_parser.add_argument("--progress-every", type=int, default=25)
+    compact_parser.add_argument("--log-level", default="INFO")
 
     validate_parser = subparsers.add_parser("validate", help="Validate Deribit coverage ledger and canonical trades.")
     _add_common_args(validate_parser)
@@ -152,12 +159,17 @@ def _run_downloader(args: argparse.Namespace) -> dict[str, Any]:
         allow_unprobed=bool(args.allow_unprobed),
         require_pilot_pass=True,
         allow_blocked_pilot=bool(args.allow_blocked_pilot),
+        expiry_start_ms=date_boundary_ms(args.expiry_start, end=False),
+        expiry_end_ms=date_boundary_ms(args.expiry_end, end=True),
+        progress_every=max(1, int(args.progress_every)),
     )
+    _configure_logging(args.log_level)
     return DeribitTradeDownloader(config, options=options).run()
 
 
 def _run_compact(args: argparse.Namespace) -> dict[str, Any]:
-    return DeribitCompactor(_config_from_args(args)).run(max_days=args.max_days)
+    _configure_logging(args.log_level)
+    return DeribitCompactor(_config_from_args(args)).run(max_days=args.max_days, progress_every=max(1, int(args.progress_every)))
 
 
 def _run_validate(args: argparse.Namespace) -> dict[str, Any]:
@@ -185,6 +197,14 @@ def _parse_symbols(value: str | None) -> list[str] | None:
         return None
     symbols = [item.strip().upper() for item in value.split(",") if item.strip()]
     return symbols or None
+
+
+def _configure_logging(level: str) -> None:
+    logging.basicConfig(
+        level=getattr(logging, str(level).upper(), logging.INFO),
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+        force=True,
+    )
 
 
 def _not_implemented(command: str) -> dict[str, Any]:

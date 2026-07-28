@@ -16,7 +16,7 @@ from collectors.deribit.cleanup import DeribitCleanup
 from collectors.deribit.compact import DeribitCompactor
 from collectors.deribit.config import load_deribit_config
 from collectors.deribit.instruments import write_instrument_dimension
-from collectors.deribit.parquet_parts import write_parquet_atomic
+from collectors.deribit.parquet_parts import file_checksum, write_parquet_atomic
 from collectors.deribit.repair import DeribitRepairPlanner
 from collectors.deribit.schema import CANONICAL_TRADE_COLUMNS, staging_trade_schema
 from collectors.deribit.validate import DeribitValidator
@@ -140,6 +140,53 @@ class TestDeribitPhase4(EnvCase):
         manifest_path = config.checkpoint_path.parent / "staging_cleanup_manifest.json"
         self.assertTrue(manifest_path.exists())
 
+    def test_validate_resolves_legacy_absolute_storage_checkpoint_path(self):
+        config, store, staging_path = self._prepare([staging_row(1)])
+        compact = DeribitCompactor(config).run()
+        self.assertEqual(compact["status"], "ok")
+        legacy_path = "/root/bobby/pool_alpha/alphas_storage/_get_data/storage" + str(staging_path).split("/storage", 1)[1]
+        store.commit_success_range(
+            instrument_name="BTC-25JUN27-100000-C",
+            requested_start_seq=1,
+            requested_end_seq=10,
+            response_min_seq=1,
+            response_max_seq=1,
+            response_trade_count=1,
+            retained_trade_count=1,
+            discarded_trade_count=0,
+            output_file=legacy_path,
+            output_checksum=file_checksum(staging_path),
+            range_status="COMPLETE",
+            started_at="2026-07-24T17:00:00Z",
+            completed_at="2026-07-24T17:00:01Z",
+            next_status="COMPLETE_EXPIRED",
+            advance_to_seq=11,
+        )
+        validation = DeribitValidator(config).run()
+        self.assertEqual(validation["status"], "ok")
+
+    def test_compactor_merges_existing_canonical_after_staging_cleanup(self):
+        config, _, staging_path = self._prepare([staging_row(1)])
+        first = DeribitCompactor(config).run()
+        self.assertEqual(first["status"], "ok")
+        DeribitCleanup(config).run(confirm=True)
+        self.assertFalse(staging_path.exists())
+
+        table = pa.Table.from_pylist([staging_row(2)], schema=staging_trade_schema())
+        second_staging_path = (
+            config.staging_root
+            / "currency=BTC"
+            / "shard=41"
+            / "run_id=unit-2"
+            / "instrument=1001"
+            / "seq_000000000011_000000000020.parquet"
+        )
+        write_parquet_atomic(table, second_staging_path, metadata={"unit": "true"})
+        second = DeribitCompactor(config).run()
+        self.assertEqual(second["status"], "ok")
+        table = pq.ParquetFile(second["outputs"][0]["path"]).read()
+        self.assertEqual(table.column("trade_seq").to_pylist(), [1, 2])
+
     def test_repair_planner_reports_retryable_state(self):
         config, store, _ = self._prepare([staging_row(1)])
         store.upsert_instruments([instrument_row()])
@@ -158,7 +205,7 @@ class TestDeribitPhase4(EnvCase):
             with redirect_stdout(StringIO()):
                 code = deribit_cli_main(["compact", "--json", "--max-days", "1"])
         self.assertEqual(code, 0)
-        compactor_cls.return_value.run.assert_called_once_with(max_days=1)
+        compactor_cls.return_value.run.assert_called_once_with(max_days=1, progress_every=25)
 
 
 if __name__ == "__main__":

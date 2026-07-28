@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
+import logging
 import resource
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, time, timezone
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,8 @@ from collectors.deribit.normalize import ActivationState, normalize_trade_chunk
 from collectors.deribit.staging import DeribitStagingWriter
 from collectors.deribit.tasks import DownloadTask, plan_sequence_tasks
 
+LOGGER = logging.getLogger(__name__)
+
 
 @dataclass(frozen=True)
 class DownloaderOptions:
@@ -31,6 +34,9 @@ class DownloaderOptions:
     allow_unprobed: bool = False
     require_pilot_pass: bool = False
     allow_blocked_pilot: bool = False
+    expiry_start_ms: int | None = None
+    expiry_end_ms: int | None = None
+    progress_every: int = 25
 
 
 @dataclass
@@ -119,22 +125,53 @@ class DeribitTradeDownloader:
             self.store.upsert_instruments(instruments)
 
         instruments = self._load_instrument_dimension()
+        symbols = self._eligible_symbols(instruments)
         page_size = self._page_size()
         tasks = plan_sequence_tasks(
             self.config,
             self.store,
             limit=max(1, int(self.options.max_tasks)),
-            symbols=self.options.symbols,
+            symbols=symbols,
             chunk_size=page_size,
         )
         summary = DownloadSummary(mode=self.options.mode, run_id=self.run_id, tasks_planned=len(tasks))
+        LOGGER.info(
+            "deribit_backfill_start mode=%s run_id=%s tasks_planned=%s max_tasks=%s page_size=%s expiry_start_ms=%s expiry_end_ms=%s symbols_filter=%s",
+            self.options.mode,
+            self.run_id,
+            len(tasks),
+            self.options.max_tasks,
+            page_size,
+            self.options.expiry_start_ms,
+            self.options.expiry_end_ms,
+            "explicit" if self.options.symbols else "all",
+        )
         for task in tasks:
             summary.tasks_attempted += 1
+            if self._should_log_progress(summary.tasks_attempted):
+                LOGGER.info(
+                    "deribit_task_start run_id=%s task=%s/%s instrument=%s start_seq=%s end_seq=%s status=%s",
+                    self.run_id,
+                    summary.tasks_attempted,
+                    len(tasks),
+                    task.instrument_name,
+                    task.start_seq,
+                    task.end_seq,
+                    task.status,
+                )
             try:
                 item = self._process_task(task, instruments[str(task.instrument_name)], page_size=page_size)
             except Exception as exc:
                 summary.tasks_failed += 1
                 summary.errors.append(f"{task.instrument_name}: {type(exc).__name__}: {exc}")
+                LOGGER.exception(
+                    "deribit_task_failed run_id=%s task=%s/%s instrument=%s error=%s",
+                    self.run_id,
+                    summary.tasks_attempted,
+                    len(tasks),
+                    task.instrument_name,
+                    exc,
+                )
                 self.store.record_failure(
                     instrument_name=task.instrument_name,
                     error_code=type(exc).__name__,
@@ -148,11 +185,37 @@ class DeribitTradeDownloader:
             summary.retained_rows += int(item["retained_rows"])
             summary.discarded_rows += int(item["discarded_rows"])
             summary.response_rows += int(item["response_rows"])
+            if self._should_log_progress(summary.tasks_attempted):
+                LOGGER.info(
+                    "deribit_task_done run_id=%s task=%s/%s instrument=%s files_written=%s response_rows=%s retained_rows=%s discarded_rows=%s totals_retained=%s",
+                    self.run_id,
+                    summary.tasks_attempted,
+                    len(tasks),
+                    task.instrument_name,
+                    item["files_written"],
+                    item["response_rows"],
+                    item["retained_rows"],
+                    item["discarded_rows"],
+                    summary.retained_rows,
+                )
             release_unused_memory()
 
         if summary.tasks_failed:
             summary.status = "partial" if summary.tasks_succeeded else "blocked"
         summary.peak_rss_mb = _peak_rss_mb()
+        LOGGER.info(
+            "deribit_backfill_done run_id=%s status=%s tasks_attempted=%s tasks_succeeded=%s tasks_failed=%s files_written=%s response_rows=%s retained_rows=%s discarded_rows=%s peak_rss_mb=%s",
+            self.run_id,
+            summary.status,
+            summary.tasks_attempted,
+            summary.tasks_succeeded,
+            summary.tasks_failed,
+            summary.files_written,
+            summary.response_rows,
+            summary.retained_rows,
+            summary.discarded_rows,
+            summary.peak_rss_mb,
+        )
         return summary.as_payload()
 
     def _process_task(self, task: DownloadTask, instrument: dict[str, Any], *, page_size: int) -> dict[str, int]:
@@ -189,7 +252,7 @@ class DeribitTradeDownloader:
             }
             written = self.writer.write_chunk(chunk.rows, task=task, metadata=metadata)
             if written is not None:
-                output_file = str(written.path)
+                output_file = self.config.to_storage_reference(written.path)
                 output_checksum = written.checksum
                 files_written = 1
 
@@ -244,6 +307,30 @@ class DeribitTradeDownloader:
         rows = pq.ParquetFile(path).read().to_pylist()
         return {str(row["instrument_name"]): row for row in rows}
 
+    def _eligible_symbols(self, instruments: dict[str, dict[str, Any]]) -> list[str] | None:
+        explicit = {item.upper() for item in self.options.symbols} if self.options.symbols else None
+        if self.options.expiry_start_ms is None and self.options.expiry_end_ms is None:
+            return sorted(explicit) if explicit is not None else None
+        selected: list[str] = []
+        for name, row in instruments.items():
+            instrument_name = str(name).upper()
+            if explicit is not None and instrument_name not in explicit:
+                continue
+            expiry = row.get("expiry_timestamp_ms")
+            if expiry is None:
+                continue
+            expiry_ms = int(expiry)
+            if self.options.expiry_start_ms is not None and expiry_ms < self.options.expiry_start_ms:
+                continue
+            if self.options.expiry_end_ms is not None and expiry_ms > self.options.expiry_end_ms:
+                continue
+            selected.append(instrument_name)
+        return sorted(selected)
+
+    def _should_log_progress(self, attempted: int) -> bool:
+        every = max(1, int(self.options.progress_every))
+        return attempted == 1 or attempted % every == 0 or attempted == int(self.options.max_tasks)
+
     def _page_size(self) -> int:
         probe = self._load_probe_report()
         selected = int(probe.get("selected_page_size") or self.config.raw["api"].get("chunk_size", 5000))
@@ -286,6 +373,21 @@ class DeribitTradeDownloader:
 
 def _run_id() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+def date_boundary_ms(value: str | None, *, end: bool = False) -> int | None:
+    if not value:
+        return None
+    text = str(value).strip()
+    if len(text) == 10:
+        day = datetime.fromisoformat(text).date()
+        dt = datetime.combine(day, time.max if end else time.min, tzinfo=timezone.utc)
+    else:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        dt = parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+        if end and parsed.time() == time.min:
+            dt = datetime.combine(parsed.date(), time.max, tzinfo=timezone.utc)
+    return int(dt.timestamp() * 1000)
 
 
 def _peak_rss_mb() -> float:

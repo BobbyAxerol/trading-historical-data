@@ -9,7 +9,7 @@ from typing import Any
 import duckdb
 import pyarrow.parquet as pq
 
-from collectors.deribit.config import DeribitConfig
+from collectors.deribit.config import DeribitConfig, storage_reference
 from collectors.deribit.instruments import instrument_dimension_path
 from collectors.deribit.parquet_parts import file_checksum
 from collectors.deribit.schema import CANONICAL_TRADE_COLUMNS
@@ -82,11 +82,11 @@ class DeribitValidator:
                 if not output_file:
                     report.acquisition_errors.append(f"{label} retained rows without output_file")
                     continue
-                path = Path(str(output_file))
+                path = self.config.resolve_storage_reference(str(output_file))
                 if not path.exists():
-                    if self._is_cleaned_output(path, row["output_checksum"], cleaned_files):
+                    if self._is_cleaned_output(str(output_file), path, row["output_checksum"], cleaned_files):
                         continue
-                    report.acquisition_errors.append(f"{label} output missing and not in cleanup manifest: {path}")
+                    report.acquisition_errors.append(f"{label} output missing and not in cleanup manifest: {output_file}")
                     continue
                 expected = row["output_checksum"]
                 actual = file_checksum(path)
@@ -182,8 +182,18 @@ class DeribitValidator:
         files = payload.get("files")
         return dict(files) if isinstance(files, dict) else {}
 
-    def _is_cleaned_output(self, path: Path, expected_checksum: Any, cleaned_files: dict[str, Any]) -> bool:
-        entry = cleaned_files.get(str(path))
+    def _is_cleaned_output(self, output_file: str, resolved_path: Path, expected_checksum: Any, cleaned_files: dict[str, Any]) -> bool:
+        keys = {
+            str(output_file),
+            str(resolved_path),
+        }
+        portable = storage_reference(output_file)
+        if portable:
+            keys.add(portable)
+        resolved_portable = storage_reference(resolved_path)
+        if resolved_portable:
+            keys.add(resolved_portable)
+        entry = next((cleaned_files.get(key) for key in keys if key in cleaned_files), None)
         if not isinstance(entry, dict):
             return False
         expected = str(expected_checksum or "")

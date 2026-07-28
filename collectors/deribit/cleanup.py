@@ -49,8 +49,10 @@ class DeribitCleanup:
             manifest_files = self._load_manifest_files()
             deleted_at = utc_now_iso()
             for path in files:
-                manifest_files[str(path)] = {
-                    "path": str(path),
+                key = self.config.to_storage_reference(path) or str(path)
+                manifest_files[key] = {
+                    "path": key,
+                    "resolved_path": str(path),
                     "checksum": file_checksum(path),
                     "bytes": path.stat().st_size,
                     "deleted_at": deleted_at,
@@ -89,7 +91,7 @@ class DeribitCleanup:
             "status": status,
             "phase": "Phase 4",
             "updated_at": utc_now_iso(),
-            "staging_root": str(self.config.staging_root),
+            "staging_root": self.config.to_storage_reference(self.config.staging_root) or str(self.config.staging_root),
             "files_deleted": len(files),
             "files": files,
         }

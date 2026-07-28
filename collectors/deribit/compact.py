@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from datetime import date, datetime, time, timezone
 from pathlib import Path
@@ -30,6 +31,8 @@ CANONICAL_COLUMNS = [
     "flags",
     "dataset_version_id",
 ]
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -62,7 +65,7 @@ class DeribitCompactor:
     def __init__(self, config: DeribitConfig):
         self.config = config
 
-    def run(self, *, max_days: int | None = None) -> dict[str, Any]:
+    def run(self, *, max_days: int | None = None, progress_every: int = 25) -> dict[str, Any]:
         staging_files = self._staging_files()
         if not staging_files:
             return CompactResult("ok", "Phase 4", 0, 0, 0, 0, 0, [], []).as_payload()
@@ -74,19 +77,46 @@ class DeribitCompactor:
             days = [row[0] for row in con.execute("SELECT DISTINCT CAST(to_timestamp(timestamp_ms / 1000.0) AS DATE) AS d FROM staging_input ORDER BY d").fetchall()]
             if max_days is not None:
                 days = days[: max(0, int(max_days))]
+            LOGGER.info(
+                "deribit_compact_start staging_files=%s days_planned=%s max_days=%s",
+                len(staging_files),
+                len(days),
+                max_days,
+            )
             outputs: list[dict[str, Any]] = []
             conflict_reports: list[str] = []
             conflict_groups = 0
             output_rows = 0
-            for day in days:
+            every = max(1, int(progress_every))
+            for idx, day in enumerate(days, start=1):
+                if idx == 1 or idx % every == 0 or idx == len(days):
+                    LOGGER.info("deribit_compact_day_start day=%s progress=%s/%s", day, idx, len(days))
                 item = self._compact_day(con, day)
                 outputs.append(item["output"])
                 output_rows += int(item["output"]["rows"])
                 if item["conflict_report"]:
                     conflict_reports.append(str(item["conflict_report"]))
                 conflict_groups += int(item["conflict_groups"])
+                if idx == 1 or idx % every == 0 or idx == len(days):
+                    LOGGER.info(
+                        "deribit_compact_day_done day=%s progress=%s/%s rows=%s conflict_groups=%s",
+                        day,
+                        idx,
+                        len(days),
+                        item["output"]["rows"],
+                        item["conflict_groups"],
+                    )
                 release_unused_memory()
             status = "ok" if conflict_groups == 0 else "warning"
+            LOGGER.info(
+                "deribit_compact_done status=%s staging_files=%s days_compacted=%s output_files=%s output_rows=%s conflict_groups=%s",
+                status,
+                len(staging_files),
+                len(days),
+                len(outputs),
+                output_rows,
+                conflict_groups,
+            )
             return CompactResult(status, "Phase 4", len(staging_files), len(days), len(outputs), output_rows, conflict_groups, outputs, conflict_reports).as_payload()
         finally:
             con.close()
@@ -94,7 +124,24 @@ class DeribitCompactor:
 
     def _compact_day(self, con: duckdb.DuckDBPyConnection, day: date) -> dict[str, Any]:
         start_ms, end_ms = _day_bounds_ms(day)
-        con.execute(f"CREATE OR REPLACE TEMP VIEW day_input AS SELECT * FROM staging_input WHERE timestamp_ms >= {start_ms} AND timestamp_ms < {end_ms}")
+        existing = self._canonical_path(day)
+        canonical_cols = ", ".join(CANONICAL_COLUMNS)
+        staging_sql = f"""
+            SELECT {canonical_cols}, source_priority, ingested_at
+            FROM staging_input
+            WHERE timestamp_ms >= {start_ms} AND timestamp_ms < {end_ms}
+        """
+        if existing.exists():
+            existing_sql = f"""
+                SELECT
+                    {canonical_cols},
+                    CAST(0 AS BIGINT) AS source_priority,
+                    CAST('1970-01-01 00:00:00' AS TIMESTAMP) AS ingested_at
+                FROM read_parquet({_sql_quote(str(existing))}, union_by_name=true)
+            """
+            con.execute(f"CREATE OR REPLACE TEMP VIEW day_input AS {staging_sql} UNION ALL {existing_sql}")
+        else:
+            con.execute(f"CREATE OR REPLACE TEMP VIEW day_input AS {staging_sql}")
         conflict_rows = con.execute(
             """
             SELECT instrument_id, trade_seq, COUNT(*) AS row_count,
