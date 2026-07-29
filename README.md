@@ -125,6 +125,8 @@ Các service chạy bằng `docker compose` và có `restart: unless-stopped`.
 | `vn-intraday-stocks` | `collectors.vn_intraday_vnstock` | VN stock 1m lúc `16:30 Asia/Ho_Chi_Minh` |
 | `vn30f1m-dnse` | `collectors.vn_intraday_dnse` | VN futures 1m lúc `16:30 Asia/Ho_Chi_Minh` |
 | `vn-derivatives-probe` | `collectors.vn_derivatives` | Probe KBS/DNSE individual VN30 futures contracts; bootstrap/profile only |
+| `vn-derivatives-bootstrap` | `collectors.vn_derivatives` | Backfill individual VN30 futures contracts; bootstrap/profile only |
+| `vn-derivatives-validate` | `collectors.vn_derivatives` | Validate contract-level VN30 futures storage |
 
 ```bash
 docker compose up -d --build
@@ -164,11 +166,15 @@ PYTHONPATH=. python -m collectors.vn_daily_matrix --start-date 2016-01-01
 # VN30 futures derivatives V1 probe. Không publish canonical bars; dùng để xác nhận coverage trước backfill.
 PYTHONPATH=. python -m collectors.vn_derivatives discover --json
 PYTHONPATH=. python -m collectors.vn_derivatives probe --json
+
+# VN30 futures individual contracts V1. Ghi contract-level Parquet, chưa build continuous/matrix.
+PYTHONPATH=. python -m collectors.vn_derivatives backfill --start 2017-08-10 --resolutions 1m,1d --max-contracts 1 --max-windows 2 --json
+PYTHONPATH=. python -m collectors.vn_derivatives validate --json
 ```
 
 Luồng production cho VN daily là container `vn-daily`, không phải chạy host command rời. Service này tự chạy cuối ngày, append/dedupe raw daily, ghi `state/vn_daily_universe_report.csv.gz`, aggregate auxiliary `VN30F1M` daily nếu cần, rồi rebuild `VNDailyMatrix`.
 
-Luồng VN derivatives mới đang ở Phase 1: `vn-derivatives-probe` chỉ tạo instrument dimension và provider coverage report cho từng hợp đồng thật `VN30FYYMM`. Nó chưa thay thế `vn30f1m-dnse` và chưa cập nhật `VNDailyMatrix` cho tới khi contract-level backfill/continuous validation pass.
+Luồng VN derivatives mới đang tách phase rõ ràng. `vn-derivatives-probe` tạo instrument dimension và provider coverage report cho từng hợp đồng thật `VN30FYYMM`. `vn-derivatives-bootstrap` ghi contract-level Parquet dưới `storage/vn/futures/contracts/{1m,1d}` với KBS primary và DNSE fallback. Nó chưa thay thế `vn30f1m-dnse` và chưa cập nhật `VNDailyMatrix` cho tới khi continuous validation ở phase sau pass.
 
 ## Loader Endpoints
 

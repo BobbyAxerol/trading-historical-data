@@ -89,11 +89,13 @@ def fetch_ohlc(
     hidden by vnstock's convenience conversion.
     """
     try:
-        from vnstock import Quote, register_user
+        from vnstock import Quote
     except Exception as exc:  # pragma: no cover - depends on optional runtime package
         raise RuntimeError(f"vnstock unavailable: {exc}") from exc
 
     try:
+        from vnstock import register_user
+
         register_user(skip=True)
     except Exception:
         pass

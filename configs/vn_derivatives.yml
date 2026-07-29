@@ -39,4 +39,4 @@ validation:
   price_tolerance_points: 0.1
   conflict_tolerance_points: 0.5
   volume_relative_warning: 0.05
-
+  min_1m_bars_for_daily: 200

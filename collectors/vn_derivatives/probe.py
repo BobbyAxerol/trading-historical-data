@@ -131,8 +131,22 @@ def _default_fetchers() -> dict[str, ProviderFetcher]:
         return kbs_derivatives.fetch_ohlc(request.provider_symbol, request.start, request.end, request.resolution)  # type: ignore[arg-type]
 
     def dnse(request: ProbeRequest) -> pd.DataFrame:
-        resolution = "1" if request.resolution == "1m" else "1D"
-        return dnse_derivatives.fetch_ohlc(request.provider_symbol, request.start, request.end, resolution, asset_type="derivative")
+        resolutions = ["1"] if request.resolution == "1m" else ["1D", "D", "day"]
+        errors = []
+        empty: pd.DataFrame | None = None
+        for resolution in resolutions:
+            try:
+                df = dnse_derivatives.fetch_ohlc(request.provider_symbol, request.start, request.end, resolution, asset_type="derivative")
+                if not df.empty:
+                    return df
+                empty = df
+            except Exception as exc:
+                errors.append(f"{resolution}: {type(exc).__name__}: {exc}")
+        if empty is not None:
+            return empty
+        if request.resolution == "1d" and errors and all("400 Client Error" in error for error in errors):
+            return pd.DataFrame()
+        raise RuntimeError("; ".join(errors))
 
     return {"kbs": kbs, "dnse": dnse}
 

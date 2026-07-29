@@ -6,7 +6,7 @@ This file is the consolidated implementation tracker for `_get_data` jobs. Detai
 
 Source guide: `rebuild_derivatives_vn30f1m.md`
 
-Status: Phase 1 in progress
+Status: Phase 2 complete
 
 Branch: `dev`
 
@@ -163,6 +163,90 @@ Notes:
 - The KBS micro-probe proves request wiring and empty-response classification, but does not establish historical coverage because the selected two-day window for `VN30F2508` returned no rows. Full provider coverage must be probed across the guide's sample contracts before Phase 2 full backfill.
 - `vnstock` logs show it auto-converts derivative legacy symbol `VN30F2508` to KRX `41I1F8000`; the probe still records legacy and KRX attempts separately so this behavior is visible.
 - Phase 1 provider tests are offline/fake-provider tests plus one KBS-only live micro-probe. No canonical contract bars were published.
+
+#### 2026-07-29 UTC — Phase 2 Implementation
+
+Status: complete
+
+Changed:
+
+- Added `collectors/vn_derivatives/contracts.py`:
+  - contract-level backfill engine;
+  - `BackfillOptions`;
+  - `ProviderResult`;
+  - KBS primary + DNSE fallback merge;
+  - windowed request planning;
+  - manifest resume through `state/vn_derivatives/contracts_{1m,1d}.json`;
+  - disk-first append into contract-level Parquet partitions;
+  - source-priority dedupe so DNSE cannot overwrite existing KBS rows at the same `(instrument_id, time)`;
+  - optional aggregate `1m -> 1d` fallback only when enough intraday bars exist.
+- Added `collectors/vn_derivatives/validate.py`:
+  - required schema checks;
+  - OHLC invariants;
+  - duplicate key checks;
+  - no rows after expiry session;
+  - non-negative volume;
+  - tick-size warning for off-grid prices;
+  - storage-wide validation report at `state/vn_derivatives/contracts_validation_v1.json`.
+- Extended CLI:
+  - `python -m collectors.vn_derivatives backfill`;
+  - `python -m collectors.vn_derivatives validate`.
+- Added Docker bootstrap services:
+  - `vn-derivatives-bootstrap`;
+  - `vn-derivatives-validate`.
+- Updated README with Phase 2 commands and storage boundary.
+- Added `tests/test_vn_derivatives_phase2.py`.
+- Updated Docker dependency from `vnstock==3.3.1` to `vnstock>=4.0.4,<5` because the old image did not support `Quote(..., source="KBS")`.
+- Classified DNSE concrete-contract daily HTTP 400 across `1D/D/day` as daily-endpoint unsupported/empty for Phase 2; DNSE `1m` request errors still fail-fast.
+
+Storage contract:
+
+- `1m`: `storage/vn/futures/contracts/1m/symbol=VN30FYYMM/year=YYYY/month=MM/part.parquet`.
+- `1d`: `storage/vn/futures/contracts/1d/symbol=VN30FYYMM/year=YYYY/part.parquet`.
+- Row schema:
+  - `time`;
+  - `instrument_id`;
+  - `open`;
+  - `high`;
+  - `low`;
+  - `close`;
+  - `volume`;
+  - `source`;
+  - `quality_flags`;
+  - `ingested_at`.
+
+Validation:
+
+- `python -m unittest tests.test_vn_derivatives_phase2`: OK, 5 tests.
+- `python -m unittest tests.test_vn_derivatives_phase1 tests.test_vn_derivatives_phase2`: OK, 13 tests.
+- `python -m unittest tests.test_vn_derivatives_phase1 tests.test_vn_derivatives_phase2 tests.test_vn_daily_universe`: OK, 17 tests.
+- Phase 2 tests cover:
+  - KBS primary wins on overlap;
+  - DNSE fills only missing timestamps;
+  - invalid OHLC is rejected;
+  - contract storage writes expected partitions;
+  - storage validation returns `ok`;
+  - manifest resume skips completed windows;
+  - provider request errors without rows do not advance manifest;
+  - empty-confirmed windows may complete without writing rows.
+- Docker build smoke:
+  - `docker compose build vn-derivatives-bootstrap`: OK.
+  - `docker compose --profile vn-derivatives config --services`: OK.
+- Docker backfill smoke with container-only `/tmp` storage:
+  - command: `docker compose --profile vn-derivatives run --rm -e DATA_ROOT=/tmp/vn_deriv_smoke/storage -e STATE_ROOT=/tmp/vn_deriv_smoke/state vn-derivatives-bootstrap python -m collectors.vn_derivatives backfill --symbols VN30F2508 --resolutions 1d --max-windows 1 --json`;
+  - result: `status=ok`, `windows_done=1`, `rows_written=0`, `provider_errors=0`;
+  - interpretation: KBS/DNSE path works in Docker; selected daily window had no rows, and empty-confirmed logic did not publish data.
+- Docker validate smoke with container-only `/tmp` storage:
+  - command: `docker compose --profile vn-derivatives run --rm -e DATA_ROOT=/tmp/vn_deriv_smoke/storage -e STATE_ROOT=/tmp/vn_deriv_smoke/state vn-derivatives-validate python -m collectors.vn_derivatives validate --json`;
+  - result: `status=ok`, `files=0`, `rows=0`, `duplicate_keys=0`.
+
+Notes:
+
+- Phase 2 still does not publish continuous `VN30F1M` or update `VNDailyMatrix`.
+- Full historical backfill should run through Docker `vn-derivatives-bootstrap`, after provider probe has useful coverage and credentials are available.
+- Docker smoke surfaced two real production issues and they were fixed before commit:
+  - old `vnstock==3.3.1` image could not use KBS source;
+  - provider request errors were initially able to mark an empty window completed, now fixed to fail-fast unless both providers are empty-confirmed.
 
 ## Previous Job: VN Daily Universe Upgrade
 
