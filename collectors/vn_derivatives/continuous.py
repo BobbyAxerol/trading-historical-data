@@ -604,7 +604,14 @@ def sync_once(*, version: str = "v1", lookback_days: int | None = None, schedule
     lookback = int(lookback_days or config.get("requests", {}).get("daily_sync_lookback_days", 45))
     end = vn_now().date().isoformat()
     start = (vn_now() - timedelta(days=lookback)).date().isoformat()
-    backfill_options = options_from_config(version=version, start=start, end=end, resolutions=("1m", "1d"))
+    backfill_options = options_from_config(
+        version=version,
+        start=start,
+        end=end,
+        resolutions=("1m", "1d"),
+        skip_provider_errors=True,
+        complete_empty_windows=False,
+    )
     backfill_result = backfill_contracts(backfill_options)
     contract_validation = validate_storage(version=version, resolutions=["1m", "1d"])
     continuous_options = options_from_config_continuous(version=version, start=start, end=end, resolutions=("1m", "1d"))
@@ -612,8 +619,9 @@ def sync_once(*, version: str = "v1", lookback_days: int | None = None, schedule
     continuous_validation = validate_continuous_storage(version=version)
     parity = compare_provider_alias(version=version)
     matrix_result = update_daily_matrix_from_continuous() if schedule_matrix else {"status": "skipped"}
+    status = "warning" if backfill_result.get("provider_errors") or backfill_result.get("status") == "error" else "ok"
     return {
-        "status": "ok",
+        "status": status,
         "version": version,
         "backfill": backfill_result,
         "contract_validation": contract_validation,
@@ -639,7 +647,7 @@ def live(*, version: str = "v1", schedule: str = "16:30", lookback_days: int | N
             try:
                 result = sync_once(version=version, lookback_days=lookback_days)
                 logger.info("vn_derivatives_sync_once_done status=%s rows_written=%s", result.get("status"), result.get("continuous", {}).get("rows_written"))
-                heartbeat.beat(status="ok")
+                heartbeat.beat(status=str(result.get("status", "ok")))
                 last_run_date = now.strftime("%Y-%m-%d")
                 state.write({"last_run_date": last_run_date, "updated_at": utc_now_iso(), "version": version})
             except Exception as exc:

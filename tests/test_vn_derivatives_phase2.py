@@ -164,6 +164,28 @@ class TestVNDerivativePhase2(EnvCase):
         self.assertIn("last_error", state)
         self.assertNotIn("completed_windows", state)
 
+    def test_best_effort_provider_errors_skip_without_advancing_manifest(self):
+        def failing_fetcher(contract, provider, resolution, start, end):
+            return ProviderResult(provider, None, pd.DataFrame(), False, False, error=f"{provider} failed")
+
+        options = BackfillOptions(
+            symbols=("VN30F2508",),
+            resolutions=("1d",),
+            start="2025-08-01",
+            end="2025-08-01",
+            max_windows=1,
+            daily_window_days=1,
+            skip_provider_errors=True,
+        )
+        result = backfill_contracts(options, fetcher=failing_fetcher)
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(result["provider_errors"], 2)
+
+        manifest = json.loads((Path(os.environ["STATE_ROOT"]) / "vn_derivatives" / "contracts_1d.json").read_text())
+        state = manifest["symbols"]["VN30F2508"]
+        self.assertIn("last_error", state)
+        self.assertNotIn("completed_windows", state)
+
     def test_daily_empty_confirmed_can_complete_without_rows(self):
         def empty_fetcher(contract, provider, resolution, start, end):
             return ProviderResult(provider, contract.legacy_symbol, pd.DataFrame(), True, True)
@@ -181,6 +203,28 @@ class TestVNDerivativePhase2(EnvCase):
         self.assertEqual(result["windows_done"], 1)
         manifest = json.loads((Path(os.environ["STATE_ROOT"]) / "vn_derivatives" / "contracts_1d.json").read_text())
         self.assertIn("completed_windows", manifest["symbols"]["VN30F2508"])
+
+    def test_empty_windows_can_be_left_uncompleted_for_live_retry(self):
+        def empty_fetcher(contract, provider, resolution, start, end):
+            return ProviderResult(provider, contract.legacy_symbol, pd.DataFrame(), True, True)
+
+        options = BackfillOptions(
+            symbols=("VN30F2508",),
+            resolutions=("1d",),
+            start="2025-08-01",
+            end="2025-08-01",
+            max_windows=1,
+            daily_window_days=1,
+            complete_empty_windows=False,
+        )
+        result = backfill_contracts(options, fetcher=empty_fetcher)
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["windows_done"], 0)
+
+        manifest = json.loads((Path(os.environ["STATE_ROOT"]) / "vn_derivatives" / "contracts_1d.json").read_text())
+        state = manifest["symbols"]["VN30F2508"]
+        self.assertEqual(state["last_error"], "empty_response_without_rows")
+        self.assertNotIn("completed_windows", state)
 
 
 def _restore_env(name: str, value: str | None) -> None:

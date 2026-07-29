@@ -57,6 +57,8 @@ class BackfillOptions:
     daily_window_days: int = 365
     min_1m_bars_for_daily: int = 200
     sleep_seconds: float = 0.0
+    skip_provider_errors: bool = False
+    complete_empty_windows: bool = True
 
 
 Fetcher = Callable[[VN30FutureContract, str, str, pd.Timestamp, pd.Timestamp], ProviderResult]
@@ -381,10 +383,33 @@ def backfill_contracts(options: BackfillOptions, *, fetcher: Fetcher | None = No
                         last_error=f"provider request errors without usable rows: {provider_errors}",
                         last_failed_at=utc_now_iso(),
                     )
+                    if options.skip_provider_errors:
+                        logger.warning(
+                            "vn_derivatives_backfill_window_skipped symbol=%s resolution=%s provider_errors=%s",
+                            contract.canonical_symbol,
+                            resolution,
+                            provider_errors,
+                        )
+                        continue
                     raise RuntimeError(f"{contract.canonical_symbol} {resolution} provider request failed without usable rows: {provider_errors}")
                 if resolution == "1d" and rows.empty:
                     rows = aggregate_1m_to_daily(contract, min_bars=options.min_1m_bars_for_daily)
                     rows = rows[(pd.to_datetime(rows["time"]) >= window_start.normalize()) & (pd.to_datetime(rows["time"]) <= window_end.normalize())]
+                if rows.empty and not options.complete_empty_windows:
+                    _update_manifest(
+                        resolution,
+                        contract.canonical_symbol,
+                        last_error="empty_response_without_rows",
+                        last_failed_at=utc_now_iso(),
+                    )
+                    logger.warning(
+                        "vn_derivatives_backfill_empty_window_skipped symbol=%s resolution=%s start=%s end=%s",
+                        contract.canonical_symbol,
+                        resolution,
+                        window_start,
+                        window_end,
+                    )
+                    continue
                 issues = validate_contract_frame(rows, expiry_date=pd.Timestamp(contract.expiry_date))
                 error_count = sum(1 for issue in issues if issue.severity == "error")
                 totals["validation_errors"] += error_count
@@ -440,6 +465,8 @@ def options_from_config(
     max_contracts: int | None = None,
     max_windows: int | None = None,
     sleep_seconds: float = 0.0,
+    skip_provider_errors: bool = False,
+    complete_empty_windows: bool = True,
 ) -> BackfillOptions:
     config = load_yaml("vn_derivatives.yml")
     requests = config.get("requests", {})
@@ -457,4 +484,6 @@ def options_from_config(
         daily_window_days=int(requests.get("daily_window_days", 365)),
         min_1m_bars_for_daily=int(validation.get("min_1m_bars_for_daily", 200)),
         sleep_seconds=sleep_seconds,
+        skip_provider_errors=skip_provider_errors,
+        complete_empty_windows=complete_empty_windows,
     )

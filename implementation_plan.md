@@ -314,6 +314,7 @@ Decisions:
 - `VN30F1M_TRADE` is available for execution-oriented tests, but `VNDailyMatrix` uses `VN30F1M` only.
 - `VN30F1M_PROVIDER` is a semantics label for legacy/provider alias validation. The old DNSE alias service is disabled from default compose instead of being used as canonical history.
 - Daily `sync-once/live` preserves existing roll-table history outside the current lookback window; it does not overwrite full historical rolls with a 45-day partial table.
+- Bootstrap/backfill remains strict on provider errors. Daily `sync-once/live` uses best-effort provider handling: errored or empty 0-row windows are recorded in manifest `last_error`, are not marked `completed_windows`, and service continues with status `warning` so the next run can retry.
 
 Validation:
 
@@ -325,6 +326,7 @@ Validation:
 - `docker compose config --services`: OK, default compose includes `vn-derivatives` and does not include legacy `vn30f1m-dnse`.
 - `docker compose --profile vn-derivatives run --rm -e DATA_ROOT=/tmp/vn_deriv_phase3_smoke/storage -e STATE_ROOT=/tmp/vn_deriv_phase3_smoke/state vn-derivatives python -m collectors.vn_derivatives build-continuous --start 2024-01-17 --end 2024-01-19 --resolutions 1d --series VN30F1M --json`: OK, `status=ok`, `rolls=2`, `rows_written=0` because smoke storage intentionally has no contract bars.
 - `docker compose --profile vn-derivatives run --rm -e DATA_ROOT=/tmp/vn_deriv_phase3_smoke/storage -e STATE_ROOT=/tmp/vn_deriv_phase3_smoke/state vn-derivatives python -m collectors.vn_derivatives validate-continuous --resolutions 1d --series VN30F1M --json`: OK, `status=ok`, `files=0`, `rows=0`.
+- Live service smoke on production container exposed a provider availability case: `VN30F2606`/`VN30F2607` KBS returned empty and DNSE `1m` returned HTTP 400. Patched daily mode to continue without marking failed or empty windows complete while keeping strict bootstrap behavior.
 - Phase 3 tests cover:
   - calendar roll happens after expiry session;
   - `1m` continuous does not mix two contracts in one trading day;

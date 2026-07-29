@@ -247,6 +247,8 @@ sync recent concrete contracts
 
 `vn-derivatives-bootstrap` dùng cho warmup/backfill dài. `vn30f1m-dnse` đã chuyển sang profile legacy để tránh hai process cùng ghi alias `VN30F1M`.
 
+`vn-derivatives-bootstrap` giữ strict mode: provider error không có usable rows sẽ fail-fast và không mark completed. `vn-derivatives live/sync-once` chạy best-effort: window lỗi provider hoặc empty 0 rows được ghi vào manifest `last_error`, không ghi `completed_windows`, service tiếp tục validate/build phần dữ liệu có sẵn và trả status `warning` để lần sau tự retry.
+
 ## Loader Endpoints
 
 Import trực tiếp:

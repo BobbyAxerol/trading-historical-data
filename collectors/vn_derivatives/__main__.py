@@ -46,6 +46,8 @@ def build_parser() -> argparse.ArgumentParser:
     backfill.add_argument("--max-contracts", type=int, default=None)
     backfill.add_argument("--max-windows", type=int, default=None)
     backfill.add_argument("--sleep-seconds", type=float, default=0.0)
+    backfill.add_argument("--skip-provider-errors", action="store_true", help="Best-effort mode: record provider errors and continue without marking failed windows completed.")
+    backfill.add_argument("--no-complete-empty-windows", action="store_true", help="Do not mark empty no-row windows completed; useful for daily live retries.")
     backfill.add_argument("--json", action="store_true")
 
     validate = sub.add_parser("validate", help="Validate canonical VN30 futures contract storage.")
@@ -111,6 +113,8 @@ def main() -> None:
             max_contracts=args.max_contracts,
             max_windows=args.max_windows,
             sleep_seconds=args.sleep_seconds,
+            skip_provider_errors=args.skip_provider_errors,
+            complete_empty_windows=not args.no_complete_empty_windows,
         )
         payload = backfill_contracts(options)
     elif args.command == "validate":
