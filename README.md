@@ -229,6 +229,8 @@ docker compose --profile deribit-full logs -f deribit-option-cycle-full
 
 Checkpoint Deribit lưu staging path dạng portable `storage/...`, không phụ thuộc host path `/root/...` hay container path `/app/...`. Sau mỗi batch backfill phải chạy đủ `compact -> validate -> cleanup`; cleanup chỉ xóa staging khi validate `status=ok` và ghi `staging_cleanup_manifest.json`, vì vậy validate sau cleanup vẫn audit được checkpoint. Các service `deribit-option-cycle-*` đã tự chạy đủ chain này rồi exit; dùng lại cùng command sau này sẽ tiếp tục từ SQLite checkpoint, không backfill lại từ đầu.
 
+Deribit historical trades có thể thiếu source field `contracts`; loader chuẩn hóa `amount` thành `amount_base`, và ingestion/repair sẽ derive `contracts = amount_base / contract_size` khi source thiếu. Flag `MISSING_CONTRACTS` vẫn được giữ để audit rằng giá trị này là derived, không phải source-native.
+
 ## Loader Endpoints
 
 Import trực tiếp:

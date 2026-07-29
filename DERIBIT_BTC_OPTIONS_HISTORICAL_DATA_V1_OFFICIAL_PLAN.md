@@ -5126,6 +5126,38 @@ Decision:
 - After the 2022 slice is accepted, continue remaining history with `deribit-option-backfill-full` in checkpointed batches.
 - Preferred background command is `docker compose --profile deribit-full up -d deribit-option-cycle-full` because it runs `backfill -> compact -> validate -> cleanup -> validate` and then exits the container. Re-running the same command later resumes from SQLite checkpoint.
 
+### 2026-07-29 UTC — Phase 6 Contracts Field Repair
+
+Status: complete
+
+Reason:
+- Deribit historical trade responses can omit optional `contracts`.
+- Current canonical sample had `contracts` null for a large subset, while instrument dimension has `contract_size=1.0` for all discovered BTC option instruments.
+- `amount` is the option trade amount in underlying base currency, so `contracts = amount_base / contract_size` is the correct derived fill when source `contracts` is missing.
+
+Changed:
+- Future ingestion derives `contracts` from `amount_base / contract_size` if Deribit omits source `contracts`.
+- `MISSING_CONTRACTS` flag remains set so downstream users can distinguish source-native contracts from derived contracts.
+- Added `repair-contracts` CLI command for idempotent canonical Parquet repair.
+- Added `repair-contracts` into both Docker cycle jobs before validate/cleanup.
+
+Repair result on existing canonical data:
+- Dry run:
+  - `files_seen=946`;
+  - `files_repaired=610`;
+  - `rows_seen=752072`;
+  - `rows_repaired=378218`.
+- Confirmed repair:
+  - `status=ok`;
+  - `files_repaired=610`;
+  - `rows_repaired=378218`.
+- Deep validation after repair:
+  - `contracts_null=0`;
+  - `contracts_non_positive=0`;
+  - `amount_non_positive=0`;
+  - `duplicate_key_rows=0`;
+  - Deribit validator `status=ok`.
+
 ## 5. Test Plan Theo Phase
 
 ### Phase 0 Tests

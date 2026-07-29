@@ -128,6 +128,8 @@ class TestDeribitDownloaderPhase3(EnvCase):
         self.assertTrue(output_path.exists())
         table = pq.ParquetFile(output_path).read()
         self.assertEqual(table.column("trade_seq").to_pylist(), [1, 2])
+        self.assertEqual(table.column("contracts").to_pylist(), [1.0, 1.0])
+        self.assertEqual(table.column("flags").to_pylist(), [129, 129])
 
         state = store.instrument_states()[0]
         self.assertEqual(state["last_processed_seq"], 2)

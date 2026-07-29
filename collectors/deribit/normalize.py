@@ -104,14 +104,18 @@ def _normalize_trade(
     mark_price = _float_or_none(raw.get("mark_price"))
     index_price = _float_or_none(raw.get("index_price"))
     iv = _float_or_none(raw.get("iv"))
+    contract_size = _float_or_none(instrument.get("contract_size"))
     contracts = _float_or_none(raw.get("contracts"))
+    source_missing_contracts = contracts is None
+    if contracts is None and contract_size is not None and contract_size > 0:
+        contracts = amount / contract_size
     if mark_price is None:
         flags |= TradeFlags.MISSING_MARK_PRICE
     if index_price is None:
         flags |= TradeFlags.MISSING_INDEX_PRICE
     if iv is None:
         flags |= TradeFlags.MISSING_IV
-    if contracts is None:
+    if source_missing_contracts:
         flags |= TradeFlags.MISSING_CONTRACTS
     if iv is not None and iv <= 0:
         flags |= TradeFlags.INVALID_IV

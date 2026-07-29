@@ -15,6 +15,7 @@ from collectors.deribit.checkpoints import DeribitCheckpointStore
 from collectors.deribit.cleanup import DeribitCleanup
 from collectors.deribit.compact import DeribitCompactor
 from collectors.deribit.config import load_deribit_config
+from collectors.deribit.contracts_repair import DeribitContractsRepair
 from collectors.deribit.instruments import write_instrument_dimension
 from collectors.deribit.parquet_parts import file_checksum, write_parquet_atomic
 from collectors.deribit.repair import DeribitRepairPlanner
@@ -164,6 +165,22 @@ class TestDeribitPhase4(EnvCase):
         )
         validation = DeribitValidator(config).run()
         self.assertEqual(validation["status"], "ok")
+
+    def test_contracts_repair_fills_null_contracts_from_amount_base(self):
+        config, _, _ = self._prepare([staging_row(1)])
+        compact = DeribitCompactor(config).run()
+        self.assertEqual(compact["status"], "ok")
+        canonical_path = Path(compact["outputs"][0]["path"])
+
+        dry = DeribitContractsRepair(config).run(confirm=False)
+        self.assertEqual(dry["status"], "needs_repair")
+        self.assertEqual(dry["rows_repaired"], 1)
+
+        repaired = DeribitContractsRepair(config).run(confirm=True)
+        self.assertEqual(repaired["status"], "ok")
+        self.assertEqual(repaired["files_repaired"], 1)
+        table = pq.ParquetFile(canonical_path).read()
+        self.assertEqual(table.column("contracts").to_pylist(), [1.0])
 
     def test_compactor_merges_existing_canonical_after_staging_cleanup(self):
         config, _, staging_path = self._prepare([staging_row(1)])

@@ -10,6 +10,7 @@ from collectors.deribit.checkpoints import DeribitCheckpointStore
 from collectors.deribit.cleanup import DeribitCleanup
 from collectors.deribit.compact import DeribitCompactor
 from collectors.deribit.config import SUPPORTED_VERSION, load_deribit_config
+from collectors.deribit.contracts_repair import DeribitContractsRepair
 from collectors.deribit.engine import DeribitTradeDownloader, DownloaderOptions, date_boundary_ms
 from collectors.deribit.instruments import DeribitInstrumentDiscovery
 from collectors.deribit.pilot import DeribitPilotRunner
@@ -76,6 +77,10 @@ def build_parser() -> argparse.ArgumentParser:
     _add_common_args(repair_parser)
     repair_parser.add_argument("--only-unresolved", action="store_true")
     repair_parser.add_argument("--limit", type=int, default=100)
+
+    contracts_repair_parser = subparsers.add_parser("repair-contracts", help="Fill nullable Deribit trade contracts from amount_base / contract_size.")
+    _add_common_args(contracts_repair_parser)
+    contracts_repair_parser.add_argument("--confirm", action="store_true")
 
     cleanup_parser = subparsers.add_parser("cleanup", help="Cleanup Deribit staging files after validation passes.")
     _add_common_args(cleanup_parser)
@@ -180,6 +185,10 @@ def _run_repair(args: argparse.Namespace) -> dict[str, Any]:
     return DeribitRepairPlanner(_config_from_args(args)).run(only_unresolved=bool(args.only_unresolved), limit=max(1, int(args.limit)))
 
 
+def _run_contracts_repair(args: argparse.Namespace) -> dict[str, Any]:
+    return DeribitContractsRepair(_config_from_args(args)).run(confirm=bool(args.confirm))
+
+
 def _run_cleanup(args: argparse.Namespace) -> dict[str, Any]:
     return DeribitCleanup(_config_from_args(args)).run(confirm=bool(args.confirm))
 
@@ -265,11 +274,12 @@ def main(argv: list[str] | None = None) -> int:
             print(f"retained_rows: {payload.get('retained_rows')}")
         return 0 if payload.get("status") in {"ok", "partial"} else 2
 
-    if args.command in {"compact", "validate", "repair", "cleanup"}:
+    if args.command in {"compact", "validate", "repair", "repair-contracts", "cleanup"}:
         runners = {
             "compact": _run_compact,
             "validate": _run_validate,
             "repair": _run_repair,
+            "repair-contracts": _run_contracts_repair,
             "cleanup": _run_cleanup,
         }
         payload = runners[args.command](args)
