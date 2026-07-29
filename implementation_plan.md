@@ -2,11 +2,173 @@
 
 This file is the consolidated implementation tracker for `_get_data` jobs. Detailed job guides may live in separate markdown files, but the executable phase plan and implementation logs should be summarized here to avoid fragmented state.
 
-## Active Job: VN Daily Universe Upgrade
+## Active Job: VN30 Futures Historical Derivatives Upgrade
+
+Source guide: `rebuild_derivatives_vn30f1m.md`
+
+Status: Phase 1 in progress
+
+Branch: `dev`
+
+Important adaptation:
+
+- The source guide targets a repository-level architecture, but this `_get_data` service already uses Docker services, Parquet storage, manifest/state files, and disk-first append patterns.
+- This implementation keeps Parquet + zstd as the storage format.
+- The existing `vn30f1m-dnse` alias service is not removed in Phase 1. It remains the provider-alias continuity source until contract-level canonical storage and continuous rebuild pass validation.
+- Phase 1 must not publish rebuilt `VN30F1M` into `VNDailyMatrix`; that happens only after Phase 2-3 data trust checks pass.
+
+### Goal
+
+Build a trustworthy VN30 futures derivatives pipeline:
+
+- canonical individual contracts use stable `VN30FYYMM` identity;
+- KRX and legacy provider symbols are only mappings;
+- KBS/vnstock is primary, DNSE is fallback/validation;
+- provider coverage must be probed before full backfill;
+- continuous `VN30F1M` and optional `VN30F1M_TRADE` are built from real contracts, not from rolling alias history.
+
+### Phase 1 — Provider Probe, Symbol Resolver, Instrument Dimension
+
+Scope:
+
+- Add `configs/vn_derivatives.yml` with provider priority, request windows, validation tolerances, continuous settings, and storage conventions.
+- Add VN30 futures symbol utilities:
+  - canonical `VN30FYYMM`;
+  - stable `instrument_id`;
+  - legacy symbol;
+  - KRX symbol conversion;
+  - monthly contract calendar from `2017-08-10` to current + 6 months;
+  - theoretical expiry = third Thursday, adjusted to previous VN trading day when known holidays require it.
+- Add low-level provider adapters:
+  - KBS/vnstock adapter for `1m` and `1d`, with explicit provider symbol input;
+  - DNSE adapter with explicit `asset_type="derivative"` so concrete contracts like `VN30F2503` are not routed as stocks.
+- Update existing DNSE intraday helper to recognize concrete `VN30FYYMM` and KRX symbols as derivative instruments.
+- Add provider probe CLI:
+  - `python -m collectors.vn_derivatives discover`;
+  - `python -m collectors.vn_derivatives probe`.
+- Probe writes:
+  - `storage/vn/futures/instruments/version=v1/instruments.parquet`;
+  - `state/vn_derivatives/provider_probe_v1.parquet`;
+  - `state/vn_derivatives/provider_probe_v1.json`.
+- Add Docker profile service for probe/bootstrap only.
+
+Phase 1 tests:
+
+- KRX conversion examples, including `VN30F2508 -> 41I1F8000`.
+- Canonical symbol parsing and derivative detection for alias, legacy, and KRX forms.
+- Contract calendar includes opening contracts `VN30F1708`, `VN30F1709`, `VN30F1712`, `VN30F1803`.
+- Instrument dimension writes expected schema.
+- Provider probe writes Parquet and JSON with fake providers, records empty success separately from errors, and summarizes earliest coverage.
+- Existing `vn_intraday_dnse.fetch_ohlc` keeps backward compatibility while allowing explicit derivative asset type.
+
+Exit criteria:
+
+- Probe CLI can run without publishing canonical bars.
+- Probe report distinguishes request error from empty response.
+- Instrument dimension exists with the planned schema.
+- No full historical claim is made until live provider probe confirms real coverage.
+- Existing VN daily matrix and alias `VN30F1M` behavior remains stable.
+
+### Phase 2 — Individual Contract Backfill And Validation
+
+Scope:
+
+- Backfill contract-level `1m` and `1d` into:
+  - `storage/vn/futures/contracts/1m/symbol=VN30FYYMM/year=YYYY/month=MM/part.parquet`;
+  - `storage/vn/futures/contracts/1d/symbol=VN30FYYMM/year=YYYY/part.parquet`.
+- Disk-first per contract/window; no global DataFrame accumulation.
+- KBS primary, DNSE fills missing timestamps only.
+- Split windows when provider response appears truncated.
+- Track manifests:
+  - `state/vn_derivatives/contracts_1m.json`;
+  - `state/vn_derivatives/contracts_1d.json`.
+- Validate OHLC, duplicate keys, expiry bounds, tick-size flags, provider parity, and unresolved gaps.
+
+Phase 2 tests:
+
+- Window split on truncation.
+- KBS primary rows are not overwritten by DNSE.
+- DNSE fills only missing timestamps.
+- Daily aggregate from 1m is rejected when session coverage is insufficient.
+- Manifest resume does not refetch completed windows.
+
+### Phase 3 — Continuous Series, Matrix Integration, Services
+
+Scope:
+
+- Build a single roll table:
+  - `storage/vn/futures/rolls/version=v1/rolls.parquet`.
+- Build continuous:
+  - `VN30F1M` calendar front-month;
+  - `VN30F1M_TRADE` liquidity-aware no-lookahead series.
+- Store continuous:
+  - `storage/vn/futures/continuous/1m/symbol=VN30F1M/version=v1/...`;
+  - `storage/vn/futures/continuous/1d/symbol=VN30F1M/version=v1/...`.
+- Keep provider alias as `VN30F1M_PROVIDER` for overlap validation.
+- Update `VNDailyMatrix` to source `VN30F1M` from continuous `1d` only after parity passes.
+- Add loader endpoints for contract-level and continuous futures while keeping current endpoints stable.
+- Add `vn-derivatives` daily service; deprecate or migrate `vn30f1m-dnse` to validation-only.
+
+Phase 3 tests:
+
+- Same roll table drives both `1m` and `1d`.
+- Calendar series rolls after expiry session.
+- Tradable series uses only closed prior-day volume information.
+- No day mixes two contracts in continuous `1m`.
+- Matrix includes rebuilt `VN30F1M`, excludes it from equity ranking, and preserves loader return types.
+
+### Implementation Logs
+
+#### 2026-07-29 UTC — Phase 1 Implementation
+
+Status: complete
+
+Changed:
+
+- Added source guide `rebuild_derivatives_vn30f1m.md`.
+- Added `configs/vn_derivatives.yml`.
+- Added `collectors/providers/kbs_derivatives.py`.
+- Added `collectors/providers/dnse_derivatives.py`.
+- Added `collectors/vn_derivatives/` package with symbol calendar, instrument dimension, provider probe, and CLI entrypoint.
+- Updated `collectors/vn_intraday_dnse.py` to support explicit `asset_type` and concrete VN30 futures/KRX detection.
+- Added `tests/test_vn_derivatives_phase1.py`.
+
+Validation:
+
+- `python -m unittest tests.test_vn_derivatives_phase1`: OK, 6 tests.
+- `python -m unittest tests.test_vn_derivatives_phase1 tests.test_vn_daily_universe`: OK, 11 tests.
+- `python -m compileall collectors/providers collectors/vn_derivatives collectors/vn_intraday_dnse.py`: OK.
+- `docker compose --profile vn-derivatives config --services`: OK.
+- Temp-env CLI discover smoke:
+  - command: `python -m collectors.vn_derivatives discover --start 2017-08-10 --end 2017-10-01 --json`;
+  - result: `contracts=3`, first `VN30F1708`, last `VN30F1710`;
+  - output: temp `storage/vn/futures/instruments/version=v1/instruments.parquet`.
+- Production discover smoke:
+  - command: `python -m collectors.vn_derivatives discover --json`;
+  - wrote `storage/vn/futures/instruments/version=v1/instruments.parquet`;
+  - contracts: `114`;
+  - first: `VN30F1708`;
+  - last: `VN30F2701`.
+- Live KBS-only micro-probe:
+  - command: `python -m collectors.vn_derivatives probe --contracts VN30F2508 --providers kbs --window-days 2 --json`;
+  - wrote `state/vn_derivatives/provider_probe_v1.parquet`;
+  - wrote `state/vn_derivatives/provider_probe_v1.json`;
+  - rows: `4`;
+  - status: `ok`;
+  - all rows were `request_success=true`, `empty_confirmed=true`, `row_count=0`.
+
+Notes:
+
+- DNSE was not live-probed because `DNSE_API_KEY` and `DNSE_API_SECRET_KEY` are not present in the shell environment.
+- The KBS micro-probe proves request wiring and empty-response classification, but does not establish historical coverage because the selected two-day window for `VN30F2508` returned no rows. Full provider coverage must be probed across the guide's sample contracts before Phase 2 full backfill.
+- `vnstock` logs show it auto-converts derivative legacy symbol `VN30F2508` to KRX `41I1F8000`; the probe still records legacy and KRX attempts separately so this behavior is visible.
+- Phase 1 provider tests are offline/fake-provider tests plus one KBS-only live micro-probe. No canonical contract bars were published.
+
+## Previous Job: VN Daily Universe Upgrade
 
 Source guide: `implementation.md`
 
-Status: Phase 1 in progress
+Status: complete
 
 Branch: `feat/vn-daily-universe-upgrade`
 

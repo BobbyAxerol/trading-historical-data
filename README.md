@@ -124,6 +124,7 @@ Các service chạy bằng `docker compose` và có `restart: unless-stopped`.
 | `vn-daily` | `collectors.vn_daily` | VN daily raw lúc `16:30 Asia/Ho_Chi_Minh`; sau mỗi lượt update sẽ build universe report và rebuild daily matrix |
 | `vn-intraday-stocks` | `collectors.vn_intraday_vnstock` | VN stock 1m lúc `16:30 Asia/Ho_Chi_Minh` |
 | `vn30f1m-dnse` | `collectors.vn_intraday_dnse` | VN futures 1m lúc `16:30 Asia/Ho_Chi_Minh` |
+| `vn-derivatives-probe` | `collectors.vn_derivatives` | Probe KBS/DNSE individual VN30 futures contracts; bootstrap/profile only |
 
 ```bash
 docker compose up -d --build
@@ -159,9 +160,15 @@ PYTHONPATH=. python -m collectors.binance_futures_metrics_5m --mode once
 
 # VN daily matrix rebuild thủ công để debug. Production đi qua service vn-daily live schedule.
 PYTHONPATH=. python -m collectors.vn_daily_matrix --start-date 2016-01-01
+
+# VN30 futures derivatives V1 probe. Không publish canonical bars; dùng để xác nhận coverage trước backfill.
+PYTHONPATH=. python -m collectors.vn_derivatives discover --json
+PYTHONPATH=. python -m collectors.vn_derivatives probe --json
 ```
 
 Luồng production cho VN daily là container `vn-daily`, không phải chạy host command rời. Service này tự chạy cuối ngày, append/dedupe raw daily, ghi `state/vn_daily_universe_report.csv.gz`, aggregate auxiliary `VN30F1M` daily nếu cần, rồi rebuild `VNDailyMatrix`.
+
+Luồng VN derivatives mới đang ở Phase 1: `vn-derivatives-probe` chỉ tạo instrument dimension và provider coverage report cho từng hợp đồng thật `VN30FYYMM`. Nó chưa thay thế `vn30f1m-dnse` và chưa cập nhật `VNDailyMatrix` cho tới khi contract-level backfill/continuous validation pass.
 
 ## Loader Endpoints
 

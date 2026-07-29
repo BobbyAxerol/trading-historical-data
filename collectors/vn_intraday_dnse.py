@@ -3,11 +3,12 @@ from __future__ import annotations
 import argparse
 import os
 import random
+import re
 import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import pandas as pd
 import requests
@@ -24,6 +25,13 @@ from collectors.common.storage import PartitionedParquetStore
 DATASET = "vn_futures_dnse_1m"
 BASE_URL = "https://openapi.dnse.com.vn"
 DERIVATIVE_SYMBOLS = {"VN30F1M", "VN30F2M", "VN30F1Q", "VN30F2Q"}
+VN30_CONTRACT_RE = re.compile(r"^VN30F\d{4}$")
+VN30_KRX_RE = re.compile(r"^41I1[0-9A-HJ-NP-Z][1-9ABC]000$")
+
+
+def is_derivative_symbol(symbol: str) -> bool:
+    value = symbol.strip().upper()
+    return value in DERIVATIVE_SYMBOLS or bool(VN30_CONTRACT_RE.match(value) or VN30_KRX_RE.match(value))
 
 
 def _build_headers(path: str) -> dict[str, str]:
@@ -69,7 +77,7 @@ def _unix(date_or_ts: str | pd.Timestamp) -> int:
     return int(ts.tz_convert("UTC").timestamp())
 
 
-def _parse_ohlc(data: dict[str, Any], symbol: str) -> pd.DataFrame:
+def _parse_ohlc(data: dict[str, Any], symbol: str, *, asset_type: Literal["stock", "derivative"] | None = None) -> pd.DataFrame:
     from collectors.common.calendar_vn import filter_trading_hours
 
     if "t" in data:
@@ -112,14 +120,15 @@ def _parse_ohlc(data: dict[str, Any], symbol: str) -> pd.DataFrame:
     cols = ["time", "symbol", "open", "high", "low", "close", "volume", "source", "ingested_at"]
     df = df[cols]
 
-    derivative = symbol in DERIVATIVE_SYMBOLS
+    derivative = asset_type == "derivative" if asset_type is not None else is_derivative_symbol(symbol)
     return filter_trading_hours(df, derivative=derivative)
 
 
 
-def fetch_ohlc(symbol: str, start: pd.Timestamp, end: pd.Timestamp, resolution: str = "1") -> pd.DataFrame:
+def fetch_ohlc(symbol: str, start: pd.Timestamp, end: pd.Timestamp, resolution: str = "1", *, asset_type: Literal["stock", "derivative"] | None = None) -> pd.DataFrame:
     path = "/price/ohlc"
-    bar_type = "DERIVATIVE" if symbol in DERIVATIVE_SYMBOLS else "STOCK"
+    resolved_asset_type = asset_type or ("derivative" if is_derivative_symbol(symbol) else "stock")
+    bar_type = "DERIVATIVE" if resolved_asset_type == "derivative" else "STOCK"
 
     def call() -> pd.DataFrame:
         response = requests.get(
@@ -137,7 +146,7 @@ def fetch_ohlc(symbol: str, start: pd.Timestamp, end: pd.Timestamp, resolution: 
         if response.status_code in {418, 429} or response.status_code >= 500:
             raise RuntimeError(f"DNSE retryable HTTP {response.status_code}: {response.text[:200]}")
         response.raise_for_status()
-        return _parse_ohlc(response.json(), symbol)
+        return _parse_ohlc(response.json(), symbol, asset_type=resolved_asset_type)
 
     return retry_sync(call, attempts=5, base_sleep=2)
 
@@ -145,10 +154,11 @@ def fetch_ohlc(symbol: str, start: pd.Timestamp, end: pd.Timestamp, resolution: 
 def run_symbol(symbol: str, *, start_default: str, limiter: SlidingWindowRateLimiter, logger) -> None:
     manifest = Manifest(DATASET)
     state = manifest.symbol_state(symbol)
-    dataset_parts = ["vn", "futures" if symbol in DERIVATIVE_SYMBOLS else "equity", "1m"]
+    derivative = is_derivative_symbol(symbol)
+    dataset_parts = ["vn", "futures" if derivative else "equity", "1m"]
     store = PartitionedParquetStore(dataset_parts, partition="month")
     storage_latest = store.latest_time(attrs={"symbol": symbol}, time_col="time")
-    legacy_base = "futures" if symbol in DERIVATIVE_SYMBOLS else "stocks"
+    legacy_base = "futures" if derivative else "stocks"
     legacy_latest = latest_time_from_files(
         [
             GET_DATA_ROOT / "data_stock" / "_intraday_storage" / legacy_base / f"{symbol}_1m.csv.gz",
@@ -175,7 +185,7 @@ def run_symbol(symbol: str, *, start_default: str, limiter: SlidingWindowRateLim
 
     limiter.wait()
     logger.info("Fetching DNSE %s %s -> %s", symbol, start, end)
-    df = fetch_ohlc(symbol, start, end)
+    df = fetch_ohlc(symbol, start, end, asset_type="derivative" if derivative else "stock")
     if df.empty:
         manifest.update_symbol(symbol, last_error="empty_response", last_success_at=utc_now_iso())
         logger.warning("%s DNSE returned no rows", symbol)
