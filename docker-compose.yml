@@ -79,6 +79,8 @@ services:
 
   vn30f1m-dnse:
     <<: *get-data-service
+    profiles: ["legacy-vn30f1m-dnse"]
+    restart: "no"
     command: ["python", "-m", "collectors.vn_intraday_dnse", "--mode", "live", "--symbols", "VN30F1M", "--schedule", "16:30"]
     environment:
       TZ: Asia/Ho_Chi_Minh
@@ -126,6 +128,18 @@ services:
       DATA_ROOT: /app/storage
       STATE_ROOT: /app/state
       LOG_ROOT: /app/logs
+
+  vn-derivatives:
+    <<: *get-data-service
+    command: ["python", "-m", "collectors.vn_derivatives", "live", "--schedule", "16:30"]
+    environment:
+      TZ: Asia/Ho_Chi_Minh
+      DATA_ROOT: /app/storage
+      STATE_ROOT: /app/state
+      LOG_ROOT: /app/logs
+      VNSTOCK_API_KEY: ${VNSTOCK_API_KEY:-}
+      DNSE_API_KEY: ${DNSE_API_KEY:-}
+      DNSE_API_SECRET_KEY: ${DNSE_API_SECRET_KEY:-}
 
   options-binance-5m:
     <<: *get-data-service

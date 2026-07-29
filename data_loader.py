@@ -171,6 +171,47 @@ def _get_new_symbol_files(
     return sorted(paths)
 
 
+def _get_versioned_symbol_files(
+    dataset_path: Path,
+    symbol: str,
+    version: str,
+    start_ts: pd.Timestamp | None,
+    end_ts: pd.Timestamp | None,
+) -> list[Path]:
+    symbol_dir = dataset_path / f"symbol={symbol.upper()}" / f"version={version}"
+    if not symbol_dir.exists():
+        return []
+    paths = []
+    for year_dir in symbol_dir.glob("year=*"):
+        try:
+            year = int(year_dir.name.split("=")[1])
+        except (IndexError, ValueError):
+            continue
+        if start_ts is not None and year < start_ts.year:
+            continue
+        if end_ts is not None and year > end_ts.year:
+            continue
+        month_dirs = list(year_dir.glob("month=*"))
+        if not month_dirs:
+            part_file = _select_partition_file(year_dir)
+            if part_file is not None:
+                paths.append(part_file)
+            continue
+        for month_dir in month_dirs:
+            try:
+                month = int(month_dir.name.split("=")[1])
+            except (IndexError, ValueError):
+                continue
+            if start_ts is not None and (year, month) < (start_ts.year, start_ts.month):
+                continue
+            if end_ts is not None and (year, month) > (end_ts.year, end_ts.month):
+                continue
+            part_file = _select_partition_file(month_dir)
+            if part_file is not None:
+                paths.append(part_file)
+    return sorted(paths)
+
+
 def _normalize_timeframe(timeframe: str) -> tuple[str, timedelta]:
     value = str(timeframe).strip().lower()
     if value.endswith("t"):
@@ -633,6 +674,120 @@ class VnFutures1m(MarketDataLoaderBase):
     TZ_INFO = "Asia/Ho_Chi_Minh"
     DEFAULT_COLUMNS = OHLCV_COLUMNS
     RESAMPLE_SUPPORTED = True
+
+
+class VnDerivativesContracts1m(MarketDataLoaderBase):
+    """Loads concrete VN30 futures contracts, e.g. VN30F2508, from contract-level 1m storage."""
+
+    DATASET_NAME = "vn_derivatives_contracts_1m"
+    NEW_PATH_PARTS = ("vn", "futures", "contracts", "1m")
+    TZ_INFO = "Asia/Ho_Chi_Minh"
+    DEFAULT_COLUMNS = OHLCV_COLUMNS
+    RESAMPLE_SUPPORTED = True
+
+
+class VnDerivativesContractsDaily(MarketDataLoaderBase):
+    """Loads concrete VN30 futures contracts, e.g. VN30F2508, from contract-level daily storage."""
+
+    DATASET_NAME = "vn_derivatives_contracts_1d"
+    NEW_PATH_PARTS = ("vn", "futures", "contracts", "1d")
+    TZ_INFO = "Asia/Ho_Chi_Minh"
+    DEFAULT_COLUMNS = OHLCV_COLUMNS
+
+
+class VnDerivativesContinuousBase(MarketDataLoaderBase):
+    """Base loader for rebuilt VN30 futures continuous series under symbol/version partitions."""
+
+    VERSION = "v1"
+    TZ_INFO = "Asia/Ho_Chi_Minh"
+    DEFAULT_COLUMNS = OHLCV_COLUMNS
+
+    def _discover_symbols(self) -> list[str]:
+        root = self._get_new_path()
+        if not root.exists():
+            return []
+        return sorted(
+            path.name.split("=", 1)[1].upper()
+            for path in root.glob("symbol=*")
+            if (path / f"version={self.VERSION}").exists()
+        )
+
+    def _files_for_symbol(self, symbol: str, start_ts: pd.Timestamp | None, end_ts: pd.Timestamp | None) -> list[Path]:
+        return _get_versioned_symbol_files(self._get_new_path(), symbol, self.VERSION, start_ts, end_ts)
+
+    def load(
+        self,
+        symbols: str | list[str] | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        limit: int | None = None,
+        check_val: bool = True,
+        columns: str | list[str] | tuple[str, ...] | None = None,
+    ) -> pd.DataFrame:
+        start_ts = pd.to_datetime(start_date) if start_date else None
+        end_ts = pd.to_datetime(end_date) if end_date else None
+        read_columns = _resolve_columns_arg(columns, self.DEFAULT_COLUMNS)
+        symbol_list = [symbols] if isinstance(symbols, str) else list(symbols) if symbols is not None else self._discover_symbols()
+        symbol_list = [str(symbol).strip().upper() for symbol in symbol_list if str(symbol).strip()]
+        frames = []
+        for symbol in symbol_list:
+            parts = []
+            for path in self._files_for_symbol(symbol, start_ts, end_ts):
+                try:
+                    parts.append(_read_partition_with_fallback(path, columns=read_columns))
+                except Exception as exc:
+                    logger.error("Failed to read partition %s: %s", path, exc)
+            if not parts:
+                continue
+            df = pd.concat(parts, ignore_index=True)
+            filter_col = self._filter_time_column(df)
+            if filter_col is not None:
+                df[filter_col] = pd.to_datetime(df[filter_col], errors="coerce")
+                df = df.dropna(subset=[filter_col])
+                if start_ts is not None:
+                    df = df[df[filter_col] >= start_ts]
+                if end_ts is not None:
+                    df = df[df[filter_col] <= end_ts]
+            if "symbol" not in df.columns:
+                df["symbol"] = symbol
+            frames.append(df)
+            del parts
+        if not frames:
+            return pd.DataFrame()
+        combined_df = pd.concat(frames, ignore_index=True)
+        combined_df = self._normalize(combined_df)
+        if check_val:
+            report = validate_data(combined_df, self.DATASET_NAME)
+            if not report["valid"]:
+                logger.warning("Validation warnings for dataset %s: %s", self.DATASET_NAME, report["errors"])
+        if limit is not None:
+            combined_df = combined_df.head(limit)
+        _release_unused_memory()
+        return combined_df
+
+    def _resampled_files(self, symbols: str | list[str] | None, start_ts: pd.Timestamp | None, end_ts: pd.Timestamp | None) -> tuple[list[str], dict[str, list[Path]]]:
+        symbol_list = self._resolve_symbol_list(symbols)
+        files_by_symbol: dict[str, list[Path]] = {}
+        for sym in symbol_list:
+            files = self._files_for_symbol(sym, start_ts, end_ts)
+            if files:
+                files_by_symbol[sym] = files
+        return symbol_list, files_by_symbol
+
+
+class VnDerivativesContinuous1m(VnDerivativesContinuousBase):
+    """Loads rebuilt continuous VN30 futures 1m series, e.g. VN30F1M and VN30F1M_TRADE."""
+
+    DATASET_NAME = "vn_derivatives_continuous_1m"
+    NEW_PATH_PARTS = ("vn", "futures", "continuous", "1m")
+    RESAMPLE_SUPPORTED = True
+
+
+class VnDerivativesContinuousDaily(VnDerivativesContinuousBase):
+    """Loads rebuilt continuous VN30 futures daily series, e.g. VN30F1M and VN30F1M_TRADE."""
+
+    DATASET_NAME = "vn_derivatives_continuous_1d"
+    NEW_PATH_PARTS = ("vn", "futures", "continuous", "1d")
 
 
 class CryptoBinance1m(MarketDataLoaderBase):
@@ -1367,6 +1522,10 @@ def load_data(
             return VnStock1m().load_resampled(symbols, timeframe, start_date, end_date, limit, check_val, engine)
         elif dataset_lower in ("vn_futures_1m",):
             return VnFutures1m().load_resampled(symbols, timeframe, start_date, end_date, limit, check_val, engine)
+        elif dataset_lower in ("vn_derivatives_contracts_1m", "vn30_contracts_1m"):
+            return VnDerivativesContracts1m().load_resampled(symbols, timeframe, start_date, end_date, limit, check_val, engine)
+        elif dataset_lower in ("vn_derivatives_continuous_1m", "vn30_continuous_1m", "vn30f1m_continuous_1m"):
+            return VnDerivativesContinuous1m().load_resampled(symbols, timeframe, start_date, end_date, limit, check_val, engine)
         elif dataset_lower in ("crypto_1m",):
             return CryptoBinance1m().load_resampled(symbols, timeframe, start_date, end_date, limit, check_val, engine)
         elif dataset_lower in ("crypto_binance_quarterly_1m", "binance_usdm_quarterly_1m"):
@@ -1381,6 +1540,14 @@ def load_data(
         return VnStockDaily().load(symbols, start_date, end_date, limit, check_val, columns=columns)
     elif dataset_lower in ("vn_futures_1m",):
         return VnFutures1m().load(symbols, start_date, end_date, limit, check_val, columns=columns)
+    elif dataset_lower in ("vn_derivatives_contracts_1m", "vn30_contracts_1m"):
+        return VnDerivativesContracts1m().load(symbols, start_date, end_date, limit, check_val, columns=columns)
+    elif dataset_lower in ("vn_derivatives_contracts_1d", "vn30_contracts_1d"):
+        return VnDerivativesContractsDaily().load(symbols, start_date, end_date, limit, check_val, columns=columns)
+    elif dataset_lower in ("vn_derivatives_continuous_1m", "vn30_continuous_1m", "vn30f1m_continuous_1m"):
+        return VnDerivativesContinuous1m().load(symbols, start_date, end_date, limit, check_val, columns=columns)
+    elif dataset_lower in ("vn_derivatives_continuous_1d", "vn30_continuous_1d", "vn30f1m_continuous_1d"):
+        return VnDerivativesContinuousDaily().load(symbols, start_date, end_date, limit, check_val, columns=columns)
     elif dataset_lower in ("crypto_1m",):
         return CryptoBinance1m().load(symbols, start_date, end_date, limit, check_val, columns=columns)
     elif dataset_lower in ("crypto_binance_quarterly_1m", "binance_usdm_quarterly_1m"):

@@ -32,6 +32,8 @@ Hiện storage chính dùng **Parquet**. Sau phase cleanup, `storage/` không c�
 | VN Daily Matrix | `1d` | VN equity universe + auxiliary `VN30F1M` benchmark column | Build từ canonical raw Parquet | Chạy builder khi cần sau raw daily update | `VNDailyMatrix`, `load_data("vn_daily_matrix", feature=...)` |
 | VN Equity Intraday | `1m` | VN stock symbols trong config | Provider VN intraday | Hằng ngày `16:30 Asia/Ho_Chi_Minh` | `VnStock1m`, `load_data("vn_stock_1m")` |
 | VN Futures Intraday | `1m` | `VN30F1M` và symbols futures configured | DNSE/VN provider | Hằng ngày `16:30 Asia/Ho_Chi_Minh` | `VnFutures1m`, `load_data("vn_futures_1m")` |
+| VN30 Futures Contracts | `1m`, `1d` | Concrete contracts `VN30FYYMM` | KBS primary + DNSE fallback | Bootstrap + daily tail sync | `VnDerivativesContracts1m`, `VnDerivativesContractsDaily`, `load_data("vn_derivatives_contracts_1m")` |
+| VN30 Futures Continuous | `1m`, `1d` | `VN30F1M`, `VN30F1M_TRADE` | Built from concrete contracts + shared roll table | Daily after contract sync | `VnDerivativesContinuous1m`, `VnDerivativesContinuousDaily`, `load_data("vn_derivatives_continuous_1d")` |
 
 ## Storage Layout
 
@@ -58,7 +60,13 @@ storage/
 │   │   ├── low.parquet
 │   │   ├── close.parquet
 │   │   └── volume.parquet
-│   └── futures/1m/symbol=VN30F1M/year=YYYY/month=MM/part.parquet
+│   └── futures/
+│       ├── 1m/symbol=VN30F1M/year=YYYY/month=MM/part.parquet
+│       ├── contracts/1m/symbol=VN30FYYMM/year=YYYY/month=MM/part.parquet
+│       ├── contracts/1d/symbol=VN30FYYMM/year=YYYY/part.parquet
+│       ├── continuous/1m/symbol=VN30F1M/version=v1/year=YYYY/month=MM/part.parquet
+│       ├── continuous/1d/symbol=VN30F1M/version=v1/year=YYYY/part.parquet
+│       └── rolls/version=v1/rolls.parquet
 └── options/
     └── binance/snapshot_5m/underlying=BTC/year=YYYY/month=MM/day=DD/part.parquet
 ```
@@ -106,7 +114,50 @@ Loader vẫn đọc được monthly legacy `year=YYYY/month=MM/part.parquet` n�
 - `load_ohlcv()`: trả về `data_dict[symbol] = DataFrame(index=time, columns=open/high/low/close/volume)`, tương thích pipeline strategy cũ.
 - `load_ohlcv_frame()`: trả về long OHLCV DataFrame từ matrix.
 
-`VNDailyMatrix` có thể chứa auxiliary column `VN30F1M` để làm benchmark/regime/hedge. Metadata `state/vn_daily_universe_report.csv.gz` và `state/vn_daily_matrix_symbols.json` tách `equity_symbols` khỏi `auxiliary_symbols`; không dùng `VN30F1M` trong cross-sectional equity ranking.
+`VNDailyMatrix` có thể chứa auxiliary column `VN30F1M` để làm benchmark/regime/hedge. Từ Phase 3, matrix ưu tiên nguồn rebuilt continuous:
+
+```text
+storage/vn/futures/continuous/1d/symbol=VN30F1M/version=v1
+```
+
+Nếu continuous chưa có, builder mới fallback về legacy `storage/vn/futures/1d` hoặc aggregate từ `1m`. Metadata `state/vn_daily_matrix_symbols.json` ghi `auxiliary_sources` để service khác biết `VN30F1M` đang lấy từ đâu. `state/vn_daily_universe_report.csv.gz` và `state/vn_daily_matrix_symbols.json` tách `equity_symbols` khỏi `auxiliary_symbols`; không dùng `VN30F1M` trong cross-sectional equity ranking.
+
+### VN30 Futures Derivatives V1
+
+Contract-level storage dùng identity thật của từng hợp đồng `VN30FYYMM`, không dùng rolling alias làm key lịch sử. Schema canonical:
+
+```text
+time, instrument_id, open, high, low, close, volume, source, quality_flags, ingested_at
+```
+
+Continuous storage dùng một roll table chung cho cả `1m` và `1d`:
+
+```text
+storage/vn/futures/rolls/version=v1/rolls.parquet
+```
+
+Roll table schema:
+
+```text
+trading_date, series, old_instrument_id, new_instrument_id,
+roll_reason, decision_date, old_close, new_close, roll_gap, roll_ratio
+```
+
+Quy ước series:
+
+- `VN30F1M`: calendar front-month, giữ hợp đồng gần nhất đến hết phiên đáo hạn; phiên giao dịch kế tiếp chuyển sang hợp đồng tháng sau.
+- `VN30F1M_TRADE`: liquidity-aware tradable series; chỉ dùng volume của các phiên đã đóng để quyết định roll, không dùng volume cùng ngày.
+- `VN30F1M_PROVIDER`: không phải output canonical mới. Alias DNSE cũ chỉ còn vai trò validation/parity nếu dữ liệu legacy tồn tại.
+
+Continuous schema có thêm metadata:
+
+```text
+time, symbol, open, high, low, close, volume,
+active_instrument_id, roll_flag, roll_gap, roll_ratio,
+source, quality_flags, ingested_at
+```
+
+Loader mặc định vẫn chỉ trả OHLCV để tiết kiệm RAM. Truyền `columns="full"` nếu cần `active_instrument_id`, `roll_flag`, `roll_gap`, `quality_flags`.
 
 ## Docker Services
 
@@ -123,10 +174,11 @@ Các service chạy bằng `docker compose` và có `restart: unless-stopped`.
 | `options-binance-5m` | `collectors.options_binance_5m` | Options snapshot mỗi 5 phút |
 | `vn-daily` | `collectors.vn_daily` | VN daily raw lúc `16:30 Asia/Ho_Chi_Minh`; sau mỗi lượt update sẽ build universe report và rebuild daily matrix |
 | `vn-intraday-stocks` | `collectors.vn_intraday_vnstock` | VN stock 1m lúc `16:30 Asia/Ho_Chi_Minh` |
-| `vn30f1m-dnse` | `collectors.vn_intraday_dnse` | VN futures 1m lúc `16:30 Asia/Ho_Chi_Minh` |
+| `vn30f1m-dnse` | `collectors.vn_intraday_dnse` | Legacy alias service; disabled khỏi default compose, chỉ chạy khi bật profile `legacy-vn30f1m-dnse` |
 | `vn-derivatives-probe` | `collectors.vn_derivatives` | Probe KBS/DNSE individual VN30 futures contracts; bootstrap/profile only |
 | `vn-derivatives-bootstrap` | `collectors.vn_derivatives` | Backfill individual VN30 futures contracts; bootstrap/profile only |
 | `vn-derivatives-validate` | `collectors.vn_derivatives` | Validate contract-level VN30 futures storage |
+| `vn-derivatives` | `collectors.vn_derivatives` | Daily sync contracts, validate, rebuild continuous, compare provider alias, update VN matrix |
 
 ```bash
 docker compose up -d --build
@@ -167,14 +219,33 @@ PYTHONPATH=. python -m collectors.vn_daily_matrix --start-date 2016-01-01
 PYTHONPATH=. python -m collectors.vn_derivatives discover --json
 PYTHONPATH=. python -m collectors.vn_derivatives probe --json
 
-# VN30 futures individual contracts V1. Ghi contract-level Parquet, chưa build continuous/matrix.
+# VN30 futures individual contracts V1.
 PYTHONPATH=. python -m collectors.vn_derivatives backfill --start 2017-08-10 --resolutions 1m,1d --max-contracts 1 --max-windows 2 --json
 PYTHONPATH=. python -m collectors.vn_derivatives validate --json
+
+# VN30 futures continuous + matrix integration.
+PYTHONPATH=. python -m collectors.vn_derivatives build-continuous --start 2017-08-10 --resolutions 1m,1d --json
+PYTHONPATH=. python -m collectors.vn_derivatives validate-continuous --json
+PYTHONPATH=. python -m collectors.vn_derivatives compare-provider --json
+PYTHONPATH=. python -m collectors.vn_derivatives update-matrix --json
+PYTHONPATH=. python -m collectors.vn_derivatives sync-once --json
 ```
 
-Luồng production cho VN daily là container `vn-daily`, không phải chạy host command rời. Service này tự chạy cuối ngày, append/dedupe raw daily, ghi `state/vn_daily_universe_report.csv.gz`, aggregate auxiliary `VN30F1M` daily nếu cần, rồi rebuild `VNDailyMatrix`.
+Luồng production cho VN daily là container `vn-daily`, không phải chạy host command rời. Service này tự chạy cuối ngày, append/dedupe raw daily, ghi `state/vn_daily_universe_report.csv.gz`, đọc auxiliary `VN30F1M` theo continuous-first policy, rồi rebuild `VNDailyMatrix`.
 
-Luồng VN derivatives mới đang tách phase rõ ràng. `vn-derivatives-probe` tạo instrument dimension và provider coverage report cho từng hợp đồng thật `VN30FYYMM`. `vn-derivatives-bootstrap` ghi contract-level Parquet dưới `storage/vn/futures/contracts/{1m,1d}` với KBS primary và DNSE fallback. Nó chưa thay thế `vn30f1m-dnse` và chưa cập nhật `VNDailyMatrix` cho tới khi continuous validation ở phase sau pass.
+Luồng VN derivatives production là `vn-derivatives`. Daily workflow:
+
+```text
+sync recent concrete contracts
+→ validate contract storage
+→ merge/update shared roll table
+→ rebuild affected continuous partitions
+→ validate continuous storage
+→ compare rebuilt VN30F1M với legacy/provider alias nếu có overlap
+→ rebuild VN Daily Matrix
+```
+
+`vn-derivatives-bootstrap` dùng cho warmup/backfill dài. `vn30f1m-dnse` đã chuyển sang profile legacy để tránh hai process cùng ghi alias `VN30F1M`.
 
 ## Loader Endpoints
 
@@ -190,6 +261,10 @@ from data_loader import (
     CryptoBinanceSpot1m,
     CryptoDailyMatrix,
     VNDailyMatrix,
+    VnDerivativesContracts1m,
+    VnDerivativesContractsDaily,
+    VnDerivativesContinuous1m,
+    VnDerivativesContinuousDaily,
     VnFutures1m,
     VnStock1m,
     VnStockDaily,
@@ -205,6 +280,10 @@ from data_loader import (
 | `VnStockDaily` | `vn_stock_daily`, `vn_equity_1d`, `vn_stock_1d` | Long OHLCV |
 | `VNDailyMatrix` | `vn_daily_matrix` | Matrix feature hoặc OHLCV dict/frame |
 | `VnFutures1m` | `vn_futures_1m` | Long OHLCV |
+| `VnDerivativesContracts1m` | `vn_derivatives_contracts_1m`, `vn30_contracts_1m` | Long OHLCV concrete VN30 futures contracts |
+| `VnDerivativesContractsDaily` | `vn_derivatives_contracts_1d`, `vn30_contracts_1d` | Long OHLCV concrete VN30 futures contracts |
+| `VnDerivativesContinuous1m` | `vn_derivatives_continuous_1m`, `vn30_continuous_1m`, `vn30f1m_continuous_1m` | Long OHLCV rebuilt continuous VN30 futures |
+| `VnDerivativesContinuousDaily` | `vn_derivatives_continuous_1d`, `vn30_continuous_1d`, `vn30f1m_continuous_1d` | Long OHLCV rebuilt continuous VN30 futures |
 | `CryptoBinance1m` | `crypto_1m` | Long OHLCV futures perpetual |
 | `CryptoBinanceQuarterly1m` | `crypto_binance_quarterly_1m`, `binance_usdm_quarterly_1m` | Long OHLCV concrete quarterly |
 | `CryptoBinanceSpot1m` | `crypto_binance_spot_1m`, `binance_spot_1m`, `crypto_spot_1m` | Long OHLCV spot |
@@ -228,7 +307,7 @@ Raw `1m` vẫn là canonical storage. Endpoint resample không tạo thêm timef
 ### Common Examples
 
 ```python
-from data_loader import CryptoBinance1m, CryptoDailyMatrix, VNDailyMatrix, load_data
+from data_loader import CryptoBinance1m, CryptoDailyMatrix, VNDailyMatrix, VnDerivativesContinuousDaily, load_data
 
 # Binance daily close matrix
 daily_close = CryptoDailyMatrix().load(
@@ -258,6 +337,29 @@ vn_close = load_data(
     feature="close",
     symbols=["FPT", "VCB", "VN30F1M"],
     start_date="2018-01-01",
+    check_val=True,
+)
+
+# VN30 futures concrete contract, không phải rolling alias.
+vn30_contract = load_data(
+    "vn_derivatives_contracts_1m",
+    symbols="VN30F2508",
+    start_date="2025-08-01",
+    check_val=True,
+)
+
+# VN30 rebuilt continuous daily. Mặc định chỉ đọc OHLCV.
+vn30_continuous = VnDerivativesContinuousDaily().load(
+    symbols="VN30F1M",
+    start_date="2018-01-01",
+    check_val=True,
+)
+
+# Khi cần kiểm tra roll/provenance.
+vn30_roll_meta = load_data(
+    "vn_derivatives_continuous_1d",
+    symbols="VN30F1M",
+    columns="full",
     check_val=True,
 )
 

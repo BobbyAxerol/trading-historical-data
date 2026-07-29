@@ -20,6 +20,7 @@ requests:
   kbs_1m_window_days: 7
   dnse_1m_window_days: 5
   daily_window_days: 365
+  daily_sync_lookback_days: 45
   retry_attempts: 5
   probe_window_days: 30
 

@@ -6,7 +6,7 @@ This file is the consolidated implementation tracker for `_get_data` jobs. Detai
 
 Source guide: `rebuild_derivatives_vn30f1m.md`
 
-Status: Phase 2 complete
+Status: Phase 3 complete
 
 Branch: `dev`
 
@@ -247,6 +247,98 @@ Notes:
 - Docker smoke surfaced two real production issues and they were fixed before commit:
   - old `vnstock==3.3.1` image could not use KBS source;
   - provider request errors were initially able to mark an empty window completed, now fixed to fail-fast unless both providers are empty-confirmed.
+
+#### 2026-07-29 UTC — Phase 3 Implementation
+
+Status: complete
+
+Changed:
+
+- Added `collectors/vn_derivatives/continuous.py`:
+  - shared roll table builder at `storage/vn/futures/rolls/version=v1/rolls.parquet`;
+  - calendar front-month `VN30F1M`;
+  - liquidity-aware `VN30F1M_TRADE`;
+  - no-lookahead tradable roll using only closed prior-day volume;
+  - hard roll before expiry for tradable series;
+  - continuous `1m` and `1d` builders from contract-level storage;
+  - continuous storage validation;
+  - provider alias parity report;
+  - daily `sync_once` and `live` service workflow.
+- Extended `collectors.vn_derivatives` CLI:
+  - `build-continuous`;
+  - `validate-continuous`;
+  - `compare-provider`;
+  - `update-matrix`;
+  - `sync-once`;
+  - `live`.
+- Updated `VNDailyMatrix` builder:
+  - `VN30F1M` auxiliary now prefers rebuilt continuous `1d`;
+  - fallback remains legacy futures `1d`, then aggregate legacy `1m`, so existing systems do not hard fail before continuous backfill;
+  - metadata writes `auxiliary_sources` so downstream readers know whether `VN30F1M` came from continuous or fallback.
+- Added loader endpoints:
+  - `VnDerivativesContracts1m`;
+  - `VnDerivativesContractsDaily`;
+  - `VnDerivativesContinuous1m`;
+  - `VnDerivativesContinuousDaily`;
+  - router aliases `vn_derivatives_contracts_1m`, `vn_derivatives_contracts_1d`, `vn_derivatives_continuous_1m`, `vn_derivatives_continuous_1d`.
+- Updated Docker Compose:
+  - added production service `vn-derivatives`;
+  - moved legacy `vn30f1m-dnse` under profile `legacy-vn30f1m-dnse` with `restart: "no"` to avoid double-writing rolling alias data.
+- Updated README landing page with Phase 3 storage, services, CLI, loader endpoint examples, and source semantics.
+- Added `tests/test_vn_derivatives_phase3.py`.
+
+Storage contract:
+
+- Roll table: `storage/vn/futures/rolls/version=v1/rolls.parquet`.
+- Continuous `1m`: `storage/vn/futures/continuous/1m/symbol=VN30F1M/version=v1/year=YYYY/month=MM/part.parquet`.
+- Continuous `1d`: `storage/vn/futures/continuous/1d/symbol=VN30F1M/version=v1/year=YYYY/part.parquet`.
+- Continuous row schema:
+  - `time`;
+  - `symbol`;
+  - `open`;
+  - `high`;
+  - `low`;
+  - `close`;
+  - `volume`;
+  - `active_instrument_id`;
+  - `roll_flag`;
+  - `roll_gap`;
+  - `roll_ratio`;
+  - `source`;
+  - `quality_flags`;
+  - `ingested_at`.
+
+Decisions:
+
+- `VN30F1M` is canonical rebuilt calendar front-month after continuous validation.
+- `VN30F1M_TRADE` is available for execution-oriented tests, but `VNDailyMatrix` uses `VN30F1M` only.
+- `VN30F1M_PROVIDER` is a semantics label for legacy/provider alias validation. The old DNSE alias service is disabled from default compose instead of being used as canonical history.
+- Daily `sync-once/live` preserves existing roll-table history outside the current lookback window; it does not overwrite full historical rolls with a 45-day partial table.
+
+Validation:
+
+- `python -m unittest tests.test_vn_derivatives_phase3`: OK, 4 tests.
+- `python -m unittest tests.test_vn_derivatives_phase1 tests.test_vn_derivatives_phase2 tests.test_vn_derivatives_phase3 tests.test_vn_daily_universe`: OK, 21 tests.
+- `python -m compileall collectors/providers collectors/vn_derivatives collectors/vn_daily_matrix.py data_loader.py`: OK.
+- `git diff --check`: OK.
+- `docker compose build vn-derivatives`: OK.
+- `docker compose config --services`: OK, default compose includes `vn-derivatives` and does not include legacy `vn30f1m-dnse`.
+- `docker compose --profile vn-derivatives run --rm -e DATA_ROOT=/tmp/vn_deriv_phase3_smoke/storage -e STATE_ROOT=/tmp/vn_deriv_phase3_smoke/state vn-derivatives python -m collectors.vn_derivatives build-continuous --start 2024-01-17 --end 2024-01-19 --resolutions 1d --series VN30F1M --json`: OK, `status=ok`, `rolls=2`, `rows_written=0` because smoke storage intentionally has no contract bars.
+- `docker compose --profile vn-derivatives run --rm -e DATA_ROOT=/tmp/vn_deriv_phase3_smoke/storage -e STATE_ROOT=/tmp/vn_deriv_phase3_smoke/state vn-derivatives python -m collectors.vn_derivatives validate-continuous --resolutions 1d --series VN30F1M --json`: OK, `status=ok`, `files=0`, `rows=0`.
+- Phase 3 tests cover:
+  - calendar roll happens after expiry session;
+  - `1m` continuous does not mix two contracts in one trading day;
+  - `1m` and `1d` use the same roll table;
+  - liquidity-aware tradable roll uses closed prior-day volume only;
+  - incremental roll-table builds preserve existing history outside the current window;
+  - `VNDailyMatrix` prefers rebuilt continuous `VN30F1M` over legacy alias;
+  - new loader endpoint returns the same default OHLCV DataFrame shape as existing loaders.
+
+Technical debt / accepted limitations:
+
+- Provider parity report is informational and does not currently block matrix rebuild automatically; manual review is still recommended after the first full historical bootstrap.
+- Daily sync rebuilds continuous partitions for the configured lookback window, not the entire history. Full rebuild remains available via `build-continuous --start 2017-08-10`.
+- No adjusted continuous price is materialized on disk; raw OHLC, `roll_gap`, and `roll_ratio` are stored so adjusted analytics can be computed explicitly by consumers.
 
 ## Previous Job: VN Daily Universe Upgrade
 
