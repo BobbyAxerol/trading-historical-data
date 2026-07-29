@@ -2,11 +2,233 @@
 
 This file is the consolidated implementation tracker for `_get_data` jobs. Detailed job guides may live in separate markdown files, but the executable phase plan and implementation logs should be summarized here to avoid fragmented state.
 
-## Active Job: VN30 Futures Historical Derivatives Upgrade
+## Active Job: VN30 Futures Free Data Upgrade V2
 
-Source guide: `rebuild_derivatives_vn30f1m.md`
+Source guide: `VN30_FUTURES_FREE_DATA_UPGRADE_PLAN_V2.md`
 
-Status: Phase 3 complete
+Status: planned
+
+Branch: `dev`
+
+Context:
+
+- V1 KBS/DNSE-first implementation built useful storage/roll/service scaffolding, but live proof showed the data source assumption was not valid enough:
+  - production `provider_probe_v1` has no positive bars;
+  - KBS/DNSE concrete futures must be demoted to opportunistic fallback until positive proof exists;
+  - no HTTP error may be interpreted as confirmed empty;
+  - no provider may be promoted without real returned bars and validation.
+- V2 switches to a free-first strategy:
+  - XNO for continuous `1m`/`1D` proof and alias series;
+  - Vietstock for individual daily contracts if public extraction proves full coverage;
+  - TradingView only for public-accessible validation/fill;
+  - KBS/DNSE only after positive bars.
+- V1 guide has been moved by the user to `rebuild_derivatives_vn30f1m_v1.md`; keep it as historical context only.
+
+### Goal
+
+Deliver trustworthy VN30 futures data with staged promotion:
+
+- `VN30F1M_FREE`: longest validated free continuous daily, usable as research proxy/regime/hedge input.
+- `VN30F1M_CONTRACT`: daily continuous rebuilt from individual contracts, usable for contract-aware accounting after Vietstock daily proof.
+- `VN30F1M_TRADE`: tradable roll policy built from contract daily volume without look-ahead.
+- `VN30F1M` convenience alias is not promoted until quality gates pass.
+- Continuous `1m` is best-effort and must start only at the earliest real positive bar.
+
+### Phase 1 — Source Proof, Typed Provider Registry, Hard Gates
+
+Scope:
+
+- Replace KBS/DNSE-only probe assumptions with typed provider results:
+  - `success`;
+  - `empty_confirmed`;
+  - `unsupported_symbol`;
+  - `invalid_request`;
+  - `auth_error`;
+  - `rate_limited`;
+  - `blocked`;
+  - `schema_error`;
+  - `unknown_error`.
+- Add provider registry:
+  - `collectors/providers/xno_derivatives.py`;
+  - `collectors/providers/vietstock_derivatives.py`;
+  - `collectors/providers/tradingview_derivatives.py`;
+  - existing KBS/DNSE wrapped into the same result contract.
+- Add V2 source-gate modules:
+  - `collectors/vn_derivatives/provider_registry.py`;
+  - `collectors/vn_derivatives/source_gates.py`;
+  - `collectors/vn_derivatives/web_cache.py`;
+  - optional parser helpers for Vietstock/TradingView.
+- Add CLI:
+  - `python -m collectors.vn_derivatives probe-free-sources`;
+  - optional provider filters and sample-contract filters;
+  - JSON summary output.
+- Add Docker one-shot service:
+  - `vn-derivatives-source-probe`;
+  - profile/bootstrap only;
+  - no canonical publish.
+- Probe XNO:
+  - `VN30F1M` resolutions `1m`, `5m`, `1H`, `1D`;
+  - record installed version, row count, first/last bar, schema, duplicate count, invalid OHLC, session outside rows, median interval, volume range.
+- Probe Vietstock:
+  - sample contracts `VN30F1709`, `VN30F2003`, `VN30F2406`, `VN30F2508`, current active contract;
+  - public overview/statistics/XHR discovery;
+  - cache public responses;
+  - no CAPTCHA/login/paywall bypass.
+- Probe TradingView:
+  - public-access only;
+  - continuous `HNX:VN301!`;
+  - daily and 1m availability samples;
+  - classify blocked if login/CAPTCHA/private controls are needed.
+- Probe KBS/DNSE only as fallback candidates:
+  - one old expired;
+  - one pre-KRX;
+  - one post-KRX;
+  - one active;
+  - legacy and KRX symbols.
+- Write state:
+  - `state/vn_derivatives/source_probe_v2.parquet`;
+  - `state/vn_derivatives/source_probe_v2.json`;
+  - `state/vn_derivatives/source_status.json`;
+  - provider-specific probe reports as needed.
+
+Hard gates:
+
+- `expected_request_count == actual_request_count`, otherwise fail exit.
+- `positive_request_count == 0` blocks Phase 2 publish.
+- HTTP 400/403/429/5xx are not `empty_confirmed`.
+- `empty_confirmed` only means request succeeded, schema parsed, and bars list was actually empty.
+- Provider status must be one of:
+  - `UNVERIFIED`;
+  - `POSITIVE_PARTIAL`;
+  - `VALIDATED`;
+  - `DISABLED`.
+
+Phase 1 tests:
+
+- Provider result status classification, especially HTTP 400 not empty.
+- XNO normalization for `1m` and `1D` sample frames.
+- Vietstock HTML/XHR parser with fixture pages and pagination fixtures.
+- TradingView parser/normalizer with public-response fixtures only.
+- Source-gate JSON/Parquet summary counts.
+- Fail exit when request count mismatches.
+- Fail gate when no provider has positive bars.
+- Docker config includes `vn-derivatives-source-probe`.
+
+Exit criteria:
+
+- At least one provider has positive real bars before any Phase 2 publish.
+- Source status tells exactly which providers are allowed for daily, continuous `1m`, validation, or disabled fallback.
+- Existing V1 storage is not overwritten.
+
+### Phase 2 — Publish Free Daily, Contract Daily, Continuous 1m, Matrix And Services
+
+Scope:
+
+- Publish `VN30F1M_FREE` daily if XNO/TradingView continuous daily passes Gate A:
+  - storage: `storage/vn/futures/continuous/1d/symbol=VN30F1M_FREE/version=v2_free/...`;
+  - row provenance: `source`, `source_symbol`, `quality_flags`, `ingested_at`;
+  - source priority determined by Phase 1 status, not hard-coded before proof.
+- Backfill individual daily contracts if Vietstock passes Gate B:
+  - storage: `storage/vn/futures/contracts/1d/symbol=VN30FYYMM/year=YYYY/part.parquet`;
+  - schema includes `open_interest` and `settlement_price` as nullable fields;
+  - process per contract, atomic writes, resume manifest, no all-contract concat.
+- Build contract-rebuilt daily continuous:
+  - `VN30F1M_CONTRACT`;
+  - `VN30F1M_TRADE`;
+  - shared roll table at `storage/vn/futures/rolls/version=v2_free/rolls.parquet` or compatible v1 path only after migration decision;
+  - no look-ahead volume.
+- Publish continuous `1m` if Gate C passes:
+  - storage: `storage/vn/futures/continuous/1m/symbol=VN30F1M/version=v2_free/...`;
+  - no forward fill;
+  - no averaged OHLC;
+  - secondary sources fill exact missing timestamps only;
+  - provenance per row.
+- Add alias/free-series modules:
+  - `collectors/vn_derivatives/alias_series.py`;
+  - `collectors/vn_derivatives/parity.py`.
+- Add CLI:
+  - `backfill-daily-free`;
+  - `backfill-alias-1m`;
+  - `build-free-continuous`;
+  - `validate-free-continuous`;
+  - `update-matrix-v2`.
+- Add Docker services:
+  - `vn-derivatives-daily-backfill`;
+  - `vn-derivatives-1m-backfill`;
+  - updated `vn-derivatives` live flow only after source status has validated providers.
+- Update loaders without breaking current endpoints:
+  - add explicit loader/router aliases for `VN30F1M_FREE`, `VN30F1M_CONTRACT`, `VN30F1M_PROVIDER`;
+  - keep default OHLCV projection;
+  - `columns="full"` exposes provenance/roll metadata.
+- Update `VNDailyMatrix` integration:
+  - add futures auxiliary candidates `VN30F1M_FREE`, `VN30F1M_CONTRACT`, `VN30F1M_PROVIDER`;
+  - all futures `eligible_for_equity_ranking=false`;
+  - only promote convenience `VN30F1M` after Gate E.
+
+Publish gates:
+
+- Gate A: free continuous daily ready:
+  - at least one free continuous provider positive;
+  - first bar materially earlier than 2024;
+  - daily validation pass.
+- Gate B: individual daily ready:
+  - Vietstock full extraction positive on at least 4/5 sample contracts;
+  - contract rows positive;
+  - OHLC/date-boundary validation pass.
+- Gate C: continuous `1m` ready:
+  - at least one free source returns >1000 real bars;
+  - first bar earlier than existing 2024 coverage;
+  - timezone/session validated.
+- Gate D: contract-rebuilt continuous ready:
+  - roll table complete;
+  - no look-ahead;
+  - parity against free/provider continuous pass where overlap exists.
+- Gate E: matrix promotion:
+  - quality status pass;
+  - source provenance present;
+  - non-null rows extend existing series.
+
+Phase 2 tests:
+
+- Daily free series merge priority and exact missing-date fill.
+- Individual daily contract backfill resume/dedupe.
+- Contract daily validation including listing/final trading date boundaries.
+- Roll table calendar and tradable no-lookahead behavior.
+- Continuous `1m` duplicate/session/timezone validation.
+- Daily aggregation from `1m` only when completeness threshold passes.
+- Parity reports against existing provider series.
+- Matrix auxiliary metadata excludes futures from equity ranking.
+- Loader endpoints return stable old-style OHLCV DataFrames by default.
+- Docker smoke for each new service using `/tmp` storage.
+
+Exit criteria:
+
+- Minimum success is acceptable:
+  - `VN30F1M_FREE` daily extends materially before 2024 and validates;
+  - contract daily backfill is progressive and reports coverage;
+  - continuous `1m` remains best-effort if no free source passes.
+- No provider is promoted from V2 without positive bars.
+- No private-access scraping/bypass is used.
+
+### V2 Implementation Logs
+
+#### 2026-07-29 UTC — V2 Planning
+
+Status: planned
+
+Decisions:
+
+- Supersede the V1 KBS/DNSE-first plan with the free-first V2 plan.
+- Keep V1 code as scaffolding where useful, but source proof and promotion now follow V2 hard gates.
+- Split V2 into two executable phases:
+  - Phase 1 proves sources and writes status gates only;
+  - Phase 2 publishes validated datasets and updates matrix/services.
+
+## Previous Job: VN30 Futures Historical Derivatives Upgrade V1
+
+Source guide: `rebuild_derivatives_vn30f1m_v1.md`
+
+Status: superseded by V2 after live proof showed no positive KBS/DNSE concrete bars
 
 Branch: `dev`
 
