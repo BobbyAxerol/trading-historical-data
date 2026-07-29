@@ -12,6 +12,8 @@ from collectors.common.env import data_root, load_environment
 from collectors.common.locks import FileLock
 from collectors.common.logging import setup_logging
 from collectors.common.manifest import JsonState, utc_now_iso
+from collectors.common.storage import PartitionedParquetStore, read_partition_file
+from collectors.vn_daily_universe import configured_equity_symbols, configured_external_symbols
 
 DATASET = "vn_daily_matrix"
 FEATURES = ["open", "high", "low", "close", "volume"]
@@ -19,8 +21,12 @@ FEATURES = ["open", "high", "low", "close", "volume"]
 
 def _configured_symbols() -> list[str]:
     config = load_yaml("symbols.vn_daily.yml")
-    symbols = config.get("symbols") or []
-    return [str(symbol).strip().upper() for symbol in symbols if str(symbol).strip()]
+    return configured_equity_symbols(config)
+
+
+def _configured_external_symbols() -> list[str]:
+    config = load_yaml("symbols.vn_daily.yml")
+    return configured_external_symbols(config)
 
 
 def _discover_symbols(raw_root: Path) -> list[str]:
@@ -47,32 +53,29 @@ def _ordered_symbols(raw_root: Path, symbols: Iterable[str] | None = None) -> li
     return ordered
 
 
-def _read_symbol(raw_root: Path, symbol: str, start_ts: pd.Timestamp | None, end_ts: pd.Timestamp | None) -> pd.DataFrame:
+def _partition_files(symbol_root: Path) -> list[Path]:
+    by_dir: dict[Path, Path] = {}
+    for partition_dir in list(symbol_root.glob("year=*")) + list(symbol_root.glob("year=*/month=*")) + list(symbol_root.glob("year=*/month=*/day=*")):
+        if not partition_dir.is_dir():
+            continue
+        parquet = partition_dir / "part.parquet"
+        csv = partition_dir / "part.csv.gz"
+        candidates = [path for path in (parquet, csv) if path.exists()]
+        if not candidates:
+            continue
+        by_dir[partition_dir] = max(candidates, key=lambda path: path.stat().st_mtime)
+    return sorted(by_dir.values())
+
+
+def _read_symbol(raw_root: Path, symbol: str, start_ts: pd.Timestamp | None, end_ts: pd.Timestamp | None, *, daily: bool = True) -> pd.DataFrame:
     symbol_root = raw_root / f"symbol={symbol}"
     if not symbol_root.exists():
         return pd.DataFrame()
 
-    by_year: dict[int, Path] = {}
-    for path in sorted(symbol_root.glob("year=*/part.parquet")) + sorted(symbol_root.glob("year=*/part.csv.gz")):
-        try:
-            year = int(path.parent.name.split("=", 1)[1])
-        except (IndexError, ValueError):
-            continue
-        current = by_year.get(year)
-        if current is None or path.stat().st_mtime >= current.stat().st_mtime:
-            by_year[year] = path
-
     frames = []
-    for year, path in sorted(by_year.items()):
-        if start_ts is not None and year < start_ts.year:
-            continue
-        if end_ts is not None and year > end_ts.year:
-            continue
+    for path in _partition_files(symbol_root):
         try:
-            if path.suffix == ".parquet":
-                frames.append(pd.read_parquet(path, engine="pyarrow"))
-            else:
-                frames.append(pd.read_csv(path, compression="gzip"))
+            frames.append(read_partition_file(path))
         except Exception:
             continue
 
@@ -83,12 +86,12 @@ def _read_symbol(raw_root: Path, symbol: str, start_ts: pd.Timestamp | None, end
     if "time" not in df.columns:
         return pd.DataFrame()
 
-    df["time"] = pd.to_datetime(df["time"], errors="coerce").dt.normalize()
+    df["time"] = pd.to_datetime(df["time"], errors="coerce")
     df = df.dropna(subset=["time"])
     if start_ts is not None:
         df = df[df["time"] >= start_ts]
     if end_ts is not None:
-        df = df[df["time"] <= end_ts]
+        df = df[df["time"] <= end_ts + pd.Timedelta(days=1) - pd.Timedelta(microseconds=1)]
     if df.empty:
         return pd.DataFrame()
 
@@ -96,15 +99,58 @@ def _read_symbol(raw_root: Path, symbol: str, start_ts: pd.Timestamp | None, end
     for feature in FEATURES:
         if feature in df.columns:
             df[feature] = pd.to_numeric(df[feature], errors="coerce")
-    prices = df[["open", "high", "low", "close"]]
-    df["high"] = prices.max(axis=1, skipna=False)
-    df["low"] = prices.min(axis=1, skipna=False)
-    return (
-        df[["time", "symbol", *FEATURES]]
-        .drop_duplicates(subset=["time", "symbol"], keep="last")
-        .sort_values(["time", "symbol"])
-        .reset_index(drop=True)
+    if daily:
+        df["time"] = df["time"].dt.normalize()
+        prices = df[["open", "high", "low", "close"]]
+        df["high"] = prices.max(axis=1, skipna=False)
+        df["low"] = prices.min(axis=1, skipna=False)
+        return (
+            df[["time", "symbol", *FEATURES]]
+            .drop_duplicates(subset=["time", "symbol"], keep="last")
+            .sort_values(["time", "symbol"])
+            .reset_index(drop=True)
+        )
+    return df[["time", "symbol", *FEATURES]].sort_values(["time", "symbol"]).reset_index(drop=True)
+
+
+def _aggregate_intraday_to_daily(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
+    if df.empty:
+        return pd.DataFrame()
+    work = df.copy()
+    work["time"] = pd.to_datetime(work["time"], errors="coerce")
+    work = work.dropna(subset=["time"]).sort_values("time")
+    if work.empty:
+        return pd.DataFrame()
+    work["_date"] = work["time"].dt.normalize()
+    daily = (
+        work.groupby("_date", sort=True)
+        .agg(open=("open", "first"), high=("high", "max"), low=("low", "min"), close=("close", "last"), volume=("volume", "sum"))
+        .reset_index()
+        .rename(columns={"_date": "time"})
     )
+    daily["symbol"] = symbol
+    return daily[["time", "symbol", *FEATURES]]
+
+
+def _write_futures_daily(df: pd.DataFrame, symbol: str) -> None:
+    if df.empty:
+        return
+    store = PartitionedParquetStore(["vn", "futures", "1d"], partition="year")
+    store.append(df, time_col="time", dedupe_cols=["symbol", "time"], attrs={"symbol": symbol}, lock_name=f"vn_futures_1d/{symbol}")
+
+
+def _read_external_symbol(symbol: str, start_ts: pd.Timestamp | None, end_ts: pd.Timestamp | None) -> pd.DataFrame:
+    futures_daily_root = data_root() / "vn" / "futures" / "1d"
+    df = _read_symbol(futures_daily_root, symbol, start_ts, end_ts)
+    if not df.empty:
+        return df
+    futures_1m_root = data_root() / "vn" / "futures" / "1m"
+    intraday = _read_symbol(futures_1m_root, symbol, start_ts, end_ts, daily=False)
+    daily = _aggregate_intraday_to_daily(intraday, symbol)
+    if not daily.empty:
+        _write_futures_daily(daily, symbol)
+        return _read_symbol(futures_daily_root, symbol, start_ts, end_ts)
+    return daily
 
 
 def build_matrix(
@@ -122,6 +168,7 @@ def build_matrix(
     start_ts = pd.to_datetime(start_date).normalize() if start_date else None
     end_ts = pd.to_datetime(end_date).normalize() if end_date else None
     symbol_list = _ordered_symbols(raw_root, symbols)
+    external_symbols = [] if symbols is not None else _configured_external_symbols()
 
     frames = []
     missing_symbols: list[str] = []
@@ -132,17 +179,29 @@ def build_matrix(
             continue
         frames.append(df)
 
+    auxiliary_symbols: list[str] = []
+    missing_auxiliary_symbols: list[str] = []
+    for symbol in external_symbols:
+        df = _read_external_symbol(symbol, start_ts, end_ts)
+        if df.empty:
+            missing_auxiliary_symbols.append(symbol)
+            continue
+        auxiliary_symbols.append(symbol)
+        frames.append(df)
+
     if not frames:
         raise RuntimeError(f"No VN daily data found under {raw_root}")
 
     all_df = pd.concat(frames, ignore_index=True)
     all_df = all_df.drop_duplicates(subset=["time", "symbol"], keep="last")
     active_symbols = [symbol for symbol in symbol_list if symbol not in set(missing_symbols)]
+    matrix_symbols = active_symbols + auxiliary_symbols
 
     with FileLock(DATASET):
         for feature in FEATURES:
             matrix = all_df.pivot(index="time", columns="symbol", values=feature)
-            matrix = matrix.reindex(columns=active_symbols)
+            matrix = matrix.reindex(columns=matrix_symbols)
+            matrix = matrix.dropna(axis=1, how="all")
             matrix.index = pd.to_datetime(matrix.index, errors="coerce")
             matrix = matrix[~matrix.index.isna()].sort_index()
             matrix.index = pd.to_datetime(matrix.index).normalize()
@@ -156,17 +215,23 @@ def build_matrix(
 
     state = JsonState("vn_daily_matrix_symbols.json")
     state.write({
-        "symbols": active_symbols,
+        "symbols": matrix_symbols,
+        "equity_symbols": active_symbols,
+        "auxiliary_symbols": auxiliary_symbols,
         "missing_symbols": missing_symbols,
+        "missing_auxiliary_symbols": missing_auxiliary_symbols,
         "features": FEATURES,
         "storage": str(matrix_root),
         "updated_at": utc_now_iso(),
-        "source": "storage/vn/equity/1d",
+        "source": "storage/vn/equity/1d + storage/vn/futures/1d",
     })
 
     return {
-        "symbols": active_symbols,
+        "symbols": matrix_symbols,
+        "equity_symbols": active_symbols,
+        "auxiliary_symbols": auxiliary_symbols,
         "missing_symbols": missing_symbols,
+        "missing_auxiliary_symbols": missing_auxiliary_symbols,
         "rows": int(all_df["time"].nunique()),
         "features": FEATURES,
         "path": str(matrix_root),
