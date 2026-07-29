@@ -35,7 +35,7 @@ Hiện storage chính dùng **Parquet**. Sau phase cleanup, `storage/` không c�
 | Binance Options Snapshot | `5m` | Options Binance theo cấu hình hiện tại | Snapshot incremental, append theo ngày | Mỗi 5 phút | `BinanceOptions5m`, `load_data("options_5m")` |
 | Deribit BTC Options V1 | trades + `5m` snapshots | BTC inverse options compact-liquid universe | Deribit History API trades-only, gated by probe/pilot | Planned phased build | `DeribitOptionTrades`, `DeribitOptionSnapshots5m`, `load_data("deribit_option_trades")` |
 | VN Equity Daily raw | `1d` | Universe VN curated khoảng 300 symbols | Provider VN daily, lưu partition theo symbol/year | Hằng ngày `16:30 Asia/Ho_Chi_Minh` | `VnStockDaily`, `load_data("vn_stock_daily")` |
-| VN Daily Matrix | `1d` | Các symbols có raw daily trong `storage/vn/equity/1d` | Build từ canonical raw Parquet | Chạy builder khi cần sau raw daily update | `VNDailyMatrix`, `load_data("vn_daily_matrix", feature=...)` |
+| VN Daily Matrix | `1d` | VN equity universe + auxiliary `VN30F1M` benchmark column | Build từ canonical raw Parquet | Chạy builder khi cần sau raw daily update | `VNDailyMatrix`, `load_data("vn_daily_matrix", feature=...)` |
 | VN Equity Intraday | `1m` | VN stock symbols trong config | Provider VN intraday | Hằng ngày `16:30 Asia/Ho_Chi_Minh` | `VnStock1m`, `load_data("vn_stock_1m")` |
 | VN Futures Intraday | `1m` | `VN30F1M` và symbols futures configured | DNSE/VN provider | Hằng ngày `16:30 Asia/Ho_Chi_Minh` | `VnFutures1m`, `load_data("vn_futures_1m")` |
 
@@ -116,6 +116,8 @@ Loader vẫn đọc được monthly legacy `year=YYYY/month=MM/part.parquet` n�
 - `load_ohlcv()`: trả về `data_dict[symbol] = DataFrame(index=time, columns=open/high/low/close/volume)`, tương thích pipeline strategy cũ.
 - `load_ohlcv_frame()`: trả về long OHLCV DataFrame từ matrix.
 
+`VNDailyMatrix` có thể chứa auxiliary column `VN30F1M` để làm benchmark/regime/hedge. Metadata `state/vn_daily_universe_report.csv.gz` và `state/vn_daily_matrix_symbols.json` tách `equity_symbols` khỏi `auxiliary_symbols`; không dùng `VN30F1M` trong cross-sectional equity ranking.
+
 ## Docker Services
 
 Các service chạy bằng `docker compose` và có `restart: unless-stopped`.
@@ -129,7 +131,7 @@ Các service chạy bằng `docker compose` và có `restart: unless-stopped`.
 | `binance-futures-metrics-5m` | `collectors.binance_futures_metrics_5m` | Metrics 5m theo lịch |
 | `binance-orderbook-snapshot-1h` | `collectors.binance_orderbook_snapshot_1h` | Snapshot order book mỗi giờ |
 | `options-binance-5m` | `collectors.options_binance_5m` | Options snapshot mỗi 5 phút |
-| `vn-daily` | `collectors.vn_daily` | VN daily raw lúc `16:30 Asia/Ho_Chi_Minh` |
+| `vn-daily` | `collectors.vn_daily` | VN daily raw lúc `16:30 Asia/Ho_Chi_Minh`; sau mỗi lượt update sẽ build universe report và rebuild daily matrix |
 | `vn-intraday-stocks` | `collectors.vn_intraday_vnstock` | VN stock 1m lúc `16:30 Asia/Ho_Chi_Minh` |
 | `vn30f1m-dnse` | `collectors.vn_intraday_dnse` | VN futures 1m lúc `16:30 Asia/Ho_Chi_Minh` |
 
@@ -190,9 +192,11 @@ PYTHONPATH=. python -m collectors.deribit_option_trades cleanup --version v1 --j
 # Deribit pilot benchmark acceptance gate trước full historical backfill
 PYTHONPATH=. python -m collectors.deribit_option_trades pilot --version v1 --json
 
-# VN daily matrix rebuild từ raw Parquet
-PYTHONPATH=. python -m collectors.vn_daily_matrix
+# VN daily matrix rebuild thủ công để debug. Production đi qua service vn-daily live schedule.
+PYTHONPATH=. python -m collectors.vn_daily_matrix --start-date 2016-01-01
 ```
+
+Luồng production cho VN daily là container `vn-daily`, không phải chạy host command rời. Service này tự chạy cuối ngày, append/dedupe raw daily, ghi `state/vn_daily_universe_report.csv.gz`, aggregate auxiliary `VN30F1M` daily nếu cần, rồi rebuild `VNDailyMatrix`.
 
 Deribit Phase 6 backfill vận hành bằng Docker one-shot jobs, không chạy raw shell dài trong chat. Job backfill có progress log dạng `deribit_task_start`, `deribit_task_done`, `deribit_backfill_done`, đọc được bằng `docker compose logs -f deribit-option-backfill-2022`.
 
@@ -329,9 +333,18 @@ crypto_daily = CryptoDailyMatrix().load_ohlcv(
     check_val=True,
 )
 
-# VN daily OHLCV data_dict
+# VN daily OHLCV data_dict. VN30F1M là auxiliary, chỉ dùng làm benchmark/hedge.
 vn_daily = VNDailyMatrix().load_ohlcv(
-    symbols=["FPT", "VCB", "HPG"],
+    symbols=["FPT", "VCB", "HPG", "VN30F1M"],
+    start_date="2018-01-01",
+    check_val=True,
+)
+
+# VN daily close matrix qua router.
+vn_close = load_data(
+    "vn_daily_matrix",
+    feature="close",
+    symbols=["FPT", "VCB", "VN30F1M"],
     start_date="2018-01-01",
     check_val=True,
 )
@@ -458,3 +471,4 @@ from data_loader import CryptoDailyMatrix, load_data
 - [BINANCE_ORDERBOOK_SNAPSHOT_1H.md](BINANCE_ORDERBOOK_SNAPSHOT_1H.md): order book snapshot conventions.
 - [BINANCE_FUTURES_METRICS_5M.md](BINANCE_FUTURES_METRICS_5M.md): open interest và long/short metrics.
 - [CONTINUITY_REPAIR_2026-06-12.md](CONTINUITY_REPAIR_2026-06-12.md): crypto 1m continuity incident/repair.
+- [implementation_plan.md](implementation_plan.md): consolidated job/phase tracker, including VN Daily Universe upgrade.

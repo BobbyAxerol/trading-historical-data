@@ -14,6 +14,7 @@ from collectors.common.manifest import Heartbeat, JsonState, Manifest, utc_now_i
 from collectors.common.retry import SlidingWindowRateLimiter, retry_sync
 from collectors.common.storage import PartitionedParquetStore
 from collectors.vn_daily_matrix import build_matrix
+from collectors.vn_daily_universe import build_universe_report, configured_equity_symbols, configured_external_symbols
 
 DATASET = "vn_equity_1d"
 
@@ -139,7 +140,7 @@ def main() -> None:
     args = parser.parse_args()
 
     config = load_yaml("symbols.vn_daily.yml")
-    symbols = args.symbols.split(",") if args.symbols else config.get("symbols") or default_symbols()
+    symbols = args.symbols.split(",") if args.symbols else configured_equity_symbols(config) or default_symbols()
     if args.max_symbols:
         symbols = symbols[: args.max_symbols]
     start_default = args.backfill_start or config.get("backfill_start", "2016-01-01")
@@ -161,6 +162,17 @@ def main() -> None:
                     Manifest(DATASET).update_symbol(symbol, last_error=str(exc), last_failed_at=utc_now_iso())
                     logger.exception("%s daily failed", symbol)
                     heartbeat.beat(status="error", symbol=symbol, error=str(exc))
+            try:
+                report = build_universe_report(
+                    equity_symbols=[s.strip().upper() for s in symbols],
+                    external_symbols=configured_external_symbols(config),
+                    as_of_date=end,
+                    write=True,
+                )
+                logger.info("VN daily universe report wrote %s rows", len(report))
+            except Exception as exc:
+                logger.exception("VN daily universe report failed")
+                heartbeat.beat(status="error", error=f"universe_report_failed: {exc}")
             try:
                 build_matrix(symbols=[s.strip().upper() for s in symbols], logger=logger)
             except Exception as exc:
