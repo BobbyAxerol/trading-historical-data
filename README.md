@@ -121,7 +121,7 @@ Các service chạy bằng `docker compose` và có `restart: unless-stopped`.
 | `binance-futures-metrics-5m` | `collectors.binance_futures_metrics_5m` | Metrics 5m theo lịch |
 | `binance-orderbook-snapshot-1h` | `collectors.binance_orderbook_snapshot_1h` | Snapshot order book mỗi giờ |
 | `options-binance-5m` | `collectors.options_binance_5m` | Options snapshot mỗi 5 phút |
-| `vn-daily` | `collectors.vn_daily` | VN daily raw lúc `16:30 Asia/Ho_Chi_Minh` |
+| `vn-daily` | `collectors.vn_daily` | VN daily raw lúc `16:30 Asia/Ho_Chi_Minh`; sau mỗi lượt update sẽ build universe report và rebuild daily matrix |
 | `vn-intraday-stocks` | `collectors.vn_intraday_vnstock` | VN stock 1m lúc `16:30 Asia/Ho_Chi_Minh` |
 | `vn30f1m-dnse` | `collectors.vn_intraday_dnse` | VN futures 1m lúc `16:30 Asia/Ho_Chi_Minh` |
 
@@ -157,9 +157,11 @@ PYTHONPATH=. python -m collectors.binance_orderbook_snapshot_1h --mode once
 # Futures metrics 5m
 PYTHONPATH=. python -m collectors.binance_futures_metrics_5m --mode once
 
-# VN daily matrix rebuild từ raw Parquet, gồm equity + auxiliary VN30F1M nếu có futures daily/1m.
+# VN daily matrix rebuild thủ công để debug. Production đi qua service vn-daily live schedule.
 PYTHONPATH=. python -m collectors.vn_daily_matrix --start-date 2016-01-01
 ```
+
+Luồng production cho VN daily là container `vn-daily`, không phải chạy host command rời. Service này tự chạy cuối ngày, append/dedupe raw daily, ghi `state/vn_daily_universe_report.csv.gz`, aggregate auxiliary `VN30F1M` daily nếu cần, rồi rebuild `VNDailyMatrix`.
 
 ## Loader Endpoints
 

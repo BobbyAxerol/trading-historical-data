@@ -169,6 +169,10 @@ Status: complete
 
 Changed:
 
+- Confirmed Phase 2 is integrated into the existing `vn-daily` live service path:
+  - `collectors.vn_daily --mode live --schedule 16:30` updates raw daily;
+  - then calls `build_universe_report(...)`;
+  - then calls `build_matrix(...)`.
 - Extended `collectors/vn_daily_matrix.py` to:
   - default to merged `symbols + candidate_symbols`;
   - read configured `external_symbols`;
@@ -225,3 +229,16 @@ Notes:
 
 - The 126 new candidate symbols are configured and scored, but they are not in the production matrix yet because raw daily storage for those candidates is not present. They will enter the matrix after the `vn-daily` network backfill writes raw Parquet for them.
 - Phase 2 is usable for existing raw equity symbols and `VN30F1M` auxiliary immediately.
+- Local host commands in the validation section were smoke checks only; production operation is the existing Docker service `vn-daily`.
+- To deploy this branch's VN logic into the running service, rebuild/recreate `vn-daily` with Docker Compose while on this branch.
+
+Service deployment:
+
+- Command: `docker compose up -d --build vn-daily`.
+- Result: `get_data-vn-daily-1` recreated and started.
+- Runtime flow observed in Docker logs:
+  - service entered live scheduled daily update;
+  - fetched recent overlap window, e.g. `BID daily 2026-07-21 -> 2026-07-28`;
+  - wrote rows into raw Parquet storage.
+- The service will build `vn_daily_universe_report.csv.gz` and `VNDailyMatrix` after it finishes the configured equity symbol loop.
+- Docker reported an orphan `deribit-option-cycle-full` container because this VN branch does not include the Deribit compose service definitions. It was intentionally not removed.
