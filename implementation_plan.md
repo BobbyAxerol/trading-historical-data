@@ -162,3 +162,66 @@ Notes:
 - No network backfill was run in this phase implementation pass.
 - Do not use `collectors.vn_daily --max-symbols` as a production smoke unless matrix overwrite behavior is explicitly controlled; existing collector rebuilds matrix from the selected symbol subset.
 - Phase 2 should address matrix rebuild behavior and `VN30F1M` daily matrix inclusion.
+
+#### 2026-07-29 UTC — Phase 2 Implementation
+
+Status: complete
+
+Changed:
+
+- Extended `collectors/vn_daily_matrix.py` to:
+  - default to merged `symbols + candidate_symbols`;
+  - read configured `external_symbols`;
+  - read futures daily from `storage/vn/futures/1d`;
+  - aggregate `VN30F1M` from `storage/vn/futures/1m` if daily futures storage is missing;
+  - persist aggregated daily futures to `storage/vn/futures/1d`;
+  - include auxiliary futures columns in the matrix;
+  - drop all-null matrix columns;
+  - write `equity_symbols`, `auxiliary_symbols`, and missing-symbol lists to `state/vn_daily_matrix_symbols.json`.
+- Updated README endpoint docs for `VNDailyMatrix`, `VN30F1M`, and `load_data("vn_daily_matrix", ...)`.
+- Added tests for:
+  - `VN30F1M` 1m -> daily aggregation;
+  - matrix inclusion of auxiliary column;
+  - matrix state metadata separating equity and auxiliary symbols.
+
+Unit validation:
+
+- `python -m unittest tests.test_vn_daily_universe`: OK, 6 tests.
+- `python -m compileall collectors/vn_daily.py collectors/vn_daily_universe.py collectors/vn_daily_matrix.py data_loader.py`: OK.
+
+Production raw-storage rebuild:
+
+- Command: `python -m collectors.vn_daily_matrix --start-date 2016-01-01`.
+- Result:
+  - matrix shape: `2640 x 273`;
+  - `equity_symbols=272`;
+  - `auxiliary_symbols=["VN30F1M"]`;
+  - `missing_symbols=126`;
+  - `missing_auxiliary_symbols=[]`.
+- `VN30F1M` daily futures was materialized under:
+  - `storage/vn/futures/1d/symbol=VN30F1M/year=2024/part.parquet`;
+  - `storage/vn/futures/1d/symbol=VN30F1M/year=2025/part.parquet`;
+  - `storage/vn/futures/1d/symbol=VN30F1M/year=2026/part.parquet`.
+
+Endpoint validation:
+
+- `VNDailyMatrix().load("close", symbols=["FPT", "VN30F1M"], start_date="2018-01-01")`: shape `2139 x 2`.
+- `VNDailyMatrix().load_ohlcv(symbols=["FPT", "VN30F1M"], start_date="2018-01-01")`: returns keys `FPT`, `VN30F1M`.
+- `load_data("vn_daily_matrix", feature="close", symbols=["FPT", "VN30F1M"], start_date="2018-01-01")`: shape `2139 x 2`.
+
+Integrity validation:
+
+- Matrix index increasing: OK.
+- Duplicate index: none.
+- OHLC bounds: OK.
+- Negative volume: none.
+- `VN30F1M` column present: yes.
+- Temporary files left under matrix/futures daily: none.
+- Disk:
+  - `storage/vn/equity/daily_matrix=9.3M`;
+  - `storage/vn/futures/1d=56K`.
+
+Notes:
+
+- The 126 new candidate symbols are configured and scored, but they are not in the production matrix yet because raw daily storage for those candidates is not present. They will enter the matrix after the `vn-daily` network backfill writes raw Parquet for them.
+- Phase 2 is usable for existing raw equity symbols and `VN30F1M` auxiliary immediately.

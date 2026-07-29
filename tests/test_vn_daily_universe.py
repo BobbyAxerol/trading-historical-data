@@ -1,4 +1,5 @@
 import os
+import json
 import sys
 import tempfile
 import unittest
@@ -39,6 +40,20 @@ class EnvCase(unittest.TestCase):
             "volume": volume,
         })
         root = Path(os.environ["DATA_ROOT"]) / "vn" / "equity" / "1d" / f"symbol={symbol}" / f"year={pd.Timestamp(dates[0]).year:04d}"
+        root.mkdir(parents=True, exist_ok=True)
+        frame.to_parquet(root / "part.parquet", index=False)
+
+    def _write_futures_1m(self, symbol: str = "VN30F1M") -> None:
+        frame = pd.DataFrame({
+            "time": pd.to_datetime(["2024-01-02 09:00", "2024-01-02 09:01", "2024-01-03 09:00", "2024-01-03 09:01"]),
+            "symbol": symbol,
+            "open": [1000.0, 1001.0, 1010.0, 1012.0],
+            "high": [1002.0, 1005.0, 1013.0, 1016.0],
+            "low": [999.0, 1000.0, 1008.0, 1011.0],
+            "close": [1001.0, 1004.0, 1012.0, 1015.0],
+            "volume": [10.0, 15.0, 20.0, 25.0],
+        })
+        root = Path(os.environ["DATA_ROOT"]) / "vn" / "futures" / "1m" / f"symbol={symbol}" / "year=2024" / "month=01"
         root.mkdir(parents=True, exist_ok=True)
         frame.to_parquet(root / "part.parquet", index=False)
 
@@ -95,6 +110,34 @@ class TestVNDailyUniverse(EnvCase):
         run_symbol.assert_called_once()
         build_matrix.assert_called_once()
         build_report.assert_called_once()
+
+    def test_matrix_builder_includes_vn30f1m_auxiliary_from_1m(self):
+        from collectors.vn_daily_matrix import build_matrix
+
+        config_path = Path(os.environ["CONFIG_ROOT"]) / "symbols.vn_daily.yml"
+        config_path.write_text("symbols: [FPT]\ncandidate_symbols: []\nexternal_symbols: [VN30F1M]\n")
+        self._write_symbol("FPT", ["2024-01-02", "2024-01-03"], close=100.0, volume=1000.0)
+        self._write_futures_1m("VN30F1M")
+
+        result = build_matrix(start_date="2024-01-01", end_date="2024-01-05")
+
+        self.assertEqual(result["equity_symbols"], ["FPT"])
+        self.assertEqual(result["auxiliary_symbols"], ["VN30F1M"])
+        close = pd.read_parquet(Path(os.environ["DATA_ROOT"]) / "vn" / "equity" / "daily_matrix" / "close.parquet")
+        self.assertIn("FPT", close.columns)
+        self.assertIn("VN30F1M", close.columns)
+        self.assertEqual(float(close.loc[pd.Timestamp("2024-01-02"), "VN30F1M"]), 1004.0)
+        self.assertEqual(float(close.loc[pd.Timestamp("2024-01-03"), "VN30F1M"]), 1015.0)
+
+        futures_daily = Path(os.environ["DATA_ROOT"]) / "vn" / "futures" / "1d" / "symbol=VN30F1M" / "year=2024" / "part.parquet"
+        self.assertTrue(futures_daily.exists())
+        daily = pd.read_parquet(futures_daily)
+        self.assertEqual(float(daily.loc[daily["time"] == pd.Timestamp("2024-01-02"), "volume"].iloc[0]), 25.0)
+
+        state = json.loads((Path(os.environ["STATE_ROOT"]) / "vn_daily_matrix_symbols.json").read_text())
+        self.assertEqual(state["equity_symbols"], ["FPT"])
+        self.assertEqual(state["auxiliary_symbols"], ["VN30F1M"])
+        self.assertIn("VN30F1M", state["symbols"])
 
 
 def _restore_env(name: str, value: str | None) -> None:
