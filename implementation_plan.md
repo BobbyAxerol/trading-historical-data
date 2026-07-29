@@ -6,7 +6,7 @@ This file is the consolidated implementation tracker for `_get_data` jobs. Detai
 
 Source guide: `VN30_FUTURES_FREE_DATA_UPGRADE_PLAN_V2.md`
 
-Status: planned
+Status: Phase 1 complete
 
 Branch: `dev`
 
@@ -18,7 +18,7 @@ Context:
   - no HTTP error may be interpreted as confirmed empty;
   - no provider may be promoted without real returned bars and validation.
 - V2 switches to a free-first strategy:
-  - XNO for continuous `1m`/`1D` proof and alias series;
+  - public/free web sources first; after user review, `xnoapi` is not part of default Phase 1 because the quant package path requires API key;
   - Vietstock for individual daily contracts if public extraction proves full coverage;
   - TradingView only for public-accessible validation/fill;
   - KBS/DNSE only after positive bars.
@@ -49,7 +49,6 @@ Scope:
   - `schema_error`;
   - `unknown_error`.
 - Add provider registry:
-  - `collectors/providers/xno_derivatives.py`;
   - `collectors/providers/vietstock_derivatives.py`;
   - `collectors/providers/tradingview_derivatives.py`;
   - existing KBS/DNSE wrapped into the same result contract.
@@ -66,9 +65,9 @@ Scope:
   - `vn-derivatives-source-probe`;
   - profile/bootstrap only;
   - no canonical publish.
-- Probe XNO:
-  - `VN30F1M` resolutions `1m`, `5m`, `1H`, `1D`;
-  - record installed version, row count, first/last bar, schema, duplicate count, invalid OHLC, session outside rows, median interval, volume range.
+- Do not probe `xnoapi` by default:
+  - user update: the quant package route needs API key;
+  - keep V2 focused on truly public/free web extraction unless a no-key endpoint is proven later.
 - Probe Vietstock:
   - sample contracts `VN30F1709`, `VN30F2003`, `VN30F2406`, `VN30F2508`, current active contract;
   - public overview/statistics/XHR discovery;
@@ -106,7 +105,7 @@ Hard gates:
 Phase 1 tests:
 
 - Provider result status classification, especially HTTP 400 not empty.
-- XNO normalization for `1m` and `1D` sample frames.
+- Public web OHLCV normalization for `1m` and `1D` style sample frames.
 - Vietstock HTML/XHR parser with fixture pages and pagination fixtures.
 - TradingView parser/normalizer with public-response fixtures only.
 - Source-gate JSON/Parquet summary counts.
@@ -124,7 +123,7 @@ Exit criteria:
 
 Scope:
 
-- Publish `VN30F1M_FREE` daily if XNO/TradingView continuous daily passes Gate A:
+- Publish `VN30F1M_FREE` daily if a no-key public continuous daily source passes Gate A:
   - storage: `storage/vn/futures/continuous/1d/symbol=VN30F1M_FREE/version=v2_free/...`;
   - row provenance: `source`, `source_symbol`, `quality_flags`, `ingested_at`;
   - source priority determined by Phase 1 status, not hard-coded before proof.
@@ -223,6 +222,66 @@ Decisions:
 - Split V2 into two executable phases:
   - Phase 1 proves sources and writes status gates only;
   - Phase 2 publishes validated datasets and updates matrix/services.
+
+#### 2026-07-29 UTC — V2 Phase 1 Implementation
+
+Status: complete
+
+Changed:
+
+- Added typed source proof primitives in `collectors/vn_derivatives/source_gates.py`:
+  - `ProviderStatus`;
+  - `ProviderFetchResult`;
+  - OHLCV normalization;
+  - validation metrics;
+  - HTTP status classification;
+  - provider quality summary.
+- Added provider adapters:
+  - `collectors/providers/vietstock_derivatives.py`;
+  - `collectors/providers/tradingview_derivatives.py`.
+- Added web cache helper:
+  - `collectors/vn_derivatives/web_cache.py`;
+  - public GET only;
+  - local cache under `state/vn_derivatives/web_cache`;
+  - project-identifying user-agent.
+- Added V2 provider registry/orchestrator:
+  - `collectors/vn_derivatives/provider_registry.py`;
+  - source probe plan;
+  - Vietstock/TradingView/KBS/DNSE dispatch;
+  - hard gate summary;
+  - writes `source_probe_v2.parquet`, `source_probe_v2.json`, `source_status.json`.
+- Added CLI:
+  - `python -m collectors.vn_derivatives probe-free-sources`.
+- Added Docker one-shot:
+  - `vn-derivatives-source-probe`.
+- Updated README with V2 source proof command, state files, and hard-gate semantics.
+- Added `tests/test_vn_derivatives_v2_phase1.py`.
+
+Decisions:
+
+- `probe-free-sources` defaults to Vietstock/TradingView/KBS/DNSE and fails when `positive_request_count == 0`, as required by V2.
+- `--no-fail-on-no-positive` exists for diagnostics/smoke only; it still writes `status=blocked` and does not promote providers.
+- `xnoapi` is not installed or included in default source proof because the user confirmed the quant package path needs API key.
+- TradingView Phase 1 adapter only validates public page accessibility; it does not automate private chart sessions.
+- Vietstock Phase 1 adapter resolves futures symbols through the public `/search/{query}/3` route and then checks public HTML tables conservatively.
+- Vietstock public `KQGDThongKeGiaPaging` XHR is documented as reachable from public page/token flow, but Phase 1 does not promote it until a contract-level OHLC endpoint/shape returns positive rows.
+- A public search hit alone means symbol discovery succeeded; it is not OHLC data and therefore remains non-positive.
+- KBS/DNSE are wrapped into typed results, but HTTP 400 remains `invalid_request`, never `empty_confirmed`.
+
+Validation:
+
+- `/root/bobby/pool_alpha/.venv/bin/python -m unittest tests.test_vn_derivatives_v2_phase1 tests.test_vn_derivatives_phase1 tests.test_vn_derivatives_phase2 tests.test_vn_derivatives_phase3`: OK, 22 tests.
+- `/root/bobby/pool_alpha/.venv/bin/python -m compileall collectors/providers collectors/vn_derivatives data_loader.py`: OK.
+- `docker compose --profile vn-derivatives config --services`: OK, includes `vn-derivatives-source-probe`.
+- `docker compose build vn-derivatives-source-probe`: OK.
+- Container check: `xnoapi_spec None`.
+- Docker smoke with `--providers vietstock,tradingview --contracts VN30F2508 --no-fail-on-no-positive --json`: OK entrypoint/state write; returned `status=blocked`, `positive_request_count=0`; `VN30F2508` is not resolved by Vietstock public search.
+- Docker smoke with `--providers vietstock --contracts VN30F2509 --no-fail-on-no-positive --json`: OK; `blocked_request_count=0`, `error_request_count=0`, `status=UNVERIFIED`, `positive_request_count=0`, confirming public symbol discovery works but no OHLC rows were promoted.
+
+Technical debt / accepted limitations:
+
+- Live external source proof has not been promoted by this phase; Phase 1 only adds the proof mechanism and Docker entrypoint.
+- Actual full-provider probe can be slow or blocked by provider/network conditions; the hard gate prevents accidental publish when this happens.
 
 ## Previous Job: VN30 Futures Historical Derivatives Upgrade V1
 

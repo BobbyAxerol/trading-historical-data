@@ -176,6 +176,7 @@ Các service chạy bằng `docker compose` và có `restart: unless-stopped`.
 | `vn-intraday-stocks` | `collectors.vn_intraday_vnstock` | VN stock 1m lúc `16:30 Asia/Ho_Chi_Minh` |
 | `vn30f1m-dnse` | `collectors.vn_intraday_dnse` | Legacy alias service; disabled khỏi default compose, chỉ chạy khi bật profile `legacy-vn30f1m-dnse` |
 | `vn-derivatives-probe` | `collectors.vn_derivatives` | Probe KBS/DNSE individual VN30 futures contracts; bootstrap/profile only |
+| `vn-derivatives-source-probe` | `collectors.vn_derivatives` | V2 free-source proof for Vietstock/TradingView/KBS/DNSE; bootstrap/profile only, no publish |
 | `vn-derivatives-bootstrap` | `collectors.vn_derivatives` | Backfill individual VN30 futures contracts; bootstrap/profile only |
 | `vn-derivatives-validate` | `collectors.vn_derivatives` | Validate contract-level VN30 futures storage |
 | `vn-derivatives` | `collectors.vn_derivatives` | Daily sync contracts, validate, rebuild continuous, compare provider alias, update VN matrix |
@@ -219,6 +220,11 @@ PYTHONPATH=. python -m collectors.vn_daily_matrix --start-date 2016-01-01
 PYTHONPATH=. python -m collectors.vn_derivatives discover --json
 PYTHONPATH=. python -m collectors.vn_derivatives probe --json
 
+# VN30 futures V2 free-source proof. Không publish canonical bars.
+# Default command fail nếu không có provider nào trả positive bars thật.
+PYTHONPATH=. python -m collectors.vn_derivatives probe-free-sources --json
+PYTHONPATH=. python -m collectors.vn_derivatives probe-free-sources --providers vietstock,tradingview --no-fail-on-no-positive --json
+
 # VN30 futures individual contracts V1.
 PYTHONPATH=. python -m collectors.vn_derivatives backfill --start 2017-08-10 --resolutions 1m,1d --max-contracts 1 --max-windows 2 --json
 PYTHONPATH=. python -m collectors.vn_derivatives validate --json
@@ -248,6 +254,18 @@ sync recent concrete contracts
 `vn-derivatives-bootstrap` dùng cho warmup/backfill dài. `vn30f1m-dnse` đã chuyển sang profile legacy để tránh hai process cùng ghi alias `VN30F1M`.
 
 `vn-derivatives-bootstrap` giữ strict mode: provider error không có usable rows sẽ fail-fast và không mark completed. `vn-derivatives live/sync-once` chạy best-effort: window lỗi provider hoặc empty 0 rows được ghi vào manifest `last_error`, không ghi `completed_windows`, service tiếp tục validate/build phần dữ liệu có sẵn và trả status `warning` để lần sau tự retry.
+
+V2 source proof ghi:
+
+```text
+state/vn_derivatives/source_probe_v2.parquet
+state/vn_derivatives/source_probe_v2.json
+state/vn_derivatives/source_status.json
+```
+
+Hard gate V2: HTTP 400/403/429/5xx không bao giờ được coi là `empty_confirmed`; provider chỉ được promote khi có `status=success` và `row_count > 0`. `xnoapi` không nằm trong default V2 probe vì package/repo quant yêu cầu API key; Phase 1 ưu tiên public/free web sources như Vietstock và TradingView.
+
+Vietstock Phase 1 có 2 lớp proof: public search `/search/{query}/3` để xác nhận symbol phái sinh tồn tại, rồi public page/table check để tìm OHLC. Search hit không phải OHLC data, nên không được promote provider nếu `row_count=0`.
 
 ## Loader Endpoints
 

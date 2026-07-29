@@ -16,6 +16,8 @@ from collectors.vn_derivatives.continuous import (
 )
 from collectors.vn_derivatives.instruments import build_initial_instrument_dimension
 from collectors.vn_derivatives.probe import PROBE_CONTRACTS, run_provider_probe
+from collectors.vn_derivatives.provider_registry import options_from_cli as source_probe_options_from_cli
+from collectors.vn_derivatives.provider_registry import run_source_probe
 from collectors.vn_derivatives.validate import validate_storage
 
 
@@ -36,6 +38,13 @@ def build_parser() -> argparse.ArgumentParser:
     probe.add_argument("--providers", default="kbs,dnse", help="Comma-separated providers to probe: kbs,dnse.")
     probe.add_argument("--window-days", type=int, default=30)
     probe.add_argument("--json", action="store_true")
+
+    free_probe = sub.add_parser("probe-free-sources", help="Probe V2 free VN30 futures sources without publishing canonical bars.")
+    free_probe.add_argument("--version", default="v2")
+    free_probe.add_argument("--providers", default="vietstock,tradingview,kbs,dnse")
+    free_probe.add_argument("--contracts", default=None, help="Comma-separated VN30FYYMM contracts for contract-aware providers.")
+    free_probe.add_argument("--no-fail-on-no-positive", action="store_true")
+    free_probe.add_argument("--json", action="store_true")
 
     backfill = sub.add_parser("backfill", help="Backfill individual VN30 futures contracts into canonical contract storage.")
     backfill.add_argument("--version", default="v1")
@@ -101,6 +110,16 @@ def main() -> None:
         contracts = [item.strip().upper() for item in args.contracts.split(",") if item.strip()]
         providers = [item.strip().lower() for item in args.providers.split(",") if item.strip()]
         payload = run_provider_probe(contracts=contracts, window_days=args.window_days, providers=providers, version=args.version)
+    elif args.command == "probe-free-sources":
+        providers = [item.strip().lower() for item in args.providers.split(",") if item.strip()] if args.providers else None
+        contracts = [item.strip().upper() for item in args.contracts.split(",") if item.strip()] if args.contracts else None
+        options = source_probe_options_from_cli(
+            providers=providers,
+            contracts=contracts,
+            version=args.version,
+            no_fail_on_no_positive=args.no_fail_on_no_positive,
+        )
+        payload = run_source_probe(options)
     elif args.command == "backfill":
         symbols = [item.strip().upper() for item in args.symbols.split(",") if item.strip()] if args.symbols else None
         resolutions = [item.strip().lower() for item in args.resolutions.split(",") if item.strip()]

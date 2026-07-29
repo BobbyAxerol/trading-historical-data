@@ -104,6 +104,20 @@ services:
       DNSE_API_KEY: ${DNSE_API_KEY:-}
       DNSE_API_SECRET_KEY: ${DNSE_API_SECRET_KEY:-}
 
+  vn-derivatives-source-probe:
+    <<: *get-data-service
+    profiles: ["bootstrap", "vn-derivatives"]
+    restart: "no"
+    command: ["python", "-m", "collectors.vn_derivatives", "probe-free-sources", "--json"]
+    environment:
+      TZ: Asia/Ho_Chi_Minh
+      DATA_ROOT: /app/storage
+      STATE_ROOT: /app/state
+      LOG_ROOT: /app/logs
+      VNSTOCK_API_KEY: ${VNSTOCK_API_KEY:-}
+      DNSE_API_KEY: ${DNSE_API_KEY:-}
+      DNSE_API_SECRET_KEY: ${DNSE_API_SECRET_KEY:-}
+
   vn-derivatives-bootstrap:
     <<: *get-data-service
     profiles: ["bootstrap", "vn-derivatives"]
