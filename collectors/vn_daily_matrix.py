@@ -139,18 +139,59 @@ def _write_futures_daily(df: pd.DataFrame, symbol: str) -> None:
     store.append(df, time_col="time", dedupe_cols=["symbol", "time"], attrs={"symbol": symbol}, lock_name=f"vn_futures_1d/{symbol}")
 
 
-def _read_external_symbol(symbol: str, start_ts: pd.Timestamp | None, end_ts: pd.Timestamp | None) -> pd.DataFrame:
+def _read_continuous_external_symbol(symbol: str, start_ts: pd.Timestamp | None, end_ts: pd.Timestamp | None, *, version: str = "v1") -> pd.DataFrame:
+    symbol_root = data_root() / "vn" / "futures" / "continuous" / "1d" / f"symbol={symbol}"
+    source_roots = sorted(path for path in symbol_root.glob(f"source=*/version={version}") if path.is_dir())
+    roots = source_roots or [symbol_root / f"version={version}"]
+    roots = [path for path in roots if path.exists()]
+    if not roots:
+        return pd.DataFrame()
+    frames = []
+    for continuous_root in roots:
+        for path in _partition_files(continuous_root):
+            try:
+                frames.append(read_partition_file(path))
+            except Exception:
+                continue
+    if not frames:
+        return pd.DataFrame()
+    df = pd.concat(frames, ignore_index=True)
+    if "time" not in df.columns:
+        return pd.DataFrame()
+    df["time"] = pd.to_datetime(df["time"], errors="coerce").dt.normalize()
+    df = df.dropna(subset=["time"])
+    if start_ts is not None:
+        df = df[df["time"] >= start_ts]
+    if end_ts is not None:
+        df = df[df["time"] <= end_ts]
+    if df.empty:
+        return pd.DataFrame()
+    df["symbol"] = symbol
+    for feature in FEATURES:
+        df[feature] = pd.to_numeric(df[feature], errors="coerce")
+    return (
+        df[["time", "symbol", *FEATURES]]
+        .drop_duplicates(subset=["time", "symbol"], keep="last")
+        .sort_values(["time", "symbol"])
+        .reset_index(drop=True)
+    )
+
+
+def _read_external_symbol(symbol: str, start_ts: pd.Timestamp | None, end_ts: pd.Timestamp | None) -> tuple[pd.DataFrame, str]:
+    continuous = _read_continuous_external_symbol(symbol, start_ts, end_ts)
+    if not continuous.empty:
+        return continuous, "storage/vn/futures/continuous/1d"
     futures_daily_root = data_root() / "vn" / "futures" / "1d"
     df = _read_symbol(futures_daily_root, symbol, start_ts, end_ts)
     if not df.empty:
-        return df
+        return df, "storage/vn/futures/1d"
     futures_1m_root = data_root() / "vn" / "futures" / "1m"
     intraday = _read_symbol(futures_1m_root, symbol, start_ts, end_ts, daily=False)
     daily = _aggregate_intraday_to_daily(intraday, symbol)
     if not daily.empty:
         _write_futures_daily(daily, symbol)
-        return _read_symbol(futures_daily_root, symbol, start_ts, end_ts)
-    return daily
+        return _read_symbol(futures_daily_root, symbol, start_ts, end_ts), "storage/vn/futures/1m_aggregated"
+    return daily, "missing"
 
 
 def build_matrix(
@@ -181,12 +222,15 @@ def build_matrix(
 
     auxiliary_symbols: list[str] = []
     missing_auxiliary_symbols: list[str] = []
+    auxiliary_sources: dict[str, str] = {}
     for symbol in external_symbols:
-        df = _read_external_symbol(symbol, start_ts, end_ts)
+        df, source = _read_external_symbol(symbol, start_ts, end_ts)
         if df.empty:
             missing_auxiliary_symbols.append(symbol)
+            auxiliary_sources[symbol] = source
             continue
         auxiliary_symbols.append(symbol)
+        auxiliary_sources[symbol] = source
         frames.append(df)
 
     if not frames:
@@ -220,10 +264,11 @@ def build_matrix(
         "auxiliary_symbols": auxiliary_symbols,
         "missing_symbols": missing_symbols,
         "missing_auxiliary_symbols": missing_auxiliary_symbols,
+        "auxiliary_sources": auxiliary_sources,
         "features": FEATURES,
         "storage": str(matrix_root),
         "updated_at": utc_now_iso(),
-        "source": "storage/vn/equity/1d + storage/vn/futures/1d",
+        "source": "storage/vn/equity/1d + auxiliary continuous-first futures",
     })
 
     return {
@@ -232,6 +277,7 @@ def build_matrix(
         "auxiliary_symbols": auxiliary_symbols,
         "missing_symbols": missing_symbols,
         "missing_auxiliary_symbols": missing_auxiliary_symbols,
+        "auxiliary_sources": auxiliary_sources,
         "rows": int(all_df["time"].nunique()),
         "features": FEATURES,
         "path": str(matrix_root),

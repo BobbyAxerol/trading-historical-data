@@ -2,7 +2,7 @@ pandas==2.2.3
 requests==2.32.3
 python-dotenv
 python-binance==1.0.32
-vnstock==3.3.1
+vnstock>=4.0.4,<5
 PyYAML
 pyarrow>=15,<21
 duckdb>=1.1,<2

@@ -1,0 +1,43 @@
+dataset_version: v1
+underlying: VN30
+backfill_start: "2017-08-10"
+
+providers:
+  primary: kbs
+  fallback: dnse
+
+symbols:
+  canonical_format: "VN30FYYMM"
+  support_legacy: true
+  support_krx: true
+  krx_underlying_code: I1
+
+resolutions:
+  - 1m
+  - 1d
+
+requests:
+  kbs_1m_window_days: 7
+  dnse_1m_window_days: 5
+  daily_window_days: 365
+  daily_sync_lookback_days: 45
+  retry_attempts: 5
+  probe_window_days: 30
+
+storage:
+  format: parquet
+  compression: zstd
+  intraday_partition: month
+  daily_partition: year
+
+continuous:
+  calendar_series: VN30F1M
+  tradable_series: VN30F1M_TRADE
+  volume_confirmation_days: 2
+  hard_roll_sessions_before_expiry: 1
+
+validation:
+  price_tolerance_points: 0.1
+  conflict_tolerance_points: 0.5
+  volume_relative_warning: 0.05
+  min_1m_bars_for_daily: 200

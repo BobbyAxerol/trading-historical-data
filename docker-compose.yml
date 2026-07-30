@@ -79,12 +79,99 @@ services:
 
   vn30f1m-dnse:
     <<: *get-data-service
+    profiles: ["legacy-vn30f1m-dnse"]
+    restart: "no"
     command: ["python", "-m", "collectors.vn_intraday_dnse", "--mode", "live", "--symbols", "VN30F1M", "--schedule", "16:30"]
     environment:
       TZ: Asia/Ho_Chi_Minh
       DATA_ROOT: /app/storage
       STATE_ROOT: /app/state
       LOG_ROOT: /app/logs
+      DNSE_API_KEY: ${DNSE_API_KEY:-}
+      DNSE_API_SECRET_KEY: ${DNSE_API_SECRET_KEY:-}
+
+  vn30f1m-vndirect-probe:
+    <<: *get-data-service
+    profiles: ["bootstrap", "vn-derivatives"]
+    restart: "no"
+    command: ["python", "-m", "collectors.vn_derivatives", "probe-vndirect", "--json"]
+    environment:
+      TZ: Asia/Ho_Chi_Minh
+      DATA_ROOT: /app/storage
+      STATE_ROOT: /app/state
+      LOG_ROOT: /app/logs
+
+  vn30f1m-vndirect:
+    <<: *get-data-service
+    command: ["python", "-m", "collectors.vn_derivatives", "sync-vndirect", "--resolution", "1d", "--mode", "live", "--schedule", "16:30", "--update-matrix"]
+    environment:
+      TZ: Asia/Ho_Chi_Minh
+      DATA_ROOT: /app/storage
+      STATE_ROOT: /app/state
+      LOG_ROOT: /app/logs
+
+  vn-derivatives-probe:
+    <<: *get-data-service
+    profiles: ["bootstrap", "vn-derivatives"]
+    restart: "no"
+    command: ["python", "-m", "collectors.vn_derivatives", "probe", "--json"]
+    environment:
+      TZ: Asia/Ho_Chi_Minh
+      DATA_ROOT: /app/storage
+      STATE_ROOT: /app/state
+      LOG_ROOT: /app/logs
+      VNSTOCK_API_KEY: ${VNSTOCK_API_KEY:-}
+      DNSE_API_KEY: ${DNSE_API_KEY:-}
+      DNSE_API_SECRET_KEY: ${DNSE_API_SECRET_KEY:-}
+
+  vn-derivatives-source-probe:
+    <<: *get-data-service
+    profiles: ["bootstrap", "vn-derivatives"]
+    restart: "no"
+    command: ["python", "-m", "collectors.vn_derivatives", "probe-free-sources", "--json"]
+    environment:
+      TZ: Asia/Ho_Chi_Minh
+      DATA_ROOT: /app/storage
+      STATE_ROOT: /app/state
+      LOG_ROOT: /app/logs
+      VNSTOCK_API_KEY: ${VNSTOCK_API_KEY:-}
+      DNSE_API_KEY: ${DNSE_API_KEY:-}
+      DNSE_API_SECRET_KEY: ${DNSE_API_SECRET_KEY:-}
+
+  vn-derivatives-bootstrap:
+    <<: *get-data-service
+    profiles: ["bootstrap", "vn-derivatives"]
+    restart: "no"
+    command: ["python", "-m", "collectors.vn_derivatives", "backfill", "--start", "2017-08-10", "--resolutions", "1m,1d", "--json"]
+    environment:
+      TZ: Asia/Ho_Chi_Minh
+      DATA_ROOT: /app/storage
+      STATE_ROOT: /app/state
+      LOG_ROOT: /app/logs
+      VNSTOCK_API_KEY: ${VNSTOCK_API_KEY:-}
+      DNSE_API_KEY: ${DNSE_API_KEY:-}
+      DNSE_API_SECRET_KEY: ${DNSE_API_SECRET_KEY:-}
+
+  vn-derivatives-validate:
+    <<: *get-data-service
+    profiles: ["bootstrap", "vn-derivatives"]
+    restart: "no"
+    command: ["python", "-m", "collectors.vn_derivatives", "validate", "--json"]
+    environment:
+      TZ: Asia/Ho_Chi_Minh
+      DATA_ROOT: /app/storage
+      STATE_ROOT: /app/state
+      LOG_ROOT: /app/logs
+
+  vn-derivatives:
+    <<: *get-data-service
+    command: ["python", "-m", "collectors.vn_derivatives", "live", "--schedule", "16:30"]
+    environment:
+      TZ: Asia/Ho_Chi_Minh
+      DATA_ROOT: /app/storage
+      STATE_ROOT: /app/state
+      LOG_ROOT: /app/logs
+      VNSTOCK_API_KEY: ${VNSTOCK_API_KEY:-}
       DNSE_API_KEY: ${DNSE_API_KEY:-}
       DNSE_API_SECRET_KEY: ${DNSE_API_SECRET_KEY:-}
 
