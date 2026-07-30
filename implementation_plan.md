@@ -2,13 +2,184 @@
 
 This file is the consolidated implementation tracker for `_get_data` jobs. Detailed job guides may live in separate markdown files, but the executable phase plan and implementation logs should be summarized here to avoid fragmented state.
 
-## Active Job: VN30 Futures Free Data Upgrade V2
+## Active Job: VN30F1M VNDIRECT DChart Single-Source Upgrade
 
 Source guide: `VN30_FUTURES_FREE_DATA_UPGRADE_PLAN_V2.md`
 
-Status: Phase 1 complete
+Status: Phase 1 complete; Phase 2 pending
 
 Branch: `dev`
+
+### Current Direction
+
+The source guide was updated to a single-source design. The active implementation now uses only:
+
+- provider: `vndirect_dchart`;
+- symbol: `VN30F1M`;
+- endpoint: `https://dchart-api.vndirect.com.vn/dchart/history`;
+- continuous alias only, not individual contracts.
+
+The following providers are out of scope for this task:
+
+- KBS;
+- DNSE;
+- Vietstock;
+- TradingView;
+- XNO / `xnoapi`.
+
+Existing KBS/DNSE/Vietstock/TradingView code may remain as historical scaffolding, but it must not be used by the active DChart service or promoted by this task.
+
+### Phase 1 — Provider And Hard-Gated Live Probe
+
+Goal:
+
+- Prove early whether VNDIRECT DChart returns real usable `VN30F1M` data.
+- Stop immediately if recent `1m` or daily data is not positive.
+- Do not backfill, publish, compact, or update matrix in Phase 1.
+
+Scope:
+
+- Add `collectors/providers/vndirect_dchart_derivatives.py`.
+- Add `python -m collectors.vn_derivatives probe-vndirect`.
+- Add Docker one-shot `vn30f1m-vndirect-probe`.
+- Write `state/vn_derivatives/vndirect_dchart_probe.json`.
+- Probe exactly:
+  - recent `1m`: now minus 5 calendar days to now;
+  - old `1m`: `2018-08-01` to `2018-09-01`;
+  - daily: `2017-08-10` to now.
+- Normalize DChart UDF response to:
+  - `time`;
+  - `open`;
+  - `high`;
+  - `low`;
+  - `close`;
+  - `volume`;
+  - `source`;
+  - `source_symbol`;
+  - `quality_flags`;
+  - `ingested_at`.
+- Validate row invariants:
+  - unique/increasing `time`;
+  - finite OHLCV;
+  - `high >= open/close/low`;
+  - `low <= open/close/high`;
+  - `volume >= 0`.
+
+Hard gate:
+
+- recent `1m` must have `status=success` and `row_count > 100`.
+- daily must have `status=success` and `row_count > 500`.
+- old `1m` may be `success` or `no_data`.
+- HTTP error, invalid JSON, missing fields, array length mismatch, rate limit, or network error must not be converted to `no_data`.
+- CLI exits non-zero when `production_gate=FAIL`.
+
+Phase 1 tests:
+
+- Unit-test provider status handling:
+  - `s=ok`;
+  - `s=no_data`;
+  - HTTP 429;
+  - HTTP 500;
+  - invalid JSON;
+  - missing fields;
+  - mismatched array lengths;
+  - invalid OHLC rows.
+- Unit-test probe gate PASS/FAIL without network by mocking provider results.
+- Compile new provider/CLI modules.
+- Docker config includes `vn30f1m-vndirect-probe`.
+- Live smoke probe runs in Docker and reports real row counts.
+
+Phase 1 exit:
+
+- PASS: continue to Phase 2.
+- FAIL: stop and report `vndirect_dchart_probe.json`; do not backfill.
+
+### Phase 2 — Backfill, Storage, Validation, Service, Matrix
+
+Starts only after Phase 1 PASS.
+
+Scope:
+
+- Add `backfill-vndirect`.
+- `1m` backfill:
+  - window 31 days;
+  - discover earliest real bar by scanning back to `2017-08-10`;
+  - split suspicious/truncated windows `31 -> 14 -> 7 days`.
+- `1d` backfill:
+  - yearly windows from `2017-08-10` to now.
+- Storage:
+  - `storage/vn/futures/continuous/1m/symbol=VN30F1M/source=vndirect_dchart/version=v1/year=YYYY/month=MM/part.parquet`;
+  - `storage/vn/futures/continuous/1d/symbol=VN30F1M/source=vndirect_dchart/version=v1/year=YYYY/part.parquet`.
+- Manifest resume:
+  - `state/vn_derivatives/vndirect_dchart_1m.json`;
+  - `state/vn_derivatives/vndirect_dchart_1d.json`.
+- Atomic write per affected partition.
+- Validate storage and write overlap report:
+  - `state/vn_derivatives/vndirect_overlap_report.json`.
+- Add active service:
+  - `vn30f1m-vndirect`;
+  - schedule `16:30 Asia/Ho_Chi_Minh`;
+  - sync recent `1m`, sync latest daily, validate, compact, update matrix, update overlap report.
+- After overlap/parity pass, `VNDailyMatrix` may source `VN30F1M` from DChart daily.
+
+### Phase 1 Implementation Log
+
+#### 2026-07-30 UTC
+
+Status: complete
+
+Changed:
+
+- Add DChart provider.
+- Add hard-gated probe CLI.
+- Add Docker one-shot.
+- Add unit tests and live Docker smoke.
+
+Files:
+
+- `collectors/providers/vndirect_dchart_derivatives.py`;
+- `collectors/vn_derivatives/vndirect.py`;
+- `collectors/vn_derivatives/__main__.py`;
+- `docker-compose.yml`;
+- `tests/test_vndirect_dchart_phase1.py`;
+- `README.md`.
+
+Live hard-gate result:
+
+- Host command:
+  - `/root/bobby/pool_alpha/.venv/bin/python -m collectors.vn_derivatives probe-vndirect --json`;
+  - `production_gate=PASS`;
+  - recent `1m`: `status=success`, `row_count=849`, `first_bar=2026-07-27 09:00:00+07:00`, `last_bar=2026-07-30 11:05:00+07:00`;
+  - old `1m`: `status=no_data`, `row_count=0`;
+  - daily: `status=success`, `row_count=2240`, `first_bar=2017-08-10 07:00:00+07:00`, `last_bar=2026-07-30 07:00:00+07:00`.
+- Docker command:
+  - `docker compose --profile vn-derivatives run --rm --no-deps vn30f1m-vndirect-probe`;
+  - `production_gate=PASS`;
+  - recent `1m`: `status=success`, `row_count=850`, `first_bar=2026-07-27 09:00:00+07:00`, `last_bar=2026-07-30 11:06:00+07:00`;
+  - old `1m`: `status=no_data`, `row_count=0`;
+  - daily: `status=success`, `row_count=2240`, `first_bar=2017-08-10 07:00:00+07:00`, `last_bar=2026-07-30 07:00:00+07:00`.
+- Report path:
+  - `state/vn_derivatives/vndirect_dchart_probe.json`.
+
+Validation:
+
+- `/root/bobby/pool_alpha/.venv/bin/python -m unittest tests.test_vndirect_dchart_phase1`: OK, 7 tests.
+- `/root/bobby/pool_alpha/.venv/bin/python -m unittest tests.test_vndirect_dchart_phase1 tests.test_vn_derivatives_phase1 tests.test_vn_derivatives_phase2 tests.test_vn_derivatives_phase3`: OK, 24 tests.
+- `/root/bobby/pool_alpha/.venv/bin/python -m compileall collectors/providers/vndirect_dchart_derivatives.py collectors/vn_derivatives/vndirect.py collectors/vn_derivatives/__main__.py`: OK.
+- `docker compose --profile vn-derivatives config --services`: OK, includes `vn30f1m-vndirect-probe`.
+- `docker compose build vn30f1m-vndirect-probe`: OK.
+- `git diff --check`: OK.
+
+Decision:
+
+- Phase 1 PASS. It is reasonable to proceed to Phase 2 backfill/storage work.
+- The old multi-source proof remains obsolete for this active task.
+
+## Superseded Job: VN30 Futures Free Data Upgrade V2 Multi-Source Proof
+
+Status: obsolete after guide update to VNDIRECT DChart single-source.
+
+The section below is retained as historical context only. Do not use it as the active implementation scope for the current VN30F1M task.
 
 Context:
 

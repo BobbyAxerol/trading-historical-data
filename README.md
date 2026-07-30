@@ -175,8 +175,9 @@ Các service chạy bằng `docker compose` và có `restart: unless-stopped`.
 | `vn-daily` | `collectors.vn_daily` | VN daily raw lúc `16:30 Asia/Ho_Chi_Minh`; sau mỗi lượt update sẽ build universe report và rebuild daily matrix |
 | `vn-intraday-stocks` | `collectors.vn_intraday_vnstock` | VN stock 1m lúc `16:30 Asia/Ho_Chi_Minh` |
 | `vn30f1m-dnse` | `collectors.vn_intraday_dnse` | Legacy alias service; disabled khỏi default compose, chỉ chạy khi bật profile `legacy-vn30f1m-dnse` |
+| `vn30f1m-vndirect-probe` | `collectors.vn_derivatives` | Hard-gated VNDIRECT DChart VN30F1M source proof; bootstrap/profile only, no publish |
 | `vn-derivatives-probe` | `collectors.vn_derivatives` | Probe KBS/DNSE individual VN30 futures contracts; bootstrap/profile only |
-| `vn-derivatives-source-probe` | `collectors.vn_derivatives` | V2 free-source proof for Vietstock/TradingView/KBS/DNSE; bootstrap/profile only, no publish |
+| `vn-derivatives-source-probe` | `collectors.vn_derivatives` | Historical V2 multi-source proof; superseded for VN30F1M by VNDIRECT DChart |
 | `vn-derivatives-bootstrap` | `collectors.vn_derivatives` | Backfill individual VN30 futures contracts; bootstrap/profile only |
 | `vn-derivatives-validate` | `collectors.vn_derivatives` | Validate contract-level VN30 futures storage |
 | `vn-derivatives` | `collectors.vn_derivatives` | Daily sync contracts, validate, rebuild continuous, compare provider alias, update VN matrix |
@@ -220,10 +221,12 @@ PYTHONPATH=. python -m collectors.vn_daily_matrix --start-date 2016-01-01
 PYTHONPATH=. python -m collectors.vn_derivatives discover --json
 PYTHONPATH=. python -m collectors.vn_derivatives probe --json
 
-# VN30 futures V2 free-source proof. Không publish canonical bars.
-# Default command fail nếu không có provider nào trả positive bars thật.
+# VN30F1M VNDIRECT DChart source proof. Không publish canonical bars.
+# Command fail nếu recent 1m hoặc daily không có positive rows thật.
+PYTHONPATH=. python -m collectors.vn_derivatives probe-vndirect --json
+
+# Historical multi-source proof, superseded by VNDIRECT DChart for the active VN30F1M task.
 PYTHONPATH=. python -m collectors.vn_derivatives probe-free-sources --json
-PYTHONPATH=. python -m collectors.vn_derivatives probe-free-sources --providers vietstock,tradingview --no-fail-on-no-positive --json
 
 # VN30 futures individual contracts V1.
 PYTHONPATH=. python -m collectors.vn_derivatives backfill --start 2017-08-10 --resolutions 1m,1d --max-contracts 1 --max-windows 2 --json

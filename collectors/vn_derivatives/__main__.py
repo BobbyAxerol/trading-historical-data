@@ -19,6 +19,7 @@ from collectors.vn_derivatives.probe import PROBE_CONTRACTS, run_provider_probe
 from collectors.vn_derivatives.provider_registry import options_from_cli as source_probe_options_from_cli
 from collectors.vn_derivatives.provider_registry import run_source_probe
 from collectors.vn_derivatives.validate import validate_storage
+from collectors.vn_derivatives.vndirect import VndirectProbeOptions, run_vndirect_probe
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -45,6 +46,14 @@ def build_parser() -> argparse.ArgumentParser:
     free_probe.add_argument("--contracts", default=None, help="Comma-separated VN30FYYMM contracts for contract-aware providers.")
     free_probe.add_argument("--no-fail-on-no-positive", action="store_true")
     free_probe.add_argument("--json", action="store_true")
+
+    vndirect_probe = sub.add_parser("probe-vndirect", help="Hard-gated VNDIRECT DChart VN30F1M source probe; no publish.")
+    vndirect_probe.add_argument("--recent-days", type=int, default=5)
+    vndirect_probe.add_argument("--old-start", default="2018-08-01")
+    vndirect_probe.add_argument("--old-end", default="2018-09-01")
+    vndirect_probe.add_argument("--daily-start", default="2017-08-10")
+    vndirect_probe.add_argument("--no-fail-on-gate", action="store_true")
+    vndirect_probe.add_argument("--json", action="store_true")
 
     backfill = sub.add_parser("backfill", help="Backfill individual VN30 futures contracts into canonical contract storage.")
     backfill.add_argument("--version", default="v1")
@@ -103,6 +112,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     load_environment()
     args = build_parser().parse_args()
+    exit_code = 0
     if args.command == "discover":
         df = build_initial_instrument_dimension(start=args.start, end=args.end, horizon_months=args.horizon_months, version=args.version)
         payload = {"status": "ok", "contracts": int(len(df)), "first": str(df["canonical_symbol"].iloc[0]) if not df.empty else None, "last": str(df["canonical_symbol"].iloc[-1]) if not df.empty else None}
@@ -120,6 +130,17 @@ def main() -> None:
             no_fail_on_no_positive=args.no_fail_on_no_positive,
         )
         payload = run_source_probe(options)
+    elif args.command == "probe-vndirect":
+        options = VndirectProbeOptions(
+            recent_days=args.recent_days,
+            old_start=args.old_start,
+            old_end=args.old_end,
+            daily_start=args.daily_start,
+            fail_on_gate=False,
+        )
+        payload = run_vndirect_probe(options)
+        if payload.get("production_gate") != "PASS" and not args.no_fail_on_gate:
+            exit_code = 1
     elif args.command == "backfill":
         symbols = [item.strip().upper() for item in args.symbols.split(",") if item.strip()] if args.symbols else None
         resolutions = [item.strip().lower() for item in args.resolutions.split(",") if item.strip()]
@@ -165,6 +186,8 @@ def main() -> None:
         print(json.dumps(payload, indent=2, sort_keys=True, default=str))
     else:
         print(payload)
+    if exit_code:
+        raise SystemExit(exit_code)
 
 
 if __name__ == "__main__":

@@ -90,6 +90,17 @@ services:
       DNSE_API_KEY: ${DNSE_API_KEY:-}
       DNSE_API_SECRET_KEY: ${DNSE_API_SECRET_KEY:-}
 
+  vn30f1m-vndirect-probe:
+    <<: *get-data-service
+    profiles: ["bootstrap", "vn-derivatives"]
+    restart: "no"
+    command: ["python", "-m", "collectors.vn_derivatives", "probe-vndirect", "--json"]
+    environment:
+      TZ: Asia/Ho_Chi_Minh
+      DATA_ROOT: /app/storage
+      STATE_ROOT: /app/state
+      LOG_ROOT: /app/logs
+
   vn-derivatives-probe:
     <<: *get-data-service
     profiles: ["bootstrap", "vn-derivatives"]
