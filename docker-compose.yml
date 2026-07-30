@@ -101,6 +101,15 @@ services:
       STATE_ROOT: /app/state
       LOG_ROOT: /app/logs
 
+  vn30f1m-vndirect:
+    <<: *get-data-service
+    command: ["python", "-m", "collectors.vn_derivatives", "sync-vndirect", "--resolution", "1d", "--mode", "live", "--schedule", "16:30", "--update-matrix"]
+    environment:
+      TZ: Asia/Ho_Chi_Minh
+      DATA_ROOT: /app/storage
+      STATE_ROOT: /app/state
+      LOG_ROOT: /app/logs
+
   vn-derivatives-probe:
     <<: *get-data-service
     profiles: ["bootstrap", "vn-derivatives"]

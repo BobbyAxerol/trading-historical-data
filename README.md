@@ -176,6 +176,7 @@ Các service chạy bằng `docker compose` và có `restart: unless-stopped`.
 | `vn-intraday-stocks` | `collectors.vn_intraday_vnstock` | VN stock 1m lúc `16:30 Asia/Ho_Chi_Minh` |
 | `vn30f1m-dnse` | `collectors.vn_intraday_dnse` | Legacy alias service; disabled khỏi default compose, chỉ chạy khi bật profile `legacy-vn30f1m-dnse` |
 | `vn30f1m-vndirect-probe` | `collectors.vn_derivatives` | Hard-gated VNDIRECT DChart VN30F1M source proof; bootstrap/profile only, no publish |
+| `vn30f1m-vndirect` | `collectors.vn_derivatives` | VNDIRECT DChart VN30F1M continuous daily sync lúc `16:30 Asia/Ho_Chi_Minh`; 1m chưa bật trong phase này |
 | `vn-derivatives-probe` | `collectors.vn_derivatives` | Probe KBS/DNSE individual VN30 futures contracts; bootstrap/profile only |
 | `vn-derivatives-source-probe` | `collectors.vn_derivatives` | Historical V2 multi-source proof; superseded for VN30F1M by VNDIRECT DChart |
 | `vn-derivatives-bootstrap` | `collectors.vn_derivatives` | Backfill individual VN30 futures contracts; bootstrap/profile only |
@@ -224,6 +225,9 @@ PYTHONPATH=. python -m collectors.vn_derivatives probe --json
 # VN30F1M VNDIRECT DChart source proof. Không publish canonical bars.
 # Command fail nếu recent 1m hoặc daily không có positive rows thật.
 PYTHONPATH=. python -m collectors.vn_derivatives probe-vndirect --json
+
+# VN30F1M VNDIRECT DChart daily sync. Ghi daily continuous alias, chưa gọi 1m.
+PYTHONPATH=. python -m collectors.vn_derivatives sync-vndirect --resolution 1d --mode once --update-matrix --json
 
 # Historical multi-source proof, superseded by VNDIRECT DChart for the active VN30F1M task.
 PYTHONPATH=. python -m collectors.vn_derivatives probe-free-sources --json

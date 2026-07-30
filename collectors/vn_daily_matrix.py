@@ -140,15 +140,19 @@ def _write_futures_daily(df: pd.DataFrame, symbol: str) -> None:
 
 
 def _read_continuous_external_symbol(symbol: str, start_ts: pd.Timestamp | None, end_ts: pd.Timestamp | None, *, version: str = "v1") -> pd.DataFrame:
-    continuous_root = data_root() / "vn" / "futures" / "continuous" / "1d" / f"symbol={symbol}" / f"version={version}"
-    if not continuous_root.exists():
+    symbol_root = data_root() / "vn" / "futures" / "continuous" / "1d" / f"symbol={symbol}"
+    source_roots = sorted(path for path in symbol_root.glob(f"source=*/version={version}") if path.is_dir())
+    roots = source_roots or [symbol_root / f"version={version}"]
+    roots = [path for path in roots if path.exists()]
+    if not roots:
         return pd.DataFrame()
     frames = []
-    for path in _partition_files(continuous_root):
-        try:
-            frames.append(read_partition_file(path))
-        except Exception:
-            continue
+    for continuous_root in roots:
+        for path in _partition_files(continuous_root):
+            try:
+                frames.append(read_partition_file(path))
+            except Exception:
+                continue
     if not frames:
         return pd.DataFrame()
     df = pd.concat(frames, ignore_index=True)

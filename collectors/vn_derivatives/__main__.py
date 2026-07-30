@@ -19,7 +19,7 @@ from collectors.vn_derivatives.probe import PROBE_CONTRACTS, run_provider_probe
 from collectors.vn_derivatives.provider_registry import options_from_cli as source_probe_options_from_cli
 from collectors.vn_derivatives.provider_registry import run_source_probe
 from collectors.vn_derivatives.validate import validate_storage
-from collectors.vn_derivatives.vndirect import VndirectProbeOptions, run_vndirect_probe
+from collectors.vn_derivatives.vndirect import VndirectDailyOptions, VndirectProbeOptions, live_vndirect_daily, run_vndirect_probe, sync_vndirect_daily
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -54,6 +54,17 @@ def build_parser() -> argparse.ArgumentParser:
     vndirect_probe.add_argument("--daily-start", default="2017-08-10")
     vndirect_probe.add_argument("--no-fail-on-gate", action="store_true")
     vndirect_probe.add_argument("--json", action="store_true")
+
+    vndirect_sync = sub.add_parser("sync-vndirect", help="Sync VNDIRECT DChart VN30F1M continuous data.")
+    vndirect_sync.add_argument("--resolution", choices=["1d"], default="1d", help="Only daily is implemented in this phase; 1m remains intentionally disabled.")
+    vndirect_sync.add_argument("--mode", choices=["once", "live"], default="once")
+    vndirect_sync.add_argument("--version", default="v1")
+    vndirect_sync.add_argument("--start", default=None)
+    vndirect_sync.add_argument("--end", default=None)
+    vndirect_sync.add_argument("--overlap-days", type=int, default=14)
+    vndirect_sync.add_argument("--schedule", default="16:30")
+    vndirect_sync.add_argument("--update-matrix", action="store_true")
+    vndirect_sync.add_argument("--json", action="store_true")
 
     backfill = sub.add_parser("backfill", help="Backfill individual VN30 futures contracts into canonical contract storage.")
     backfill.add_argument("--version", default="v1")
@@ -141,6 +152,24 @@ def main() -> None:
         payload = run_vndirect_probe(options)
         if payload.get("production_gate") != "PASS" and not args.no_fail_on_gate:
             exit_code = 1
+    elif args.command == "sync-vndirect":
+        if args.mode == "live":
+            live_vndirect_daily(
+                schedule=args.schedule,
+                version=args.version,
+                overlap_days=args.overlap_days,
+                update_matrix=args.update_matrix,
+            )
+            return
+        payload = sync_vndirect_daily(
+            VndirectDailyOptions(
+                start=args.start,
+                end=args.end,
+                version=args.version,
+                overlap_days=args.overlap_days,
+                update_matrix=args.update_matrix,
+            )
+        )
     elif args.command == "backfill":
         symbols = [item.strip().upper() for item in args.symbols.split(",") if item.strip()] if args.symbols else None
         resolutions = [item.strip().lower() for item in args.resolutions.split(",") if item.strip()]

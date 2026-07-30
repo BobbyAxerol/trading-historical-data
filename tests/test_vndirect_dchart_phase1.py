@@ -7,8 +7,11 @@ from unittest.mock import Mock, patch
 
 import pandas as pd
 
+import data_loader
 from collectors.providers.vndirect_dchart_derivatives import DChartFetchResult, VndirectDChartProvider
-from collectors.vn_derivatives.vndirect import VndirectProbeOptions, run_vndirect_probe
+from collectors.vn_daily_matrix import build_matrix
+from collectors.vn_derivatives.vndirect import VndirectDailyOptions, VndirectProbeOptions, run_vndirect_probe, sync_vndirect_daily
+from data_loader import VnDerivativesContinuousDaily
 
 
 class FakeResponse:
@@ -30,12 +33,20 @@ class EnvCase(unittest.TestCase):
         root = Path(self.tmp.name)
         self.old_state_root = os.environ.get("STATE_ROOT")
         self.old_data_root = os.environ.get("DATA_ROOT")
+        self.old_config_root = os.environ.get("CONFIG_ROOT")
+        self.old_loader_storage = data_loader.STORAGE_DIR
         os.environ["STATE_ROOT"] = str(root / "state")
         os.environ["DATA_ROOT"] = str(root / "storage")
+        os.environ["CONFIG_ROOT"] = str(root / "configs")
+        data_loader.STORAGE_DIR = Path(os.environ["DATA_ROOT"])
+        Path(os.environ["CONFIG_ROOT"]).mkdir(parents=True, exist_ok=True)
+        (Path(os.environ["CONFIG_ROOT"]) / "symbols.vn_daily.yml").write_text("symbols: []\ncandidate_symbols: []\nexternal_symbols: [VN30F1M]\n")
 
     def tearDown(self):
         _restore_env("STATE_ROOT", self.old_state_root)
         _restore_env("DATA_ROOT", self.old_data_root)
+        _restore_env("CONFIG_ROOT", self.old_config_root)
+        data_loader.STORAGE_DIR = self.old_loader_storage
         self.tmp.cleanup()
 
 
@@ -170,6 +181,77 @@ class TestVndirectProbeGate(EnvCase):
         report = json.loads((Path(os.environ["STATE_ROOT"]) / "vn_derivatives" / "vndirect_dchart_probe.json").read_text())
         self.assertEqual(report["production_gate"], "FAIL")
         self.assertIn("daily row_count <= 500", report["gate_errors"][0])
+
+
+class TestVndirectDailySync(EnvCase):
+    def _daily_result(self) -> DChartFetchResult:
+        frame = pd.DataFrame(
+            {
+                "time": pd.to_datetime(["2024-01-02 07:00", "2024-01-03 07:00"]).tz_localize("Asia/Ho_Chi_Minh"),
+                "open": [1000.0, 1002.0],
+                "high": [1005.0, 1004.0],
+                "low": [999.0, 1001.0],
+                "close": [1003.0, 1002.5],
+                "volume": [1200.0, 1300.0],
+                "source": ["vndirect_dchart", "vndirect_dchart"],
+                "source_symbol": ["VN30F1M", "VN30F1M"],
+                "quality_flags": ["CONTINUOUS_ALIAS", "CONTINUOUS_ALIAS"],
+                "ingested_at": ["2026-07-30T00:00:00+00:00", "2026-07-30T00:00:00+00:00"],
+            }
+        )
+        return DChartFetchResult(
+            status="success",
+            data=frame,
+            requested_start=pd.Timestamp("2024-01-01"),
+            requested_end=pd.Timestamp("2024-01-03"),
+            first_bar=frame["time"].min(),
+            last_bar=frame["time"].max(),
+            http_status=200,
+            error=None,
+        )
+
+    def test_daily_sync_writes_source_partition_and_loader_reads_it(self):
+        provider = Mock()
+        provider.fetch.return_value = self._daily_result()
+        with patch("collectors.vn_derivatives.vndirect.VndirectDChartProvider", return_value=provider):
+            payload = sync_vndirect_daily(VndirectDailyOptions(start="2024-01-01", end="2024-01-03", update_matrix=False))
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["rows_written"], 2)
+        part = (
+            Path(os.environ["DATA_ROOT"])
+            / "vn"
+            / "futures"
+            / "continuous"
+            / "1d"
+            / "symbol=VN30F1M"
+            / "source=vndirect_dchart"
+            / "version=v1"
+            / "year=2024"
+            / "part.parquet"
+        )
+        self.assertTrue(part.exists())
+
+        loaded = VnDerivativesContinuousDaily().load(symbols="VN30F1M", start_date="2024-01-01", check_val=True, columns="full")
+        self.assertEqual(len(loaded), 2)
+        self.assertEqual(list(pd.to_datetime(loaded["time"]).dt.strftime("%Y-%m-%d")), ["2024-01-02", "2024-01-03"])
+        self.assertEqual(set(loaded["source"]), {"vndirect_dchart"})
+
+        manifest = json.loads((Path(os.environ["STATE_ROOT"]) / "vn_derivatives" / "vndirect_dchart_1d.json").read_text())
+        self.assertEqual(manifest["provider"], "vndirect_dchart")
+        self.assertEqual(manifest["latest_time"], "2024-01-03T00:00:00")
+
+    def test_daily_matrix_reads_vndirect_source_partition(self):
+        provider = Mock()
+        provider.fetch.return_value = self._daily_result()
+        with patch("collectors.vn_derivatives.vndirect.VndirectDChartProvider", return_value=provider):
+            sync_vndirect_daily(VndirectDailyOptions(start="2024-01-01", end="2024-01-03", update_matrix=False))
+
+        result = build_matrix(start_date="2024-01-01", end_date="2024-01-03")
+
+        self.assertEqual(result["auxiliary_symbols"], ["VN30F1M"])
+        close = pd.read_parquet(Path(os.environ["DATA_ROOT"]) / "vn" / "equity" / "daily_matrix" / "close.parquet")
+        self.assertIn("VN30F1M", close.columns)
 
 
 def _restore_env(name: str, value: str | None) -> None:

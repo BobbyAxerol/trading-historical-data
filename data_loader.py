@@ -178,37 +178,41 @@ def _get_versioned_symbol_files(
     start_ts: pd.Timestamp | None,
     end_ts: pd.Timestamp | None,
 ) -> list[Path]:
-    symbol_dir = dataset_path / f"symbol={symbol.upper()}" / f"version={version}"
-    if not symbol_dir.exists():
+    symbol_root = dataset_path / f"symbol={symbol.upper()}"
+    source_version_dirs = sorted(path for path in symbol_root.glob(f"source=*/version={version}") if path.is_dir())
+    version_dirs = source_version_dirs or [symbol_root / f"version={version}"]
+    version_dirs = [path for path in version_dirs if path.exists()]
+    if not version_dirs:
         return []
     paths = []
-    for year_dir in symbol_dir.glob("year=*"):
-        try:
-            year = int(year_dir.name.split("=")[1])
-        except (IndexError, ValueError):
-            continue
-        if start_ts is not None and year < start_ts.year:
-            continue
-        if end_ts is not None and year > end_ts.year:
-            continue
-        month_dirs = list(year_dir.glob("month=*"))
-        if not month_dirs:
-            part_file = _select_partition_file(year_dir)
-            if part_file is not None:
-                paths.append(part_file)
-            continue
-        for month_dir in month_dirs:
+    for symbol_dir in version_dirs:
+        for year_dir in symbol_dir.glob("year=*"):
             try:
-                month = int(month_dir.name.split("=")[1])
+                year = int(year_dir.name.split("=")[1])
             except (IndexError, ValueError):
                 continue
-            if start_ts is not None and (year, month) < (start_ts.year, start_ts.month):
+            if start_ts is not None and year < start_ts.year:
                 continue
-            if end_ts is not None and (year, month) > (end_ts.year, end_ts.month):
+            if end_ts is not None and year > end_ts.year:
                 continue
-            part_file = _select_partition_file(month_dir)
-            if part_file is not None:
-                paths.append(part_file)
+            month_dirs = list(year_dir.glob("month=*"))
+            if not month_dirs:
+                part_file = _select_partition_file(year_dir)
+                if part_file is not None:
+                    paths.append(part_file)
+                continue
+            for month_dir in month_dirs:
+                try:
+                    month = int(month_dir.name.split("=")[1])
+                except (IndexError, ValueError):
+                    continue
+                if start_ts is not None and (year, month) < (start_ts.year, start_ts.month):
+                    continue
+                if end_ts is not None and (year, month) > (end_ts.year, end_ts.month):
+                    continue
+                part_file = _select_partition_file(month_dir)
+                if part_file is not None:
+                    paths.append(part_file)
     return sorted(paths)
 
 
@@ -709,7 +713,7 @@ class VnDerivativesContinuousBase(MarketDataLoaderBase):
         return sorted(
             path.name.split("=", 1)[1].upper()
             for path in root.glob("symbol=*")
-            if (path / f"version={self.VERSION}").exists()
+            if (path / f"version={self.VERSION}").exists() or any(path.glob(f"source=*/version={self.VERSION}"))
         )
 
     def _files_for_symbol(self, symbol: str, start_ts: pd.Timestamp | None, end_ts: pd.Timestamp | None) -> list[Path]:

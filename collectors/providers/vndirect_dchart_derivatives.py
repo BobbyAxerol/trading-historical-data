@@ -212,6 +212,9 @@ class VndirectDChartProvider:
             local_dates = work["time"].dt.tz_convert("Asia/Ho_Chi_Minh").dt.normalize()
             if local_dates.duplicated().any():
                 raise ValueError(f"duplicate local trading dates: {int(local_dates.duplicated().sum())}")
+            weekend_rows = int(local_dates.dt.weekday.ge(5).sum())
+            if weekend_rows:
+                raise ValueError(f"weekend daily rows: {weekend_rows}")
 
         work["source"] = cls.SOURCE
         work["source_symbol"] = cls.SYMBOL

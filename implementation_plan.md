@@ -6,7 +6,7 @@ This file is the consolidated implementation tracker for `_get_data` jobs. Detai
 
 Source guide: `VN30_FUTURES_FREE_DATA_UPGRADE_PLAN_V2.md`
 
-Status: Phase 1 complete; Phase 2 pending
+Status: Phase 1 complete; Phase 2 daily subphase complete; Phase 2 1m pending
 
 Branch: `dev`
 
@@ -119,7 +119,8 @@ Scope:
 - Add active service:
   - `vn30f1m-vndirect`;
   - schedule `16:30 Asia/Ho_Chi_Minh`;
-  - sync recent `1m`, sync latest daily, validate, compact, update matrix, update overlap report.
+  - daily subphase syncs latest daily, validates, updates matrix;
+  - `1m` remains intentionally disabled until the later 1m subphase.
 - After overlap/parity pass, `VNDailyMatrix` may source `VN30F1M` from DChart daily.
 
 ### Phase 1 Implementation Log
@@ -174,6 +175,63 @@ Decision:
 
 - Phase 1 PASS. It is reasonable to proceed to Phase 2 backfill/storage work.
 - The old multi-source proof remains obsolete for this active task.
+
+### Phase 2 Daily Implementation Log
+
+#### 2026-07-30 UTC
+
+Status: daily subphase complete; `1m` not called.
+
+Changed:
+
+- Added daily VNDIRECT DChart sync under `collectors/vn_derivatives/vndirect.py`.
+- Added CLI:
+  - `python -m collectors.vn_derivatives sync-vndirect --resolution 1d --mode once --update-matrix --json`.
+- Added Docker live service:
+  - `vn30f1m-vndirect`;
+  - schedule `16:30 Asia/Ho_Chi_Minh`;
+  - command only supports `--resolution 1d` in this subphase.
+- Added source-partitioned daily storage:
+  - `storage/vn/futures/continuous/1d/symbol=VN30F1M/source=vndirect_dchart/version=v1/year=YYYY/part.parquet`.
+- Added manifest:
+  - `state/vn_derivatives/vndirect_dchart_1d.json`.
+- Updated loader/matrix path resolution so source-partitioned continuous daily is preferred over legacy `symbol/version` path.
+
+Live one-shot result:
+
+- Docker command:
+  - `docker compose --profile vn-derivatives run --rm --no-deps vn30f1m-vndirect python -m collectors.vn_derivatives sync-vndirect --resolution 1d --mode once --update-matrix --json`;
+  - status `ok`;
+  - positive windows `10`;
+  - rows written `2240`;
+  - first stored date `2017-08-10 00:00:00`;
+  - latest stored date `2026-07-30 00:00:00`;
+  - matrix auxiliary source `VN30F1M -> storage/vn/futures/continuous/1d`.
+
+Validation:
+
+- Source-partition files: `10`.
+- Source-partition rows: `2240`.
+- Duplicate `symbol,time`: `0`.
+- Weekend rows: `0`.
+- Source values: `vndirect_dchart`.
+- `VnDerivativesContinuousDaily().load(symbols="VN30F1M")`: `2240` rows from `2017-08-10` to `2026-07-30`.
+- `VNDailyMatrix().load("close", symbols=["VN30F1M"])`: first valid `2017-08-10`, last valid `2026-07-30`.
+- Disk:
+  - DChart daily partition: `196K`;
+  - DChart manifest: `20K`;
+  - VN daily matrix: `13M`.
+
+Tests:
+
+- `/root/bobby/pool_alpha/.venv/bin/python -m unittest tests.test_vndirect_dchart_phase1`: OK, 9 tests.
+- `/root/bobby/pool_alpha/.venv/bin/python -m unittest tests.test_vndirect_dchart_phase1 tests.test_vn_derivatives_phase3 tests.test_vn_daily_universe`: OK, 19 tests.
+- compileall relevant modules: OK.
+
+Decision:
+
+- Daily DChart source is usable now.
+- Do not call or backfill `1m` yet; this remains the next subphase.
 
 ## Superseded Job: VN30 Futures Free Data Upgrade V2 Multi-Source Proof
 
