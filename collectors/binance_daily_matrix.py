@@ -417,32 +417,104 @@ def _symbol_fetch_start(
     backfill_start: pd.Timestamp,
     end: pd.Timestamp,
     overlap_days: int,
+    feature: str = "ohlcv",
+    reference_df: pd.DataFrame | None = None,
 ) -> pd.Timestamp | None:
+    """Find the earliest date that needs a source refresh for one feature.
+
+    Matrix files have a shared daily index, so a zero in the volume matrix can
+    mean either a real zero or a missing cell written by an older collector.
+    Binance USD-M daily candles normally have positive volume; for the volume
+    integrity scan, positive values are therefore the observed coverage. The
+    reference OHLC matrix limits that scan to dates on which the symbol itself
+    existed, avoiding repeated backfills before a symbol's listing date.
+    """
+    backfill_start = pd.Timestamp(backfill_start).normalize()
+    end = pd.Timestamp(end).normalize()
+    expected_start = backfill_start
+
+    if reference_df is not None and symbol in reference_df.columns:
+        reference = pd.to_numeric(reference_df[symbol], errors="coerce")
+        reference.index = pd.to_datetime(reference.index, errors="coerce").normalize()
+        reference = reference[~reference.index.isna()].dropna()
+        if not reference.empty:
+            expected_start = max(expected_start, pd.Timestamp(reference.index.min()).normalize())
+
     if symbol not in existing_df.columns:
-        return backfill_start
+        return expected_start
 
-    series = pd.to_numeric(existing_df[symbol], errors="coerce").dropna()
+    series = pd.to_numeric(existing_df[symbol], errors="coerce")
+    series.index = pd.to_datetime(series.index, errors="coerce").normalize()
+    series = series[~series.index.isna()]
+    series = series[~series.index.duplicated(keep="last")].sort_index()
+
+    if feature.lower() == "volume":
+        # A legacy run converted missing pivot cells to zero. Treat positive
+        # volume as the reliable persisted coverage signal for repair.
+        series = series.where(series > 0)
+    series = series.dropna()
     if series.empty:
-        return backfill_start
+        return expected_start
 
-    first = pd.Timestamp(series.index.min()).normalize()
-    latest = pd.Timestamp(series.index.max()).normalize()
+    dates = pd.DatetimeIndex(series.index).normalize().drop_duplicates().sort_values()
+    first = pd.Timestamp(dates[0]).normalize()
+    latest = pd.Timestamp(dates[-1]).normalize()
 
-    if first > backfill_start:
-        return backfill_start
+    if first > expected_start:
+        return expected_start
 
-    gaps = series.index.to_series().sort_values().diff().dropna()
     overlap = timedelta(days=int(overlap_days))
-    big_gaps = gaps[gaps > timedelta(days=1)]
-    if not big_gaps.empty:
-        first_gap_idx = big_gaps.index[0]
-        prev_pos = series.index.get_loc(first_gap_idx) - 1
-        return max(backfill_start, pd.Timestamp(series.index[prev_pos]).normalize() - overlap)
+    gaps = dates[1:] - dates[:-1]
+    for position, gap in enumerate(gaps, start=1):
+        if gap > timedelta(days=1):
+            return max(expected_start, pd.Timestamp(dates[position - 1]).normalize() - overlap)
 
     if latest < end:
-        return max(backfill_start, latest - overlap)
+        return max(expected_start, latest - overlap)
 
-    return max(backfill_start, latest - overlap)
+    return max(expected_start, latest - overlap)
+
+
+def _merge_feature_matrix(
+    pivoted_new: pd.DataFrame,
+    existing_df: pd.DataFrame,
+    *,
+    feature: str,
+    symbols: list[str],
+    end: pd.Timestamp,
+) -> pd.DataFrame:
+    """Merge fetched cells without missing pivot cells overwriting storage."""
+    feature = feature.lower()
+    new = pivoted_new.copy()
+    new.index = pd.to_datetime(new.index, errors="coerce").normalize()
+    new = new[~new.index.isna()]
+    if feature == "volume":
+        new = new.apply(pd.to_numeric, errors="coerce")
+    else:
+        new = new.astype("float64")
+
+    existing = existing_df.copy()
+    if not existing.empty:
+        existing.index = pd.to_datetime(existing.index, errors="coerce").normalize()
+        existing = existing[~existing.index.isna()]
+        existing = existing[~existing.index.duplicated(keep="last")]
+        existing = existing.apply(pd.to_numeric, errors="coerce")
+
+    # combine_first must happen before volume's final dense-matrix fill. A
+    # missing symbol/date in pivoted_new is not a source observation.
+    combined = new.combine_first(existing)
+    combined = combined[combined.index <= pd.Timestamp(end).normalize()]
+    combined = combined[~combined.index.duplicated(keep="last")].sort_index()
+    combined = combined.reindex(symbols, axis=1)
+    combined.index.name = "time"
+
+    # Preserve the long-standing matrix dtype/loader contract. The fill is
+    # intentionally after the merge, so it cannot overwrite existing values.
+    if feature == "volume":
+        combined = combined.fillna(0).astype("int64")
+    else:
+        combined = combined.astype("float64")
+    return combined
 
 
 def run_pipeline(
@@ -465,8 +537,16 @@ def run_pipeline(
     
     paths = {f: matrix_dir / f"{f}.parquet" for f in FEATURES}
 
-    # 2. Determine per-symbol fetch windows from existing open matrix
-    existing_open = _load_matrix(_select_matrix_path(matrix_dir, "open"))
+    # 2. Determine per-symbol fetch windows from every feature matrix. Using
+    # only open previously hid a corrupted volume matrix from backfill.
+    existing_matrices: dict[str, pd.DataFrame] = {}
+    for feature in FEATURES:
+        try:
+            existing_matrices[feature] = _load_matrix(_select_matrix_path(matrix_dir, feature))
+        except Exception as exc:
+            logger.error("Error loading existing %s matrix; repairing from source: %s", feature, exc)
+            existing_matrices[feature] = pd.DataFrame()
+    existing_open = existing_matrices["open"]
     backfill_start = pd.Timestamp(backfill_start_str).normalize()
     end = _closed_daily_until()
 
@@ -479,13 +559,20 @@ def run_pipeline(
     logger.info("Fetching daily klines for %d symbols...", len(symbols))
     
     for i, symbol in enumerate(symbols):
-        start = _symbol_fetch_start(
-            existing_open,
-            symbol,
-            backfill_start=backfill_start,
-            end=end,
-            overlap_days=overlap_days,
-        )
+        feature_starts = {
+            feature: _symbol_fetch_start(
+                existing_matrices[feature],
+                symbol,
+                backfill_start=backfill_start,
+                end=end,
+                overlap_days=overlap_days,
+                feature=feature,
+                reference_df=existing_open if feature == "volume" else None,
+            )
+            for feature in FEATURES
+        }
+        starts = [value for value in feature_starts.values() if value is not None]
+        start = min(starts) if starts else None
         if start is None or start > end:
             continue
 
@@ -515,33 +602,23 @@ def run_pipeline(
             path = paths[feature]
             pivoted_new = all_df.pivot(index="time", columns="symbol", values=feature)
 
-            # Cast data types properly
-            if feature == "volume":
-                pivoted_new = pivoted_new.fillna(0).astype("int64")
-            else:
-                pivoted_new = pivoted_new.astype("float64")
-
-            existing_path = _select_matrix_path(matrix_dir, feature)
-            if existing_path.exists():
-                try:
-                    existing_df = _load_matrix(existing_path)
-                    # Align indices & columns, combining df with prioritized new data
-                    combined = pivoted_new.combine_first(existing_df)
-                except Exception as exc:
-                    logger.error("Error loading %s, overwriting: %s", existing_path.name, exc)
-                    combined = pivoted_new
-            else:
-                combined = pivoted_new
-
-            # Sort columns and index
-            combined.index = pd.to_datetime(combined.index, errors="coerce")
-            combined = combined[~combined.index.isna()]
-            combined = combined[combined.index <= end]
-            combined = combined[~combined.index.duplicated(keep="last")]
-            combined = combined.sort_index()
-            combined = combined.reindex(symbols, axis=1)
-            combined.index = pd.to_datetime(combined.index).normalize()
-            combined.index.name = "time"
+            try:
+                combined = _merge_feature_matrix(
+                    pivoted_new,
+                    existing_matrices[feature],
+                    feature=feature,
+                    symbols=symbols,
+                    end=end,
+                )
+            except Exception as exc:
+                logger.error("Error merging %s matrix; writing fetched cells only: %s", feature, exc)
+                combined = _merge_feature_matrix(
+                    pivoted_new,
+                    pd.DataFrame(),
+                    feature=feature,
+                    symbols=symbols,
+                    end=end,
+                )
 
             # Write atomically
             _atomic_write_matrix(combined, path)

@@ -133,3 +133,28 @@ Results:
 - Unit tests: `Ran 7 tests ... OK`
 - Storage smoke: ok
 - Source smoke: Binance futures/options, vnstock daily/intraday, DNSE, yfinance all ok
+
+## Volume overwrite follow-up 2026-08-03
+
+Audit of the Parquet matrix found a second, narrower corruption path. In the
+old merge order, `pivoted_new.fillna(0)` ran before
+`pivoted_new.combine_first(existing_df)`. Because the pivot index is shared by
+all symbols, a missing BTC/ETH/BCH volume cell was converted to zero and then
+used as a new observation, overwriting the existing value. The fetch window
+was also derived only from `open`, so a complete OHLC matrix hid an incomplete
+volume matrix.
+
+The collector now:
+
+- scans fetch coverage per feature and uses the earliest required start;
+- treats positive Binance daily volume as the persisted coverage signal for
+  volume repair, while using the symbol's OHLC first date as the listing bound;
+- merges new cells with `combine_first` before the final dense volume fill;
+- keeps the existing Parquet matrix dtype and `CryptoDailyMatrix` endpoint
+  contract;
+- loads each existing matrix once per run and reuses it during the write.
+
+The service backfills affected symbols automatically on the next scheduled
+run. No synthetic volume is created. A post-repair audit must confirm that
+volume is positive on every date where the symbol has an OHLC candle, except
+for genuine zero-volume source rows.
