@@ -190,6 +190,8 @@ PHASE_D_QUARTERLY_COMMAND = [
     "BTCUSDT",
     "--start-month",
     "2021-02",
+    "--rest-bridge-days",
+    "7",
     "--repair-gaps",
     "--max-gap-minutes",
     "5",

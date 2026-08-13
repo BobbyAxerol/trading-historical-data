@@ -218,11 +218,13 @@ if [ "${PRIMUS_HMD_PHASE_D_BINANCE_USDM_QUARTERLY_1M_APPROVED:-}" = "approved" ]
   && [ "${7:-}" = "BTCUSDT" ] \
   && [ "${8:-}" = "--start-month" ] \
   && [ "${9:-}" = "2021-02" ] \
-  && [ "${10:-}" = "--repair-gaps" ] \
-  && [ "${11:-}" = "--max-gap-minutes" ] \
-  && [ "${12:-}" = "5" ] \
-  && [ "${13:-}" = "--audit-phase-d" ] \
-  && [ "$#" -eq 13 ]; then
+  && [ "${10:-}" = "--rest-bridge-days" ] \
+  && [ "${11:-}" = "7" ] \
+  && [ "${12:-}" = "--repair-gaps" ] \
+  && [ "${13:-}" = "--max-gap-minutes" ] \
+  && [ "${14:-}" = "5" ] \
+  && [ "${15:-}" = "--audit-phase-d" ] \
+  && [ "$#" -eq 15 ]; then
   exec "$@"
 fi
 

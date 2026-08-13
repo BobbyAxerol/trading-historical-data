@@ -475,8 +475,11 @@ def sync_rest_tail(
 ) -> dict[str, object]:
     latest = store.latest_time(attrs={"symbol": symbol}, time_col="time")
     if rest_start:
-        explicit_start = pd.Timestamp(rest_start, tz="UTC")
-        start = explicit_start if latest is None else max(explicit_start, latest.tz_localize("UTC") - timedelta(minutes=int(overlap_minutes)))
+        # An explicit Phase D bridge must not be shortened merely because an
+        # older staged tail has a newer isolated timestamp.  The bridge starts
+        # directly after the latest available daily Vision source day.
+        start = pd.Timestamp(rest_start)
+        start = start.tz_localize("UTC") if start.tzinfo is None else start.tz_convert("UTC")
     elif latest is None:
         onboard = meta.get("onboard_time") if meta else None
         start = pd.Timestamp(onboard).tz_convert("UTC") if onboard else pd.Timestamp(_delivery_from_symbol(symbol) or "2021-01-01", tz="UTC")
@@ -540,7 +543,7 @@ def audit_symbol(
     negative_rows = 0
     source_mismatch_rows = 0
     symbol_mismatch_rows = 0
-    post_delivery_date_rows = 0
+    after_symbol_date_rows = 0
     out_of_order_partition_rows = 0
     gap_count = 0
     max_gap_minutes = 0
@@ -576,7 +579,11 @@ def audit_symbol(
         symbol_mismatch_rows += int((frame["symbol"].astype(str) != symbol.upper()).sum())
         source_mismatch_rows += int((~frame["source"].astype(str).isin(PHASE_D_SOURCES)).sum())
         if delivery_date is not None:
-            post_delivery_date_rows += int((times_raw.loc[valid_time].dt.normalize() > delivery_date).sum())
+            # Binance Vision can retain a concrete identifier beyond the date
+            # encoded in its suffix (for example BTCUSDT_230929 in Nov-2023).
+            # The source archive is authoritative; retain this as evidence,
+            # not an invented delivery cutoff or an integrity error.
+            after_symbol_date_rows += int((times_raw.loc[valid_time].dt.normalize() > delivery_date).sum())
 
         times = times_raw.loc[valid_time].sort_values().reset_index(drop=True)
         duplicate_rows += int(times.duplicated().sum())
@@ -643,7 +650,6 @@ def audit_symbol(
         + negative_rows
         + source_mismatch_rows
         + symbol_mismatch_rows
-        + post_delivery_date_rows
         + out_of_order_partition_rows
     )
     tail_current = not is_active or (tail_lag_minutes is not None and tail_lag_minutes <= 5)
@@ -676,7 +682,7 @@ def audit_symbol(
         "negative_rows": negative_rows,
         "source_mismatch_rows": source_mismatch_rows,
         "symbol_mismatch_rows": symbol_mismatch_rows,
-        "post_delivery_date_rows": post_delivery_date_rows,
+        "after_symbol_date_rows": after_symbol_date_rows,
         "out_of_order_partition_rows": out_of_order_partition_rows,
         "gap_count": gap_count,
         "max_gap_minutes": max_gap_minutes,
@@ -693,6 +699,7 @@ def sync_symbol(
     meta: dict[str, Any] | None,
     interval: str,
     start_month: str,
+    rest_bridge_days: int,
     include_monthly: bool,
     include_daily: bool,
     include_rest: bool,
@@ -711,6 +718,7 @@ def sync_symbol(
     total_rows = 0
     latest_time = None
     monthly_keys: list[str] = []
+    daily_keys: list[str] = []
     unavailable_vision_keys: list[str] = []
     if include_monthly:
         monthly_keys = vision_monthly_keys(symbol, interval=interval, start_month=start_month, s3_base_url=s3_base_url)
@@ -735,7 +743,8 @@ def sync_symbol(
             time.sleep(0.05)
 
     if include_daily and symbol in active_symbols:
-        for key in vision_daily_keys(symbol, interval=interval, s3_base_url=s3_base_url):
+        daily_keys = vision_daily_keys(symbol, interval=interval, s3_base_url=s3_base_url)
+        for key in daily_keys:
             date_text = _date_from_key(key)
             if date_text and not refresh_archive and _date_exists(store, symbol, date_text):
                 logger.debug("%s skip existing daily date %s", symbol, date_text)
@@ -756,13 +765,20 @@ def sync_symbol(
             time.sleep(0.05)
 
     if include_rest and symbol in active_symbols:
+        tail_rest_start = rest_start
+        if tail_rest_start is None and daily_keys:
+            daily_dates = [pd.Timestamp(date, tz="UTC") for key in daily_keys if (date := _date_from_key(key))]
+            if daily_dates:
+                latest_daily_end = max(daily_dates) + pd.Timedelta(days=1)
+                bounded_lower = _closed_until() - pd.Timedelta(days=int(rest_bridge_days))
+                tail_rest_start = max(latest_daily_end, bounded_lower).strftime("%Y-%m-%dT%H:%M:%SZ")
         result = sync_rest_tail(
             symbol=symbol,
             meta=meta,
             store=store,
             manifest=manifest,
             overlap_minutes=overlap_minutes,
-            rest_start=rest_start,
+            rest_start=tail_rest_start,
             logger=logger,
         )
         total_rows += int(result.get("rows_written") or 0)
@@ -786,6 +802,7 @@ def sync_symbol(
         "archive_key_count": len(monthly_keys),
         "first_archive_month": archive_months[0] if archive_months else None,
         "last_archive_month": archive_months[-1] if archive_months else None,
+        "rest_bridge_days": rest_bridge_days,
         "unavailable_vision_keys": unavailable_vision_keys,
     }
 
@@ -798,6 +815,7 @@ def sync_all(args: argparse.Namespace, logger) -> dict[str, Any]:
     vision_base_url = config.get("vision_base_url", VISION_BASE_URL)
     s3_base_url = config.get("s3_base_url", S3_BASE_URL)
     overlap_minutes = int(args.rest_overlap_minutes or config.get("rest_overlap_minutes", 10))
+    rest_bridge_days = int(args.rest_bridge_days)
 
     active = discover_active_contracts(pairs)
     archive_symbols = [] if args.no_archive_discovery else discover_archive_symbols(pairs, s3_base_url=s3_base_url)
@@ -838,6 +856,7 @@ def sync_all(args: argparse.Namespace, logger) -> dict[str, Any]:
                 "pairs": pairs,
                 "symbols": symbols,
                 "start_month": start_month,
+                "rest_bridge_days": rest_bridge_days,
                 "max_gap_minutes": args.max_gap_minutes,
                 "started_at": utc_now_iso(),
             }
@@ -850,6 +869,7 @@ def sync_all(args: argparse.Namespace, logger) -> dict[str, Any]:
                 meta=active.get(symbol),
                 interval=interval,
                 start_month=start_month,
+                rest_bridge_days=rest_bridge_days,
                 include_monthly=not args.no_monthly,
                 include_daily=not args.no_daily,
                 include_rest=not args.no_rest,
@@ -939,7 +959,13 @@ def main() -> None:
     parser.add_argument(
         "--rest-start",
         default=None,
-        help="Explicit UTC lower bound for REST tail collection; intended for a bounded seed on an empty runtime.",
+        help="Explicit UTC lower bound for REST tail collection; it is not shortened by a newer isolated local tail.",
+    )
+    parser.add_argument(
+        "--rest-bridge-days",
+        type=int,
+        default=7,
+        help="Maximum active-contract REST bridge after the latest daily Vision source date.",
     )
     parser.add_argument("--max-symbols", type=int, default=0)
     parser.add_argument("--no-monthly", action="store_true")

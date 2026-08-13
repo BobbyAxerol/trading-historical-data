@@ -169,7 +169,7 @@ services:
     pids_limit: 256
     cpus: 1.0
     mem_limit: 1536m
-    command: ["python", "-m", "collectors.binance_usdm_quarterly_1m", "--mode", "once", "--pairs", "BTCUSDT", "--start-month", "2021-02", "--repair-gaps", "--max-gap-minutes", "5", "--audit-phase-d"]
+    command: ["python", "-m", "collectors.binance_usdm_quarterly_1m", "--mode", "once", "--pairs", "BTCUSDT", "--start-month", "2021-02", "--rest-bridge-days", "7", "--repair-gaps", "--max-gap-minutes", "5", "--audit-phase-d"]
     environment:
       <<: *collector-gate-environment
       PRIMUS_HMD_PHASE_D_BINANCE_USDM_QUARTERLY_1M_APPROVED: ${PRIMUS_HMD_PHASE_D_BINANCE_USDM_QUARTERLY_1M_APPROVED:-}

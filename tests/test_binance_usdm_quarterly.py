@@ -1,4 +1,5 @@
 import io
+import logging
 import sys
 import zipfile
 from pathlib import Path
@@ -17,6 +18,7 @@ from collectors.binance_usdm_quarterly_1m import (
     audit_symbol,
     normalize_kline_frame,
     read_vision_zip,
+    sync_rest_tail,
 )
 
 
@@ -101,6 +103,66 @@ class TestBinanceUsdmQuarterly(unittest.TestCase):
         self.assertEqual(audit["rows"], 2)
         self.assertEqual(audit["gap_count"], 0)
         self.assertEqual(audit["source_mismatch_rows"], 0)
+
+    def test_streaming_audit_records_but_does_not_reject_source_after_symbol_date(self):
+        class Store:
+            def files(self, attrs):
+                if attrs != {"symbol": "BTCUSDT_230929"}:
+                    raise AssertionError(attrs)
+                return [Path("2023-11.parquet")]
+
+        frame = pd.DataFrame(
+            {
+                "time": ["2023-11-01 00:00:00", "2023-11-01 00:01:00"],
+                "symbol": ["BTCUSDT_230929", "BTCUSDT_230929"],
+                "source": ["binance_vision_futures_um_monthly", "binance_vision_futures_um_monthly"],
+            }
+        )
+        for column in NUMERIC_COLUMNS:
+            frame[column] = 1.0
+        frame["high"] = 2.0
+
+        with patch("collectors.binance_usdm_quarterly_1m.read_partition_file", return_value=frame):
+            audit = audit_symbol(
+                Store(),
+                "BTCUSDT_230929",
+                is_active=False,
+                expected_first_archive_month="2023-11",
+                expected_last_archive_month="2023-11",
+            )
+
+        self.assertEqual(audit["status"], "pass")
+        self.assertEqual(audit["after_symbol_date_rows"], 2)
+
+    def test_explicit_rest_bridge_is_not_shortened_by_newer_local_tail(self):
+        class Store:
+            def latest_time(self, **kwargs):
+                if kwargs != {"attrs": {"symbol": "BTCUSDT_260925"}, "time_col": "time"}:
+                    raise AssertionError(kwargs)
+                return pd.Timestamp("2026-08-13 14:13:00")
+
+        class Manifest:
+            def update_symbol(self, *args, **kwargs):
+                return None
+
+        with patch(
+            "collectors.binance_usdm_quarterly_1m.fetch_1m",
+            return_value=pd.DataFrame({"time": [pd.Timestamp("2026-08-12 00:00:00")]}),
+        ) as fetch, patch(
+            "collectors.binance_usdm_quarterly_1m._append",
+            return_value={"rows_written": 1, "latest_time": "2026-08-13T17:00:00"},
+        ):
+            sync_rest_tail(
+                symbol="BTCUSDT_260925",
+                meta=None,
+                store=Store(),
+                manifest=Manifest(),
+                overlap_minutes=10,
+                rest_start="2026-08-12T00:00:00Z",
+                logger=logging.getLogger("test"),
+            )
+
+        self.assertEqual(fetch.call_args.args[1], pd.Timestamp("2026-08-12T00:00:00Z"))
 
 
 if __name__ == "__main__":
