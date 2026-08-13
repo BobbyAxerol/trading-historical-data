@@ -25,6 +25,12 @@ class TempOhlcvLoader(MarketDataLoaderBase):
     RESAMPLE_SUPPORTED = True
 
 
+class TempCryptoBinance1m(data_loader.CryptoBinance1m):
+    """Use the real Binance futures reader rules against the temporary fixture."""
+
+    NEW_PATH_PARTS = ("crypto", "test", "1m")
+
+
 class TestDataLoaderParquetFirst(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -156,6 +162,12 @@ class TestOhlcvProjectionAndResample(unittest.TestCase):
 
         close_only = TempOhlcvLoader().load(symbols="BTCUSDT", check_val=False, columns=["time", "symbol", "close"])
         self.assertEqual(list(close_only.columns), ["time", "symbol", "close"])
+
+    def test_binance_futures_reader_preserves_fractional_volume(self):
+        df = TempCryptoBinance1m().load(symbols="BTCUSDT", check_val=False)
+
+        self.assertEqual(str(df["volume"].dtype), "float64")
+        self.assertAlmostEqual(float(df.loc[0, "volume"]), 1.9)
 
     def test_duckdb_resample_matches_pandas_chunk_fallback(self):
         duck = TempOhlcvLoader().load_resampled(symbols="BTCUSDT", timeframe="5min", check_val=True, engine="duckdb")

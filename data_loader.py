@@ -339,7 +339,11 @@ class MarketDataLoaderBase:
                 if col in df.columns:
                     df[col] = pd.to_numeric(df[col], errors="coerce").astype("float64")
             if "volume" in df.columns:
-                df["volume"] = pd.to_numeric(df["volume"], errors="coerce").fillna(0).astype("int64")
+                df["volume"] = (
+                    pd.to_numeric(df["volume"], errors="coerce")
+                    .fillna(0)
+                    .astype(self.RESAMPLE_VOLUME_DTYPE)
+                )
 
             # Sort values
             sort_cols = ["symbol", "time"] if "symbol" in df.columns else ["time"]
@@ -848,6 +852,9 @@ class CryptoBinance1m(MarketDataLoaderBase):
     TZ_INFO = "UTC"
     DEFAULT_COLUMNS = OHLCV_COLUMNS
     RESAMPLE_SUPPORTED = True
+    # USD-M futures volume is denominated in the base asset and is fractional.
+    # Keep it lossless for both direct reads and resampled queries.
+    RESAMPLE_VOLUME_DTYPE = "float64"
     RELEASE_DATASET_ID = "binance_perpetual_spot_quarterly"
 
 
