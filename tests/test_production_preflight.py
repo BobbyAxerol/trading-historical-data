@@ -1,0 +1,104 @@
+from __future__ import annotations
+
+import json
+import grp
+import os
+import tempfile
+import unittest
+from contextlib import redirect_stdout
+from io import StringIO
+from pathlib import Path
+
+import yaml
+
+from collectors import production_preflight
+
+
+class TestProductionPreflight(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.policy_path = self.root / "policy.yml"
+        policy = yaml.safe_load(production_preflight.POLICY_PATH.read_text())
+        policy["runtime"]["root"] = str(self.root / "runtime")
+        # The test can run as Bobby on the host or as root in the immutable
+        # build image.  Use the current identity instead of assuming the host
+        # UID/GID is present in every base image.
+        policy["runtime"]["collector_uid"] = os.getuid()
+        policy["runtime"]["collector_gid"] = os.getgid()
+        policy["runtime"]["reader_group"] = grp.getgrgid(os.getgid()).gr_name
+        policy["environment"]["id"] = "test-new-vps"
+        policy["environment"]["rollback"] = {
+            "previous_approved_release": "primus-historical-market-data-v0.0.9",
+            "previous_approved_data_root": "/srv/primus/old-approved-root",
+        }
+        policy["backup"]["destination"] = "s3://test-bucket/primus"
+        policy["backup"]["retention"] = "30 daily copies"
+        self.policy_path.write_text(yaml.safe_dump(policy, sort_keys=False))
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def _policy(self) -> dict:
+        return production_preflight._load_policy(self.policy_path)
+
+    def test_init_runtime_creates_metadata_only(self) -> None:
+        policy = self._policy()
+        result = production_preflight.initialize_runtime(policy)
+        runtime = Path(policy["runtime"]["root"])
+        self.assertEqual(result["status"], "ok")
+        for name in ("storage", "state", "logs", "releases"):
+            self.assertTrue((runtime / name).is_dir())
+        self.assertTrue((runtime / "state/bootstrap/source_inventory.json").exists())
+        self.assertTrue((runtime / "storage/_primus_metadata/release_manifest.json").exists())
+        self.assertFalse(any((runtime / "storage").rglob("*.parquet")))
+        self.assertFalse(any((runtime / "state").rglob("*.sqlite")))
+
+    def test_status_is_fail_closed_for_draft_evidence(self) -> None:
+        policy = self._policy()
+        production_preflight.initialize_runtime(policy)
+        payload = production_preflight._status(policy)
+        self.assertEqual(payload["status"], "blocked")
+        self.assertIn("capacity_and_concurrency", {check["name"] for check in payload["checks"] if check["status"] == "blocked"})
+
+    def test_cli_accepts_documented_status_arguments(self) -> None:
+        with redirect_stdout(StringIO()):
+            self.assertEqual(
+                production_preflight.main(["--policy", str(self.policy_path), "status", "--strict", "--json"]),
+                2,
+            )
+
+    def test_status_passes_after_complete_evidence(self) -> None:
+        policy = self._policy()
+        production_preflight.initialize_runtime(policy)
+        paths = production_preflight._runtime_paths(policy)
+        capacity_path = paths["bootstrap"] / "capacity_report.json"
+        capacity = json.loads(capacity_path.read_text())
+        capacity["status"] = "pass"
+        capacity["approval"] = {"status": "approved", "approved_by": "test", "approved_at": "2026-08-13T00:00:00+00:00"}
+        capacity_path.write_text(json.dumps(capacity))
+        inventory_path = paths["bootstrap"] / "source_inventory.json"
+        inventory = json.loads(inventory_path.read_text())
+        for dataset in inventory["datasets"]:
+            dataset["source_probe"] = {"status": "pass", "observed_at": "2026-08-13T00:00:00+00:00", "evidence": "bounded"}
+        inventory_path.write_text(json.dumps(inventory))
+        release_path = paths["metadata"] / "release_manifest.json"
+        release = json.loads(release_path.read_text())
+        release["status"] = "pass"
+        release_path.write_text(json.dumps(release))
+        for filename in ("restore_drill.json", "monitoring.json", "clock.json", "access_control.json", "compose_contract.json"):
+            path = paths["bootstrap"] / filename
+            payload = json.loads(path.read_text())
+            payload["status"] = "pass"
+            if filename == "clock.json":
+                payload["ntp_synchronized"] = True
+            path.write_text(json.dumps(payload))
+        payload = production_preflight._status(policy)
+        names = {check["name"]: check["status"] for check in payload["checks"]}
+        self.assertEqual(names["capacity_and_concurrency"], "pass")
+        self.assertEqual(names["source_inventory"], "pass")
+        self.assertEqual(payload["status"], "pass")
+
+
+if __name__ == "__main__":
+    unittest.main()

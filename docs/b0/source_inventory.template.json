@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "environment_id": "REQUIRED: unique new-VPS environment id",
+  "generated_at": null,
+  "datasets": [
+    {
+      "dataset_id": "binance_perpetual_spot_quarterly",
+      "schema_version": "REQUIRED",
+      "layout_version": "REQUIRED",
+      "upstream": "Binance Vision and REST endpoint families",
+      "symbols_config": "configs/symbols.crypto.yml; configs/symbols.binance_spot.yml; configs/symbols.binance_usdm_quarterly.yml",
+      "requested_window": "config-defined",
+      "expected_first_available": "REQUIRED: bounded probe evidence",
+      "credentials_reference": null,
+      "rate_and_concurrency_limit": "REQUIRED: bounded probe evidence",
+      "partition_and_repair_policy": "existing canonical collector policy",
+      "expected_resources": "REQUIRED: bounded seed evidence",
+      "validator_reference": "REQUIRED",
+      "source_probe": {"status": "pending", "observed_at": null, "evidence": null}
+    },
+    {
+      "dataset_id": "binance_metrics_orderbook",
+      "schema_version": "REQUIRED",
+      "layout_version": "REQUIRED",
+      "upstream": "Binance Vision metrics/bookDepth and REST endpoint families",
+      "symbols_config": "configs/symbols.binance_futures_metrics.yml; configs/symbols.binance_orderbook_snapshot.yml",
+      "requested_window": "retention-defined",
+      "expected_first_available": "REQUIRED: bounded probe evidence",
+      "credentials_reference": null,
+      "rate_and_concurrency_limit": "REQUIRED: bounded probe evidence",
+      "partition_and_repair_policy": "existing canonical collector policy",
+      "expected_resources": "REQUIRED: bounded seed evidence",
+      "validator_reference": "REQUIRED",
+      "source_probe": {"status": "pending", "observed_at": null, "evidence": null}
+    },
+    {
+      "dataset_id": "vn_daily_derivatives",
+      "schema_version": "REQUIRED",
+      "layout_version": "REQUIRED",
+      "upstream": "VNDIRECT DChart, VNStock, and configured VN provider endpoint families",
+      "symbols_config": "configs/symbols.vn_daily.yml; configs/vn_derivatives.yml",
+      "requested_window": "provider-defined",
+      "expected_first_available": "REQUIRED: bounded probe evidence",
+      "credentials_reference": "VNSTOCK_API_KEY and/or DNSE credential names only when applicable",
+      "rate_and_concurrency_limit": "REQUIRED: bounded probe evidence",
+      "partition_and_repair_policy": "existing canonical collector policy",
+      "expected_resources": "REQUIRED: bounded seed evidence",
+      "validator_reference": "REQUIRED",
+      "source_probe": {"status": "pending", "observed_at": null, "evidence": null}
+    },
+    {
+      "dataset_id": "deribit_btc_options_v1_compact_liquid",
+      "schema_version": "trade_schema_v1",
+      "layout_version": "deribit_btc_options_v1",
+      "upstream": "Deribit History API public endpoint family",
+      "symbols_config": "configs/deribit_historical_v1.yml",
+      "requested_window": "full V1 BTC inverse option history",
+      "expected_first_available": "REQUIRED: new-VPS API probe evidence",
+      "credentials_reference": null,
+      "rate_and_concurrency_limit": "REQUIRED: new-VPS API probe evidence",
+      "partition_and_repair_policy": "immutable staging, SQLite coverage ledger, daily DuckDB compaction",
+      "expected_resources": "6-9 GiB permanent; 15-20 GiB free build headroom; bounded pilot evidence required",
+      "validator_reference": "collectors.deribit_option_trades validate",
+      "source_probe": {"status": "pending", "observed_at": null, "evidence": null}
+    }
+  ]
+}

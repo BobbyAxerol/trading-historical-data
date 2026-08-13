@@ -1,0 +1,80 @@
+# Phase B0 policy. Values marked REQUIRED deliberately keep the B0 preflight
+# blocked until the operator records real evidence for this new VPS.
+schema_version: 1
+
+environment:
+  id: primus-hmd-do-sgp1-20260813
+  required_timezones:
+    - UTC
+    - Asia/Ho_Chi_Minh
+  rollback:
+    previous_approved_release: "REQUIRED: previous wheel/release identifier"
+    previous_approved_data_root: "REQUIRED: one approved data root, never a mixed root"
+
+runtime:
+  root: /srv/primus/historical-market-data
+  source_checkout: /srv/primus/src/historical-market-data
+  collector_uid: 1000
+  collector_gid: 1000
+  reader_group: primus-market-data-readers
+  required_directories:
+    - storage
+    - state
+    - logs
+    - releases
+
+capacity:
+  os_reserve_gib: 20
+  state_log_reserve_gib: 5
+  docker_cache_reserve_gib: 10
+  datasets:
+    - dataset_id: binance_perpetual_spot_quarterly
+      canonical_target_gib: null
+      peak_staging_gib: null
+      source_window: config-defined
+      max_concurrent_jobs: 1
+    - dataset_id: binance_metrics_orderbook
+      canonical_target_gib: null
+      peak_staging_gib: null
+      source_window: retention-defined
+      max_concurrent_jobs: 1
+    - dataset_id: vn_daily_derivatives
+      canonical_target_gib: null
+      peak_staging_gib: null
+      source_window: provider-defined
+      max_concurrent_jobs: 1
+    - dataset_id: deribit_btc_options_v1_compact_liquid
+      canonical_target_gib: 9
+      peak_staging_gib: 20
+      source_window: full-v1
+      max_concurrent_jobs: 1
+
+concurrency:
+  policy: single-heavy-job-until-bounded-seed-evidence
+  mutually_exclusive_families:
+    - [binance_perpetual_spot_quarterly, binance_metrics_orderbook]
+    - [binance_perpetual_spot_quarterly, deribit_btc_options_v1_compact_liquid]
+    - [binance_metrics_orderbook, deribit_btc_options_v1_compact_liquid]
+    - [vn_daily_derivatives, deribit_btc_options_v1_compact_liquid]
+
+source_inventory:
+  runtime_path: state/bootstrap/source_inventory.json
+  template_path: docs/b0/source_inventory.template.json
+
+storage_manifest:
+  runtime_path: storage/_primus_metadata/release_manifest.json
+  supported_loader_contract_versions:
+    - hmd-loader-v1
+  incompatible_reader_policy: raise-clear-compatibility-error
+
+backup:
+  destination: "REQUIRED: off-host destination URI or managed backup identifier"
+  retention: "REQUIRED: documented retention policy"
+  restore_drill_status: pending
+
+monitoring:
+  heartbeat_max_age_minutes: 20
+  free_disk_low_water_gib: 30
+  inode_low_water_pct: 10
+  operator_status_command: python -m collectors.production_preflight status --strict --json
+  resource_policy: single-heavy-job-until-bounded-seed-evidence

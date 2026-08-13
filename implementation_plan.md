@@ -19,6 +19,52 @@ capacity/concurrency, reproducible artifacts, production Compose mounts/ACLs,
 source inventory, storage compatibility manifest, backup/restore, monitoring,
 and time/environment isolation.
 
+### 2026-08-13 UTC — Phase B0: Runtime Isolation And Reproducible-Build Start
+
+Status: in progress; collector and backfill remain blocked.
+
+Completed evidence:
+
+- Verified the immutable bootstrap reference
+  `primus-historical-market-data-bootstrap-v0.1.0rc1` at
+  `bdda4b28b302424a6c682893a9cc966cad59a17a`; active work remains on local
+  `feat/option-ingestion` tracking `origin/feat/option-ingestion`.
+- Created the dedicated, empty new-VPS runtime root
+  `/srv/primus/historical-market-data/{storage,state,logs,releases}` as
+  `bobby:bobby`, plus mode-0700 `secrets/`. No old-VPS runtime data was copied.
+  Runtime inspection found only B0 JSON metadata; no Parquet or SQLite data.
+- Host baseline: Ubuntu 22.04.5, kernel `5.15.0-185-generic`, Docker Engine
+  `29.7.2`, Compose `v5.4.0`; ext4 runtime filesystem has 609 GiB available
+  and 82,371,062 free inodes. NTP is synchronized and host timezone is UTC.
+- Added hashed Python 3.12 reader and collector locks. At generation time:
+  `requirements-collector.lock` SHA-256
+  `66bfc0ff41ce012029385e6da66a845cc2e7334fdbbb804779a3995fb0a6f2f9`;
+  `requirements-reader.lock` SHA-256
+  `dbfac6a45518d1a439d5ce8e26cc8cd9e8e730e2d1c0911b018d2ecfd5ee0130`.
+- Pinned the Linux/amd64 Python base manifest to
+  `sha256:d657ab0ade19f404a6ccc883ab399540de667aff751748ce23c07330c5a89e64`.
+  Shared image and a second `--no-cache` image both built successfully and each
+  passed the same 15 focused preflight/parquet-loader tests. The differing local
+  image IDs are expected build timestamp/provenance metadata, not dependency
+  resolution drift.
+- Resolved Compose using the protected mode-0600 host deployment file. An
+  inspection-only container was observed in `created` state, never started,
+  with entrypoint gate, user `1000:1000`, and exactly the storage/state/logs
+  runtime binds; it and its temporary network were removed afterward.
+- Added `primus-market-data-readers` ACLs for storage read/traverse and default
+  future-file access only. No user has been added to that group, so the
+  read/write-denial acceptance test is deliberately still pending.
+
+Current B0 blockers (not bypassed): capacity/concurrency requires source- and
+bounded-seed measurements plus approval; every enabled source inventory probe
+is pending; release/storage manifest is not accepted until a tagged release;
+reader ACL needs a designated consumer test; backup destination/retention and
+restore drill are undefined; monitoring/alert activation is pending; and the
+single-root consumer rollback release/root have not yet been designated.
+
+Safety result: no collector, source ingestion, `discover`, `sync-once`, pilot,
+or historical backfill was started during this work.
+
 ## Active Job: VN30F1M VNDIRECT DChart Single-Source Upgrade
 
 Source guide: `VN30_FUTURES_FREE_DATA_UPGRADE_PLAN_V2.md`

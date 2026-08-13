@@ -1,0 +1,5 @@
+# Minimal direct dependencies for the package-side historical-data reader.
+# Keep collector/provider SDKs out of this lock unless the public reader grows
+# an explicit dependency on them.
+pandas==2.2.3
+pyarrow>=15,<21

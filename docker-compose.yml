@@ -1,15 +1,23 @@
-name: get_data
+name: primus-historical-market-data
 
 x-get-data-service: &get-data-service
-  image: get_data-collectors:latest
+  image: ${PRIMUS_HMD_IMAGE_REF:?PRIMUS_HMD_IMAGE_REF is required}
   build:
     context: .
     dockerfile: docker/Dockerfile
+    args:
+      PYTHON_BASE_IMAGE: ${PRIMUS_HMD_PYTHON_BASE_IMAGE:?PRIMUS_HMD_PYTHON_BASE_IMAGE must be pinned by digest}
   restart: unless-stopped
+  user: "${PRIMUS_HMD_COLLECTOR_UID:?PRIMUS_HMD_COLLECTOR_UID is required}:${PRIMUS_HMD_COLLECTOR_GID:?PRIMUS_HMD_COLLECTOR_GID is required}"
+  env_file:
+    - path: ${PRIMUS_HMD_SECRETS_FILE:?PRIMUS_HMD_SECRETS_FILE is required}
+      required: true
+  environment:
+    PRIMUS_HMD_B0_APPROVED: ${PRIMUS_HMD_B0_APPROVED:-}
   volumes:
-    - ./storage:/app/storage
-    - ./state:/app/state
-    - ./logs:/app/logs
+    - ${PRIMUS_HMD_RUNTIME_ROOT:?PRIMUS_HMD_RUNTIME_ROOT is required}/storage:/app/storage
+    - ${PRIMUS_HMD_RUNTIME_ROOT:?PRIMUS_HMD_RUNTIME_ROOT is required}/state:/app/state
+    - ${PRIMUS_HMD_RUNTIME_ROOT:?PRIMUS_HMD_RUNTIME_ROOT is required}/logs:/app/logs
 
 services:
   crypto-1m-live:
@@ -65,7 +73,6 @@ services:
       DATA_ROOT: /app/storage
       STATE_ROOT: /app/state
       LOG_ROOT: /app/logs
-      VNSTOCK_API_KEY: ${VNSTOCK_API_KEY:-}
 
   vn-intraday-stocks:
     <<: *get-data-service
@@ -75,7 +82,6 @@ services:
       DATA_ROOT: /app/storage
       STATE_ROOT: /app/state
       LOG_ROOT: /app/logs
-      VNSTOCK_API_KEY: ${VNSTOCK_API_KEY:-}
 
   vn30f1m-dnse:
     <<: *get-data-service
@@ -87,8 +93,6 @@ services:
       DATA_ROOT: /app/storage
       STATE_ROOT: /app/state
       LOG_ROOT: /app/logs
-      DNSE_API_KEY: ${DNSE_API_KEY:-}
-      DNSE_API_SECRET_KEY: ${DNSE_API_SECRET_KEY:-}
 
   vn30f1m-vndirect-probe:
     <<: *get-data-service
@@ -120,9 +124,6 @@ services:
       DATA_ROOT: /app/storage
       STATE_ROOT: /app/state
       LOG_ROOT: /app/logs
-      VNSTOCK_API_KEY: ${VNSTOCK_API_KEY:-}
-      DNSE_API_KEY: ${DNSE_API_KEY:-}
-      DNSE_API_SECRET_KEY: ${DNSE_API_SECRET_KEY:-}
 
   vn-derivatives-source-probe:
     <<: *get-data-service
@@ -134,9 +135,6 @@ services:
       DATA_ROOT: /app/storage
       STATE_ROOT: /app/state
       LOG_ROOT: /app/logs
-      VNSTOCK_API_KEY: ${VNSTOCK_API_KEY:-}
-      DNSE_API_KEY: ${DNSE_API_KEY:-}
-      DNSE_API_SECRET_KEY: ${DNSE_API_SECRET_KEY:-}
 
   vn-derivatives-bootstrap:
     <<: *get-data-service
@@ -148,9 +146,6 @@ services:
       DATA_ROOT: /app/storage
       STATE_ROOT: /app/state
       LOG_ROOT: /app/logs
-      VNSTOCK_API_KEY: ${VNSTOCK_API_KEY:-}
-      DNSE_API_KEY: ${DNSE_API_KEY:-}
-      DNSE_API_SECRET_KEY: ${DNSE_API_SECRET_KEY:-}
 
   vn-derivatives-validate:
     <<: *get-data-service
@@ -187,17 +182,6 @@ services:
   binance-daily-matrix:
     <<: *get-data-service
     command: ["python", "-m", "collectors.binance_daily_matrix", "--mode", "live", "--schedule", "00:05", "--backfill-start", "2020-01-01", "--min-history-days", "365"]
-    environment:
-      TZ: UTC
-      DATA_ROOT: /app/storage
-      STATE_ROOT: /app/state
-      LOG_ROOT: /app/logs
-
-  seed-existing-history:
-    <<: *get-data-service
-    profiles: ["bootstrap"]
-    restart: "no"
-    command: ["python", "-m", "collectors.seed_storage_from_existing", "--dataset", "all"]
     environment:
       TZ: UTC
       DATA_ROOT: /app/storage
