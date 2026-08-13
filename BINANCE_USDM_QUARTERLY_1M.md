@@ -15,8 +15,11 @@ storage/crypto/binance_futures/1m/
   symbol=BTCUSDT_240329/
     year=2024/
       month=03/
-        part.csv.gz
+        part.parquet
 ```
+
+`part.parquet` is the canonical format. The reader retains a legacy
+`part.csv.gz` fallback only for pre-existing data; new writes are Parquet.
 
 The schema is aligned with `CryptoBinance1m`:
 
@@ -37,7 +40,18 @@ The collector uses three layers:
    `data/futures/um/daily/klines/{SYMBOL}/1m/{SYMBOL}-1m-YYYY-MM-DD.zip`
 3. Binance REST `/fapi/v1/klines` for active tail data up to the latest closed candle.
 
-Monthly/daily Vision files are canonical for historical storage. REST is used only for active tail catch-up or when the active contract needs data newer than Vision daily files.
+Monthly/daily Vision files are canonical for historical storage. REST is used
+only for active tail catch-up or when the active contract needs data newer
+than Vision daily files. A Phase D bridge treats a daily date as complete only
+after 1,440 unique UTC minutes exist; otherwise it re-reads the direct daily
+archive and uses only the bounded REST bridge needed for the active tail.
+
+The date encoded in a quarterly symbol is not used as a destructive source
+cutoff. Binance Vision can publish direct rows after that date for some
+historical symbols. Those raw rows are retained with their direct source and
+the audit records them as `after_symbol_date_rows`; downstream delivery/roll
+logic must make its own explicit policy rather than assuming the filename
+suffix proves the final candle.
 
 ## Contract Discovery
 
@@ -58,6 +72,21 @@ state/manifests/crypto_binance_usdm_quarterly_1m.json
 ```
 
 ## Operation
+
+### Controlled Phase D rebuild
+
+For the approved one-shot Phase D rebuild, use only the reviewed runner:
+
+```bash
+sudo -n tools/run_phase_d_binance_usdm_quarterly_1m.sh
+```
+
+It runs one detached BTCUSDT job from `2021-02`, records per-contract audits
+at `state/audits/crypto_binance_usdm_quarterly_1m_{SYMBOL}_phase_d.json`, and
+writes its host-visible log to `logs/crypto_binance_usdm_quarterly_1m.log`.
+It is not a continuous-series builder.
+
+### Development / bounded live operation
 
 Run one sync:
 

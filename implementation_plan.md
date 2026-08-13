@@ -276,6 +276,35 @@ or historical backfill was started during this work.
   keys. The next source remains a separately gated concrete quarterly rebuild;
   no matrix, broad universe, or Deribit work follows automatically.
 
+#### Phase D execution — BTCUSDT USD-M concrete quarterly 1m
+
+- The reviewed exact-command collector was introduced in `42e64d8`; follow-up
+  commits `d61ce68`, `cea612e`, and `842b118` narrowed archive discovery to the
+  configured history and hardened active-tail coverage. The focused image
+  suite passed 36 tests and the protected compose contract validated before
+  the final rerun.
+- The first archive rebuild correctly failed closed. It exposed two real
+  validator assumptions rather than corrupt data: some direct Binance Vision
+  contract archives contain timestamps after the date encoded in the symbol,
+  and an existing partial active-day tail must not count as a complete daily
+  archive. Direct provider rows are preserved and recorded as
+  `after_symbol_date_rows`; they are not discarded or re-labelled.
+- The final detached rerun exited `0` at `2026-08-13T18:04:16Z`. It used
+  monthly/direct daily Vision data plus a bounded seven-day REST bridge only
+  for active contracts, accepting a daily date only after 1,440 unique UTC
+  minutes. No synthetic candles or cross-contract continuity were created.
+- Durable audits under
+  `state/audits/crypto_binance_usdm_quarterly_1m_*_phase_d.json` report 24/24
+  contracts `pass`, 4,711,125 rows from `2021-02-03T08:20:00Z` to
+  `2026-08-13T18:03:00Z`, and zero duplicate, invalid-time/numeric, OHLC,
+  negative, source/symbol mismatch, ordering, or continuity-gap rows. Both
+  active contracts have zero tail lag. A network-off, read-only runtime-loader
+  smoke with `check_val=True` read the repaired `BTCUSDT_260925` range with
+  the full schema, zero duplicate keys, and no null OHLCV values.
+- This completes all five sources in the currently approved Phase D scope.
+  No matrix, universe expansion, consumer cutover, destructive action, or
+  Deribit work follows automatically.
+
 ## Active Job: VN30F1M VNDIRECT DChart Single-Source Upgrade
 
 Source guide: `VN30_FUTURES_FREE_DATA_UPGRADE_PLAN_V2.md`

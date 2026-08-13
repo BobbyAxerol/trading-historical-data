@@ -87,14 +87,17 @@ user.email = vugioan11022002@gmail.com
   archives retain explicit sparse ratio fields and 5-minute coverage holes.
   Never forward-fill or synthesize those metrics; consumers must treat the
   audit as the authoritative availability record.
-- The next owner-approved sequential Phase D source is exactly
-  `phase-d-binance-usdm-quarterly-1m`, defined in
-  `configs/primus_hmd_phase_d.yml` and launched only with
-  `tools/run_phase_d_binance_usdm_quarterly_1m.sh`. It discovers concrete
-  BTCUSDT contracts whose delivery overlaps the configured `2021-02` history,
-  uses direct Vision archives plus active-contract tail sources, and requires
-  a per-contract streaming fail-closed audit. It does not create a continuous
-  contract series.
+- The owner-approved `phase-d-binance-usdm-quarterly-1m` rebuild completed
+  cleanly on 2026-08-13. Its durable per-contract audits cover 24 concrete
+  BTCUSDT contracts from `2021-02-03T08:20:00Z` through
+  `2026-08-13T18:03:00Z`, all with status `pass`; it does not create a
+  continuous contract series. The active-contract tail bridge accepts a daily
+  date only after all 1,440 unique UTC minutes are present, so a partial tail
+  cannot suppress direct repair.
+- All five exact services in the approved Phase D scope have now completed.
+  There is no next historical source authorization in this session: do not
+  infer one from the completed quarterly service or start a new source without
+  a new named gate.
 - Do not start a default-universe expansion, derived matrix, VN historical
   batch, metrics/quarterly historical batch, repair sweep, consumer cutover,
   old-writer retirement, destructive data operation, or **any Deribit
