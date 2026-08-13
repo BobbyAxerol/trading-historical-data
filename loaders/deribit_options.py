@@ -7,8 +7,11 @@ from typing import Any
 import pandas as pd
 
 from loaders.deribit_columns import CANONICAL_TRADE_COLUMNS, SNAPSHOT_5M_COLUMNS
+from storage_manifest import assert_loader_compatible
 
 BASE_DIR = Path(__file__).resolve().parents[1]
+LOADER_CONTRACT_VERSION = "hmd-loader-v1"
+RELEASE_DATASET_ID = "deribit_btc_options_v1_compact_liquid"
 
 
 def _storage_root() -> Path:
@@ -18,6 +21,21 @@ def _storage_root() -> Path:
             os.getenv("DATA_ROOT", str(BASE_DIR / "storage")),
         )
     ).resolve()
+
+
+def _release_manifest_enforced() -> bool:
+    explicit = os.getenv("HISTORICAL_MARKET_DATA_ROOT")
+    forced = os.getenv("HISTORICAL_MARKET_DATA_REQUIRE_RELEASE_MANIFEST", "").strip().lower()
+    return bool(explicit) or forced in {"1", "true", "yes", "on"}
+
+
+def _assert_reader_compatible() -> None:
+    if _release_manifest_enforced():
+        assert_loader_compatible(
+            _storage_root(),
+            dataset_id=RELEASE_DATASET_ID,
+            loader_contract_version=LOADER_CONTRACT_VERSION,
+        )
 
 
 def _path_list(paths: list[Path]) -> str:
@@ -102,6 +120,7 @@ class _DeribitParquetLoaderBase:
         params: list[Any] | None = None,
         limit: int | None = None,
     ) -> pd.DataFrame:
+        _assert_reader_compatible()
         start_ts = pd.to_datetime(start_date) if start_date else None
         end_ts = pd.to_datetime(end_date) if end_date else None
         read_columns = _resolve_columns(columns, self.default_columns)

@@ -12,6 +12,7 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 from loaders.deribit_options import DeribitOptionOverlayLoader, DeribitOptionSnapshots5mLoader, DeribitOptionTradesLoader
+from storage_manifest import assert_loader_compatible
 
 # Setup Logger
 logger = logging.getLogger("data_loader")
@@ -31,7 +32,32 @@ STORAGE_DIR = Path(
     )
 ).resolve()
 OHLCV_COLUMNS = ("time", "symbol", "open", "high", "low", "close", "volume")
+LOADER_CONTRACT_VERSION = "hmd-loader-v1"
 _TIMEFRAME_RE = re.compile(r"^(?P<count>\d+)\s*(?P<unit>s|sec|secs|second|seconds|min|minute|minutes|h|hour|hours|d|day|days)$")
+
+
+def _release_manifest_enforced() -> bool:
+    """Enable fail-closed compatibility checks for installed/runtime readers.
+
+    Source-tree development and writer-side utilities remain convenient when
+    only ``DATA_ROOT`` is declared.  A wheel consumer must set the dedicated
+    ``HISTORICAL_MARKET_DATA_ROOT`` for its read-only mount, which makes this
+    guard mandatory. Tests can also opt in explicitly with the boolean
+    environment variable.
+    """
+
+    explicit = os.getenv("HISTORICAL_MARKET_DATA_ROOT")
+    forced = os.getenv("HISTORICAL_MARKET_DATA_REQUIRE_RELEASE_MANIFEST", "").strip().lower()
+    return bool(explicit) or forced in {"1", "true", "yes", "on"}
+
+
+def _assert_reader_compatible(dataset_id: str | None) -> None:
+    if dataset_id and _release_manifest_enforced():
+        assert_loader_compatible(
+            STORAGE_DIR,
+            dataset_id=dataset_id,
+            loader_contract_version=LOADER_CONTRACT_VERSION,
+        )
 
 
 def _release_unused_memory() -> None:
@@ -272,6 +298,10 @@ class MarketDataLoaderBase:
     RESAMPLE_SUPPORTED: bool = False
     TIME_COLUMN: str = "time"
     RESAMPLE_VOLUME_DTYPE: str = "int64"
+    RELEASE_DATASET_ID: str | None = None
+
+    def _assert_reader_compatible(self) -> None:
+        _assert_reader_compatible(self.RELEASE_DATASET_ID)
 
     def _get_new_path(self) -> Path:
         return STORAGE_DIR.joinpath(*self.NEW_PATH_PARTS)
@@ -358,6 +388,7 @@ class MarketDataLoaderBase:
         pd.DataFrame
             Normalized DataFrame.
         """
+        self._assert_reader_compatible()
         start_ts = pd.to_datetime(start_date) if start_date else None
         end_ts = pd.to_datetime(end_date) if end_date else None
 
@@ -605,6 +636,7 @@ class MarketDataLoaderBase:
         engine: str = "duckdb",
     ) -> pd.DataFrame:
         """Load OHLCV resampled from canonical 1m Parquet without materializing full 1m history first."""
+        self._assert_reader_compatible()
         if not self.RESAMPLE_SUPPORTED or self.DEFAULT_COLUMNS != OHLCV_COLUMNS:
             raise NotImplementedError(f"load_resampled is only supported for OHLCV loaders, got {self.DATASET_NAME}")
 
@@ -666,6 +698,7 @@ class VnStock1m(MarketDataLoaderBase):
     TZ_INFO = "Asia/Ho_Chi_Minh"
     DEFAULT_COLUMNS = OHLCV_COLUMNS
     RESAMPLE_SUPPORTED = True
+    RELEASE_DATASET_ID = "vn_daily_derivatives"
 
 
 class VnStockDaily(MarketDataLoaderBase):
@@ -675,6 +708,7 @@ class VnStockDaily(MarketDataLoaderBase):
     NEW_PATH_PARTS = ("vn", "equity", "1d")
     TZ_INFO = "Asia/Ho_Chi_Minh"
     DEFAULT_COLUMNS = OHLCV_COLUMNS
+    RELEASE_DATASET_ID = "vn_daily_derivatives"
 
 
 class VnFutures1m(MarketDataLoaderBase):
@@ -685,6 +719,7 @@ class VnFutures1m(MarketDataLoaderBase):
     TZ_INFO = "Asia/Ho_Chi_Minh"
     DEFAULT_COLUMNS = OHLCV_COLUMNS
     RESAMPLE_SUPPORTED = True
+    RELEASE_DATASET_ID = "vn_daily_derivatives"
 
 
 class VnDerivativesContracts1m(MarketDataLoaderBase):
@@ -695,6 +730,7 @@ class VnDerivativesContracts1m(MarketDataLoaderBase):
     TZ_INFO = "Asia/Ho_Chi_Minh"
     DEFAULT_COLUMNS = OHLCV_COLUMNS
     RESAMPLE_SUPPORTED = True
+    RELEASE_DATASET_ID = "vn_daily_derivatives"
 
 
 class VnDerivativesContractsDaily(MarketDataLoaderBase):
@@ -704,6 +740,7 @@ class VnDerivativesContractsDaily(MarketDataLoaderBase):
     NEW_PATH_PARTS = ("vn", "futures", "contracts", "1d")
     TZ_INFO = "Asia/Ho_Chi_Minh"
     DEFAULT_COLUMNS = OHLCV_COLUMNS
+    RELEASE_DATASET_ID = "vn_daily_derivatives"
 
 
 class VnDerivativesContinuousBase(MarketDataLoaderBase):
@@ -712,6 +749,7 @@ class VnDerivativesContinuousBase(MarketDataLoaderBase):
     VERSION = "v1"
     TZ_INFO = "Asia/Ho_Chi_Minh"
     DEFAULT_COLUMNS = OHLCV_COLUMNS
+    RELEASE_DATASET_ID = "vn_daily_derivatives"
 
     def _discover_symbols(self) -> list[str]:
         root = self._get_new_path()
@@ -735,6 +773,7 @@ class VnDerivativesContinuousBase(MarketDataLoaderBase):
         check_val: bool = True,
         columns: str | list[str] | tuple[str, ...] | None = None,
     ) -> pd.DataFrame:
+        self._assert_reader_compatible()
         start_ts = pd.to_datetime(start_date) if start_date else None
         end_ts = pd.to_datetime(end_date) if end_date else None
         read_columns = _resolve_columns_arg(columns, self.DEFAULT_COLUMNS)
@@ -809,6 +848,7 @@ class CryptoBinance1m(MarketDataLoaderBase):
     TZ_INFO = "UTC"
     DEFAULT_COLUMNS = OHLCV_COLUMNS
     RESAMPLE_SUPPORTED = True
+    RELEASE_DATASET_ID = "binance_perpetual_spot_quarterly"
 
 
 class CryptoBinanceQuarterly1m(CryptoBinance1m):
@@ -826,6 +866,7 @@ class CryptoBinanceSpot1m(MarketDataLoaderBase):
     DEFAULT_COLUMNS = OHLCV_COLUMNS
     RESAMPLE_SUPPORTED = True
     RESAMPLE_VOLUME_DTYPE = "float64"
+    RELEASE_DATASET_ID = "binance_perpetual_spot_quarterly"
 
     def _normalize(self, df: pd.DataFrame) -> pd.DataFrame:
         result = df.copy()
@@ -858,6 +899,7 @@ class BinanceOptions5m(MarketDataLoaderBase):
     IS_OPTION = True
     TZ_INFO = "UTC"
     TIME_COLUMN = "snapshot_time"
+    RELEASE_DATASET_ID = "binance_options_5m"
 
     def _normalize(self, df: pd.DataFrame) -> pd.DataFrame:
         result = df.copy()
@@ -888,6 +930,7 @@ class BinanceOrderBookSnapshot1h(MarketDataLoaderBase):
     DATASET_NAME = "crypto_binance_orderbook_snapshot_1h"
     NEW_PATH_PARTS = ("crypto", "binance_orderbook_snapshot", "1h")
     TZ_INFO = "UTC"
+    RELEASE_DATASET_ID = "binance_metrics_orderbook"
 
     def _normalize(self, df: pd.DataFrame) -> pd.DataFrame:
         result = df.copy()
@@ -922,6 +965,7 @@ class BinanceFuturesMetrics5m(MarketDataLoaderBase):
     DATASET_NAME = "crypto_binance_futures_metrics_5m"
     NEW_PATH_PARTS = ("crypto", "binance_futures_metrics", "5m")
     TZ_INFO = "UTC"
+    RELEASE_DATASET_ID = "binance_metrics_orderbook"
 
     def _normalize(self, df: pd.DataFrame) -> pd.DataFrame:
         result = df.copy()
@@ -1077,6 +1121,10 @@ class CryptoDailyMatrix:
     OHLCV_DATASET_NAME = "crypto_daily_ohlcv"
     TZ_INFO = "UTC"
     FEATURES = ("open", "high", "low", "close", "volume")
+    RELEASE_DATASET_ID = "binance_daily_matrix"
+
+    def _assert_reader_compatible(self) -> None:
+        _assert_reader_compatible(self.RELEASE_DATASET_ID)
 
     def _get_path(self, feature: str) -> Path:
         matrix_dir = STORAGE_DIR / "crypto" / "binance_daily_matrix"
@@ -1124,6 +1172,7 @@ class CryptoDailyMatrix:
         check_val : bool, default True
             If True, perform matrix checks.
         """
+        self._assert_reader_compatible()
         feature = feature.lower()
         valid_features = set(self.FEATURES)
         if feature not in valid_features:
@@ -1312,6 +1361,7 @@ class VNDailyMatrix(CryptoDailyMatrix):
     DATASET_NAME = "vn_daily_matrix"
     OHLCV_DATASET_NAME = "vn_daily_ohlcv"
     TZ_INFO = "Asia/Ho_Chi_Minh"
+    RELEASE_DATASET_ID = "vn_daily_matrix"
 
     def _get_path(self, feature: str) -> Path:
         matrix_dir = STORAGE_DIR / "vn" / "equity" / "daily_matrix"

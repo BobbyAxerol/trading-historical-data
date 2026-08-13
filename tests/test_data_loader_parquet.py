@@ -8,6 +8,7 @@ import pandas as pd
 
 import data_loader
 from data_loader import BinanceOptions5m, CryptoDailyMatrix, MarketDataLoaderBase, VNDailyMatrix
+from storage_manifest import StorageCompatibilityError, StorageManifestError, write_release_manifest
 
 
 class TempParquetLoader(MarketDataLoaderBase):
@@ -274,6 +275,89 @@ class TestVNDailyMatrixParquetFirst(unittest.TestCase):
 
         df = VNDailyMatrix().load("close", check_val=False)
         self.assertEqual(df.loc[pd.Timestamp("2026-01-01"), "FPT"], 3.0)
+
+
+class TestReaderManifestEnforcement(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.old_storage_dir = data_loader.STORAGE_DIR
+        self.old_root = os.environ.get("HISTORICAL_MARKET_DATA_ROOT")
+        data_loader.STORAGE_DIR = Path(self.tmp.name) / "storage"
+        os.environ["HISTORICAL_MARKET_DATA_ROOT"] = str(data_loader.STORAGE_DIR)
+        self.part_dir = (
+            data_loader.STORAGE_DIR
+            / "crypto"
+            / "binance_futures"
+            / "1m"
+            / "symbol=BTCUSDT"
+            / "year=2026"
+            / "month=08"
+        )
+        self.part_dir.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(
+            {
+                "time": [pd.Timestamp("2026-08-13 00:00:00")],
+                "symbol": ["BTCUSDT"],
+                "open": [1.0],
+                "high": [1.0],
+                "low": [1.0],
+                "close": [1.0],
+                "volume": [1],
+            }
+        ).to_parquet(self.part_dir / "part.parquet", index=False, engine="pyarrow", compression="zstd")
+
+    def tearDown(self):
+        data_loader.STORAGE_DIR = self.old_storage_dir
+        if self.old_root is None:
+            os.environ.pop("HISTORICAL_MARKET_DATA_ROOT", None)
+        else:
+            os.environ["HISTORICAL_MARKET_DATA_ROOT"] = self.old_root
+        self.tmp.cleanup()
+
+    @staticmethod
+    def _manifest(status: str) -> dict:
+        return {
+            "schema_version": 1,
+            "status": status,
+            "environment_id": "unit",
+            "created_at": "2026-08-13T00:00:00+00:00",
+            "source_inventory_reference": "state/bootstrap/source_inventory.json",
+            "git": {"commit": "unit", "tag": "unit"},
+            "build": {
+                "collector_image": "unit@sha256:abc",
+                "python_base_image": "python@sha256:def",
+                "python": "3.12.13",
+                "duckdb": "1.5.5",
+                "pyarrow": "20.0.0",
+            },
+            "storage": {
+                "supported_loader_contract_versions": ["hmd-loader-v1"],
+                "schema_migration_policy": "additive",
+                "incompatible_reader_policy": "raise",
+            },
+            "datasets": [
+                {
+                    "dataset_id": "binance_perpetual_spot_quarterly",
+                    "canonical_schema_version": "unit-v1",
+                    "partition_layout_version": "hive-v1",
+                    "supported_loader_contract_versions": ["hmd-loader-v1"],
+                    "source_report_reference": "state/bootstrap/source_inventory.json#unit",
+                }
+            ],
+        }
+
+    def test_explicit_reader_root_refuses_missing_or_draft_manifest(self):
+        with self.assertRaises(StorageManifestError):
+            data_loader.CryptoBinance1m().load(symbols="BTCUSDT", check_val=False)
+        write_release_manifest(data_loader.STORAGE_DIR, self._manifest("draft"))
+        with self.assertRaises(StorageCompatibilityError):
+            data_loader.CryptoBinance1m().load(symbols="BTCUSDT", check_val=False)
+
+    def test_explicit_reader_root_accepts_matching_manifest(self):
+        write_release_manifest(data_loader.STORAGE_DIR, self._manifest("pass"))
+        df = data_loader.CryptoBinance1m().load(symbols="BTCUSDT", check_val=False)
+        self.assertEqual(len(df), 1)
+        self.assertEqual(df.loc[0, "symbol"], "BTCUSDT")
 
 
 if __name__ == "__main__":

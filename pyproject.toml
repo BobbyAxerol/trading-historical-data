@@ -14,7 +14,7 @@ dependencies = [
 ]
 
 [tool.setuptools]
-py-modules = ["data_loader"]
+py-modules = ["data_loader", "storage_manifest"]
 
 [tool.setuptools.packages.find]
 include = ["primus*", "loaders*"]
