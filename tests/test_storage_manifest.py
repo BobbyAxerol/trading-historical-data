@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import stat
 import tempfile
 import unittest
 from pathlib import Path
@@ -63,6 +64,14 @@ class TestStorageManifest(unittest.TestCase):
             )
             self.assertEqual(dataset["canonical_schema_version"], "trade_schema_v1")
             self.assertFalse(path.with_suffix(".json.tmp").exists())
+
+    def test_atomic_replace_keeps_manifest_group_readable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "storage"
+            path = write_release_manifest(root, manifest(status="draft"))
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o640)
+            path = write_release_manifest(root, manifest())
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o640)
 
     def test_reader_refuses_draft_release_and_unsupported_contract(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

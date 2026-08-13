@@ -111,6 +111,12 @@ def write_release_manifest(storage_root: str | Path, payload: dict[str, Any]) ->
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary = tempfile.mkstemp(prefix=".release-manifest-", suffix=".json", dir=path.parent)
     try:
+        # mkstemp deliberately creates 0600 files.  That would clear the
+        # effective mask of a named reader-group ACL when this temporary file
+        # atomically replaces the old manifest.  Keep owner-write plus
+        # group-read so the parent directory's default reader ACL remains
+        # effective after os.replace.
+        os.fchmod(descriptor, 0o640)
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
             json.dump(validated, handle, indent=2, sort_keys=True)
             handle.write("\n")
