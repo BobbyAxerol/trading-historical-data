@@ -537,6 +537,14 @@ def run(args: argparse.Namespace) -> dict[str, object]:
             )
             audit = {"status": "skipped"} if args.no_validate else validate_symbol(store=store, symbol=symbol, expected_start=f"{start_month}-01")
             results[symbol] = {**result, "validation": audit}
+            JsonState(f"audits/{DATASET}_{symbol}_phase_d.json").write(
+                {
+                    "dataset": DATASET,
+                    "service": SERVICE,
+                    "symbol": symbol,
+                    **audit,
+                }
+            )
             manifest.update_symbol(
                 symbol,
                 phase_d_validation=audit,

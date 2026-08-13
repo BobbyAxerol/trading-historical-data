@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import io
+import argparse
+import json
 import os
 import tempfile
 import unittest
@@ -114,6 +116,36 @@ class TestBinanceUsdmPerpetual(unittest.TestCase):
         self.assertEqual(result["windows"], 2)
         self.assertEqual(len(calls), 2)
         self.assertTrue(all((end - start) <= pd.Timedelta(minutes=999) for start, end in calls))
+
+    def test_run_writes_a_durable_per_symbol_audit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            args = argparse.Namespace(
+                symbols="BTCUSDT",
+                start_month="2020-01",
+                daily_bridge_days=1,
+                rest_bridge_days=1,
+                rest_window_minutes=60,
+                no_validate=False,
+            )
+            audit = {"status": "pass", "rows": 3, "gap_count": 0}
+            with patch.dict(
+                os.environ,
+                {
+                    "DATA_ROOT": str(root / "storage"),
+                    "STATE_ROOT": str(root / "state"),
+                    "LOG_ROOT": str(root / "logs"),
+                },
+                clear=False,
+            ), patch.object(perpetual, "load_yaml", return_value={"symbols": ["BTCUSDT"], "interval": "1m"}), patch.object(
+                perpetual, "discover_active_perpetuals", return_value={"BTCUSDT": {"symbol": "BTCUSDT"}}
+            ), patch.object(perpetual, "sync_symbol", return_value={"monthly": {}, "daily": {}, "rest": {}}), patch.object(perpetual, "validate_symbol", return_value=audit):
+                result = perpetual.run(args)
+                audit_path = root / "state" / "audits" / "crypto_binance_futures_1m_BTCUSDT_phase_d.json"
+                stored = json.loads(audit_path.read_text(encoding="utf-8"))
+        self.assertEqual(result["status"], "pass")
+        self.assertEqual(stored["status"], "pass")
+        self.assertEqual(stored["service"], perpetual.SERVICE)
 
 
 if __name__ == "__main__":
