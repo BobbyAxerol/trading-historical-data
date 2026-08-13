@@ -42,7 +42,7 @@ phase_d_approval:
       sources:
         - binance_vision_usdm_daily_metrics
         - binance_futures_data_rest_tail
-      validation: streaming per-month schema/5-minute-bucket/numeric/negative/duplicate/continuity/partial-day/source-provenance audit; fail closed on a non-passing durable Phase D report
+      validation: streaming per-month schema/5-minute-bucket/numeric/negative/duplicate/continuity/partial-day/source-provenance audit; direct upstream sparse fields/gaps remain documented and never synthetic, while structural failures remain fail-closed
     phase-d-binance-usdm-quarterly-1m:
       dataset_id: crypto_binance_usdm_quarterly_1m
       command: ["python", "-m", "collectors.binance_usdm_quarterly_1m", "--mode", "once", "--pairs", "BTCUSDT", "--start-month", "2021-02", "--repair-gaps", "--max-gap-minutes", "5", "--audit-phase-d"]

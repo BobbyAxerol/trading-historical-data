@@ -248,6 +248,34 @@ or historical backfill was started during this work.
   missing trading days from the supported 2024 calendar onward. Status:
   `pass`.
 
+#### Phase D execution — BTCUSDT USD-M futures metrics 5m
+
+- Commit `4f5a9b1` fixes a real source-normalization bug: multiple raw Vision
+  observations that floor into one 5-minute bucket now coalesce each metric
+  from the last non-null direct observation rather than losing a valid field
+  through blind last-row dedupe. Coverage discovery/audit scan one partition
+  at a time, and a partial REST response cannot overwrite a complete Vision
+  row. The focused suite passed 32 tests in the reviewed image.
+- The first full run downloaded the source history and correctly failed
+  closed because its original strict audit interpreted all nullable metric
+  fields as malformed data. Direct read-only checks of Binance Vision archives
+  proved that the sparse fields are upstream availability: for example,
+  `2022-01-01` has all four long/short ratio fields absent in the original
+  archive. No source value was filled or invented.
+- The targeted detached recheck exited `0` at `2026-08-13T17:42:04Z` after
+  re-fetching days with short coverage or nullable fields. Durable audit
+  `state/audits/crypto_binance_futures_metrics_5m_BTCUSDT_phase_d.json`:
+  625,109 rows, `2020-09-01T00:00:00` through
+  `2026-08-13T17:30:00`, zero duplicate/time/bucket/malformed-numeric/
+  negative/market/contract/symbol/source-provenance errors. It records 160
+  direct-source gaps, 75 short days, and 92,275 nullable metric rows
+  (92,272 Vision; 3 bounded REST) rather than concealing them. Status:
+  `pass_with_documented_source_gaps`.
+- A network-off, read-only packaged-loader smoke with `check_val=True` read
+  the canonical BTCUSDT sample with the complete schema and zero duplicate
+  keys. The next source remains a separately gated concrete quarterly rebuild;
+  no matrix, broad universe, or Deribit work follows automatically.
+
 ## Active Job: VN30F1M VNDIRECT DChart Single-Source Upgrade
 
 Source guide: `VN30_FUTURES_FREE_DATA_UPGRADE_PLAN_V2.md`

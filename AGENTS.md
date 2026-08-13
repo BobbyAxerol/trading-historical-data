@@ -80,12 +80,21 @@ user.email = vugioan11022002@gmail.com
   on 2026-08-13. Its raw continuous-alias result spans `2017-08-10` through
   `2026-08-13` with a durable passing audit; it wrote no matrix or
   contract-derived output. Do not use that approval to start another source.
+- The owner-approved BTCUSDT USD-M metrics 5m Phase D rebuild completed on
+  2026-08-13. Its durable audit is
+  `pass_with_documented_source_gaps`: structural integrity, provenance,
+  numeric parsing, and loader smoke all pass, while direct Binance Vision
+  archives retain explicit sparse ratio fields and 5-minute coverage holes.
+  Never forward-fill or synthesize those metrics; consumers must treat the
+  audit as the authoritative availability record.
 - The next owner-approved sequential Phase D source is exactly
-  `phase-d-binance-futures-metrics-5m`, defined in
+  `phase-d-binance-usdm-quarterly-1m`, defined in
   `configs/primus_hmd_phase_d.yml` and launched only with
-  `tools/run_phase_d_binance_futures_metrics_5m.sh`. It rebuilds BTCUSDT
-  USD-M metrics from `2020-01-01` with at most two Vision downloads in flight,
-  no legacy import, bounded REST overlap, and a durable fail-closed audit.
+  `tools/run_phase_d_binance_usdm_quarterly_1m.sh`. It discovers concrete
+  BTCUSDT contracts whose delivery overlaps the configured `2021-02` history,
+  uses direct Vision archives plus active-contract tail sources, and requires
+  a per-contract streaming fail-closed audit. It does not create a continuous
+  contract series.
 - Do not start a default-universe expansion, derived matrix, VN historical
   batch, metrics/quarterly historical batch, repair sweep, consumer cutover,
   old-writer retirement, destructive data operation, or **any Deribit

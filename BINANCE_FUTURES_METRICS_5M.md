@@ -28,7 +28,7 @@ include_rest_tail: true
 ## Storage
 
 ```text
-storage/crypto/binance_futures_metrics/5m/symbol=BTCUSDT/year=YYYY/month=MM/part.csv.gz
+storage/crypto/binance_futures_metrics/5m/symbol=BTCUSDT/year=YYYY/month=MM/part.parquet
 ```
 
 Schema:
@@ -65,14 +65,39 @@ Collector [`collectors/binance_futures_metrics_5m.py`](collectors/binance_future
 3. List toàn bộ keys có thật từ Binance Vision S3 prefix:
    `data/futures/um/daily/metrics/{SYMBOL}/{SYMBOL}-metrics-YYYY-MM-DD.zip`.
 4. Tính `effective_start` theo earliest Vision key nếu config để `null/auto`.
-5. Quét coverage toàn bộ từ `effective_start` tới latest Vision key. Ngày nào thiếu/partial so với `min_rows_per_full_day=288` sẽ schedule tải lại file ngày đó và file liền trước để bù bucket rìa ngày.
-6. Append/dedupe vào partition monthly.
+5. Quét coverage toàn bộ từ `effective_start` tới latest Vision key. Ngày nào thiếu/partial so với `min_rows_per_full_day=288`, hoặc có field metric nullable, sẽ schedule tải lại file ngày đó và file liền trước để bù bucket rìa ngày.
+6. Với nhiều raw observations trong cùng bucket 5 phút, từng field được lấy từ observation trực tiếp cuối cùng có giá trị. Giá trị không được dựng khi mọi observation nguồn đều null. Sau đó append/dedupe vào partition monthly.
 7. Với perpetual symbols, REST tail dùng Binance Futures Data endpoints để bù vài ngày cuối nếu Vision publish trễ. Quarterly concrete contracts không dùng REST tail vì Binance REST metrics không expose concrete quarterly contract theo cùng schema; quarterly lấy từ Vision.
 8. Audit lại duplicate, internal 5-minute gaps và partial days; kết quả ghi dưới `state/audits/`.
 
 Binance Vision metrics daily ZIP thường chứa `00:05` của ngày file tới `00:00` của ngày kế tiếp. Vì vậy coverage repair luôn xét cả file liền trước khi một calendar day bị thiếu bucket `00:00`.
 
 REST tail chỉ là lớp bù đuôi cho perpetual; khi Binance Vision publish file daily, vòng sau vẫn quét coverage và dedupe theo `symbol,time`, nên storage không bị duplicate.
+
+Một REST response thiếu một hoặc nhiều metric không được phép ghi đè một row Vision hoàn chỉnh. Collector ghi warning, bỏ row REST partial đó và thử lại ở overlap kế tiếp.
+
+## Upstream Availability And Phase D Audit
+
+Binance Vision không bảo đảm tất cả sáu metric fields có giá trị ở mọi bucket
+5 phút lịch sử. Một số ngày cũng có dưới 288 buckets. Đây là availability của
+nguồn, không phải giá trị được phép forward-fill.
+
+Phase D BTCUSDT chạy với `--no-legacy --audit-phase-d` và audit tách hai lớp:
+
+- structural integrity: schema, timestamp/bucket, duplicate, malformed
+  numeric, negative values, market/contract/symbol/source provenance; mọi lỗi
+  này fail closed;
+- direct-source availability: rows/gaps ngày ngắn và fields nullable được ghi
+  đếm theo source/column. Nếu structural integrity pass nhưng source còn sparse,
+  status là `pass_with_documented_source_gaps`, không phải strict completeness.
+
+Snapshot new-VPS 2026-08-13 cho `BTCUSDT`: `625,109` rows từ
+`2020-09-01T00:00:00` tới `2026-08-13T17:30:00`; zero duplicate, malformed
+numeric, negative, bucket, market/contract/symbol/source-provenance errors.
+Audit vẫn ghi `160` 5-minute gaps, `75` ngày short, và `92,275` rows có metric
+nullable trực tiếp từ Binance Vision. Không có số liệu synthetic nào được ghi.
+Evidence canonical là
+`state/audits/crypto_binance_futures_metrics_5m_BTCUSDT_phase_d.json`.
 
 ## Loader
 
