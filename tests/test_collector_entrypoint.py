@@ -142,6 +142,23 @@ PHASE_D_SPOT_COMMAND = [
     "1",
     "--repair-gaps",
 ]
+PHASE_D_VNDIRECT_APPROVAL = "PRIMUS_HMD_PHASE_D_VN30F1M_VNDIRECT_DAILY_APPROVED"
+PHASE_D_VNDIRECT_COMMAND = [
+    "python",
+    "-m",
+    "collectors.vn_derivatives",
+    "sync-vndirect",
+    "--resolution",
+    "1d",
+    "--mode",
+    "once",
+    "--start",
+    "2017-08-10",
+    "--overlap-days",
+    "14",
+    "--audit-phase-d",
+    "--json",
+]
 
 
 class TestCollectorEntrypoint(unittest.TestCase):
@@ -158,6 +175,7 @@ class TestCollectorEntrypoint(unittest.TestCase):
                 "PRIMUS_HMD_B0_SEED_RUNNER",
                 PHASE_D_APPROVAL,
                 PHASE_D_SPOT_APPROVAL,
+                PHASE_D_VNDIRECT_APPROVAL,
                 *STAGED_TAIL_COMMANDS,
             ]:
                 env.pop(name, None)
@@ -275,6 +293,19 @@ class TestCollectorEntrypoint(unittest.TestCase):
         self.assertEqual(rejected_start.returncode, 64)
 
         wrong_phase_approval = self.run_entrypoint(*PHASE_D_SPOT_COMMAND, environment={PHASE_D_APPROVAL: "approved"})
+        self.assertEqual(wrong_phase_approval.returncode, 64)
+
+    def test_phase_d_vndirect_approval_accepts_only_its_exact_history_command(self) -> None:
+        permitted = self.run_entrypoint(*PHASE_D_VNDIRECT_COMMAND, environment={PHASE_D_VNDIRECT_APPROVAL: "approved"})
+        self.assertEqual(permitted.returncode, 0)
+        self.assertEqual(permitted.stdout, f"fake-python:{' '.join(PHASE_D_VNDIRECT_COMMAND[1:])}\n")
+
+        changed_start = list(PHASE_D_VNDIRECT_COMMAND)
+        changed_start[9] = "2018-01-01"
+        rejected_start = self.run_entrypoint(*changed_start, environment={PHASE_D_VNDIRECT_APPROVAL: "approved"})
+        self.assertEqual(rejected_start.returncode, 64)
+
+        wrong_phase_approval = self.run_entrypoint(*PHASE_D_VNDIRECT_COMMAND, environment={PHASE_D_SPOT_APPROVAL: "approved"})
         self.assertEqual(wrong_phase_approval.returncode, 64)
 
 

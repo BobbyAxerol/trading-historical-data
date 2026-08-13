@@ -122,6 +122,25 @@ services:
       STATE_ROOT: /app/state
       LOG_ROOT: /app/logs
 
+  phase-d-vn30f1m-vndirect-daily:
+    <<: *get-data-service
+    # Raw continuous-alias daily history only.  It fetches one provider year
+    # at a time, excludes partial current-day bars, and emits Phase D audit
+    # evidence; it does not rebuild the VN matrix or contract-derived series.
+    profiles: ["phase-d"]
+    restart: "no"
+    pids_limit: 128
+    cpus: 0.50
+    mem_limit: 512m
+    command: ["python", "-m", "collectors.vn_derivatives", "sync-vndirect", "--resolution", "1d", "--mode", "once", "--start", "2017-08-10", "--overlap-days", "14", "--audit-phase-d", "--json"]
+    environment:
+      <<: *collector-gate-environment
+      PRIMUS_HMD_PHASE_D_VN30F1M_VNDIRECT_DAILY_APPROVED: ${PRIMUS_HMD_PHASE_D_VN30F1M_VNDIRECT_DAILY_APPROVED:-}
+      TZ: Asia/Ho_Chi_Minh
+      DATA_ROOT: /app/storage
+      STATE_ROOT: /app/state
+      LOG_ROOT: /app/logs
+
   binance-usdm-quarterly-1m:
     <<: *get-data-service
     # Explicit current contract and REST tail only: no archive listing or

@@ -167,6 +167,25 @@ if [ "${PRIMUS_HMD_PHASE_D_BINANCE_SPOT_1M_APPROVED:-}" = "approved" ] \
   exec "$@"
 fi
 
+if [ "${PRIMUS_HMD_PHASE_D_VN30F1M_VNDIRECT_DAILY_APPROVED:-}" = "approved" ] \
+  && [ "${1:-}" = "python" ] \
+  && [ "${2:-}" = "-m" ] \
+  && [ "${3:-}" = "collectors.vn_derivatives" ] \
+  && [ "${4:-}" = "sync-vndirect" ] \
+  && [ "${5:-}" = "--resolution" ] \
+  && [ "${6:-}" = "1d" ] \
+  && [ "${7:-}" = "--mode" ] \
+  && [ "${8:-}" = "once" ] \
+  && [ "${9:-}" = "--start" ] \
+  && [ "${10:-}" = "2017-08-10" ] \
+  && [ "${11:-}" = "--overlap-days" ] \
+  && [ "${12:-}" = "14" ] \
+  && [ "${13:-}" = "--audit-phase-d" ] \
+  && [ "${14:-}" = "--json" ] \
+  && [ "$#" -eq 14 ]; then
+  exec "$@"
+fi
+
 # The only pre-B0 writer exception is the owner-approved, one-shot bounded
 # seed.  `tools/run_b0_seed.sh` supplies both values transiently and invokes
 # one fixed runner with no operator-provided collector arguments.  The runner

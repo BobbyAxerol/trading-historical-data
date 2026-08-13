@@ -76,6 +76,13 @@ user.email = vugioan11022002@gmail.com
   do not synthesize candles for them or describe that source as strict
   continuity-pass data. Later gaps with complete local USD-M coverage were
   repaired under the approved proxy policy only.
+- The next owner-approved sequential Phase D source is exactly
+  `phase-d-vn30f1m-vndirect-daily`, defined in
+  `configs/primus_hmd_phase_d.yml` and launched only with
+  `tools/run_phase_d_vn30f1m_vndirect_daily.sh`. It rebuilds the raw
+  VNDIRECT DChart `VN30F1M` daily continuous alias from `2017-08-10` in
+  one-year provider windows, writes no matrix or contract-derived output,
+  refuses partial current-day bars, and must leave its durable audit passing.
 - Do not start a default-universe expansion, derived matrix, VN historical
   batch, metrics/quarterly historical batch, repair sweep, consumer cutover,
   old-writer retirement, destructive data operation, or **any Deribit

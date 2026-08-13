@@ -2,15 +2,24 @@ import json
 import os
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import Mock, patch
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
 import data_loader
 from collectors.providers.vndirect_dchart_derivatives import DChartFetchResult, VndirectDChartProvider
 from collectors.vn_daily_matrix import build_matrix
-from collectors.vn_derivatives.vndirect import VndirectDailyOptions, VndirectProbeOptions, run_vndirect_probe, sync_vndirect_daily
+from collectors.vn_derivatives.vndirect import (
+    VndirectDailyOptions,
+    VndirectProbeOptions,
+    audit_vndirect_daily,
+    last_closed_vn_daily,
+    run_vndirect_probe,
+    sync_vndirect_daily,
+)
 from data_loader import VnDerivativesContinuousDaily
 
 
@@ -252,6 +261,59 @@ class TestVndirectDailySync(EnvCase):
         self.assertEqual(result["auxiliary_symbols"], ["VN30F1M"])
         close = pd.read_parquet(Path(os.environ["DATA_ROOT"]) / "vn" / "equity" / "daily_matrix" / "close.parquet")
         self.assertIn("VN30F1M", close.columns)
+
+    def test_phase_d_audit_streams_daily_partition_and_enforces_calendar_tail(self):
+        provider = Mock()
+        provider.fetch.return_value = self._daily_result()
+        with patch("collectors.vn_derivatives.vndirect.VndirectDChartProvider", return_value=provider):
+            payload = sync_vndirect_daily(
+                VndirectDailyOptions(
+                    start="2024-01-01",
+                    end="2024-01-03",
+                    update_matrix=False,
+                    audit_phase_d=True,
+                )
+            )
+
+        audit = payload["audit"]
+        self.assertEqual(audit["status"], "pass")
+        self.assertEqual(audit["rows"], 2)
+        self.assertEqual(audit["duplicate_rows"], 0)
+        self.assertEqual(audit["ohlc_bad_rows"], 0)
+        self.assertEqual(audit["calendar_missing_trading_day_count"], 0)
+        path = Path(os.environ["STATE_ROOT"]) / "audits" / "vn30f1m_vndirect_dchart_1d_phase_d.json"
+        self.assertTrue(path.exists())
+
+    def test_phase_d_audit_rejects_a_missing_supported_calendar_day(self):
+        provider = Mock()
+        result = self._daily_result()
+        result = DChartFetchResult(
+            status=result.status,
+            data=result.data.iloc[:1].copy(),
+            requested_start=result.requested_start,
+            requested_end=result.requested_end,
+            first_bar=result.first_bar,
+            last_bar=result.first_bar,
+            http_status=result.http_status,
+            error=result.error,
+        )
+        provider.fetch.return_value = result
+        with patch("collectors.vn_derivatives.vndirect.VndirectDChartProvider", return_value=provider):
+            sync_vndirect_daily(VndirectDailyOptions(start="2024-01-01", end="2024-01-02", update_matrix=False))
+
+        audit = audit_vndirect_daily(expected_latest=pd.Timestamp("2024-01-03"))
+        self.assertEqual(audit["status"], "fail")
+        self.assertEqual(audit["calendar_missing_trading_days"], ["2024-01-03"])
+
+
+class TestVndirectClosedDailyBoundary(unittest.TestCase):
+    def test_current_trading_day_is_not_canonical_until_after_close_buffer(self):
+        zone = ZoneInfo("Asia/Ho_Chi_Minh")
+        before_close = datetime(2026, 8, 13, 14, 59, tzinfo=zone)
+        after_close = datetime(2026, 8, 13, 15, 0, tzinfo=zone)
+
+        self.assertEqual(last_closed_vn_daily(before_close), pd.Timestamp("2026-08-12"))
+        self.assertEqual(last_closed_vn_daily(after_close), pd.Timestamp("2026-08-13"))
 
 
 def _restore_env(name: str, value: str | None) -> None:

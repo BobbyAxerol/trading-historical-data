@@ -64,6 +64,7 @@ def build_parser() -> argparse.ArgumentParser:
     vndirect_sync.add_argument("--overlap-days", type=int, default=14)
     vndirect_sync.add_argument("--schedule", default="16:30")
     vndirect_sync.add_argument("--update-matrix", action="store_true")
+    vndirect_sync.add_argument("--audit-phase-d", action="store_true", help="Write and enforce the bounded Phase D VNDIRECT daily audit.")
     vndirect_sync.add_argument("--json", action="store_true")
 
     backfill = sub.add_parser("backfill", help="Backfill individual VN30 futures contracts into canonical contract storage.")
@@ -168,6 +169,7 @@ def main() -> None:
                 version=args.version,
                 overlap_days=args.overlap_days,
                 update_matrix=args.update_matrix,
+                audit_phase_d=args.audit_phase_d,
             )
         )
     elif args.command == "backfill":

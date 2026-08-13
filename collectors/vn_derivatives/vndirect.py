@@ -9,15 +9,17 @@ from typing import Literal
 
 import pandas as pd
 
-from collectors.common.calendar_vn import vn_now
+from collectors.common.calendar_vn import is_trading_day, vn_now
 from collectors.common.env import state_root
 from collectors.common.logging import setup_logging
 from collectors.common.manifest import Heartbeat, JsonState, sleep_with_heartbeat, utc_now_iso
-from collectors.common.storage import PartitionedParquetStore, release_unused_memory
+from collectors.common.storage import PartitionedParquetStore, read_partition_file, release_unused_memory
 from collectors.providers.vndirect_dchart_derivatives import DChartFetchResult, VndirectDChartProvider
 
 VNDIRECT_SOURCE = "vndirect_dchart"
 VNDIRECT_SYMBOL = "VN30F1M"
+PHASE_D_AUDIT_STATE = "audits/vn30f1m_vndirect_dchart_1d_phase_d.json"
+CALENDAR_ASSERTION_START = pd.Timestamp("2024-01-01")
 
 
 @dataclass(frozen=True)
@@ -36,6 +38,7 @@ class VndirectDailyOptions:
     version: str = "v1"
     overlap_days: int = 14
     update_matrix: bool = False
+    audit_phase_d: bool = False
 
 
 def vndirect_probe_path() -> Path:
@@ -186,6 +189,147 @@ def _default_daily_start(options: VndirectDailyOptions) -> pd.Timestamp:
     return pd.Timestamp("2017-08-10")
 
 
+def last_closed_vn_daily(now=None) -> pd.Timestamp:
+    """Return the latest safe VN derivative daily date for canonical storage.
+
+    DChart can expose an in-session daily bar.  Keep it out until the regular
+    market has been closed for a small buffer, and on weekends/holidays return
+    the preceding known trading day.  This applies even to an explicit end
+    date so an operator cannot accidentally persist a partial current day.
+    """
+
+    local_now = now or vn_now()
+    candidate = pd.Timestamp(local_now).tz_localize(None).normalize()
+    if is_trading_day(local_now) and (local_now.hour, local_now.minute) < (15, 0):
+        candidate -= pd.Timedelta(days=1)
+    while not is_trading_day(candidate.to_pydatetime()):
+        candidate -= pd.Timedelta(days=1)
+    return candidate
+
+
+def audit_vndirect_daily(*, expected_latest: pd.Timestamp | None = None) -> dict[str, object]:
+    """Stream the VNDIRECT daily partitions into durable Phase D evidence.
+
+    The repository calendar is complete from 2024 onward, so strict missing
+    trading-day assertions intentionally start there.  Earlier provider
+    history is still checked for schema, duplicate keys, OHLC, negative
+    values, source provenance, and weekend rows without pretending that a
+    partial holiday table can prove continuity.
+    """
+
+    store = _daily_store()
+    attrs = _daily_attrs("v1")
+    files = store.files(attrs)
+    expected = pd.Timestamp(expected_latest or last_closed_vn_daily()).normalize()
+    required_columns = ["time", "symbol", "open", "high", "low", "close", "volume", "source"]
+    rows = 0
+    duplicate_rows = 0
+    invalid_time_rows = 0
+    invalid_numeric_rows = 0
+    ohlc_bad_rows = 0
+    negative_rows = 0
+    weekend_rows = 0
+    source_mismatch_rows = 0
+    symbol_mismatch_rows = 0
+    file_errors: list[str] = []
+    seen_keys: set[tuple[str, int]] = set()
+    observed_dates: set[pd.Timestamp] = set()
+    first: pd.Timestamp | None = None
+    latest: pd.Timestamp | None = None
+
+    for path in files:
+        try:
+            frame = read_partition_file(path, usecols=required_columns)
+        except Exception as exc:
+            file_errors.append(f"{path.name}: {type(exc).__name__}: {exc}")
+            continue
+        rows += int(len(frame))
+        times = pd.to_datetime(frame["time"], errors="coerce")
+        try:
+            if times.dt.tz is not None:
+                times = times.dt.tz_convert("Asia/Ho_Chi_Minh").dt.tz_localize(None)
+        except (AttributeError, TypeError):
+            pass
+        times = times.dt.normalize()
+        invalid_time_rows += int(times.isna().sum())
+        numeric = frame[["open", "high", "low", "close", "volume"]].apply(pd.to_numeric, errors="coerce")
+        invalid_numeric_rows += int(numeric.isna().any(axis=1).sum())
+        valid = times.notna() & numeric.notna().all(axis=1)
+        if valid.any():
+            work_times = times.loc[valid]
+            work_numeric = numeric.loc[valid]
+            high = work_numeric["high"]
+            low = work_numeric["low"]
+            ohlc_bad_rows += int(
+                (
+                    (high < work_numeric[["open", "close", "low"]].max(axis=1))
+                    | (low > work_numeric[["open", "close", "high"]].min(axis=1))
+                ).sum()
+            )
+            negative_rows += int((work_numeric < 0).any(axis=1).sum())
+            weekend_rows += int(work_times.dt.weekday.ge(5).sum())
+            for symbol, timestamp in zip(frame.loc[valid, "symbol"].astype(str), work_times, strict=True):
+                key = (symbol, int(timestamp.value))
+                if key in seen_keys:
+                    duplicate_rows += 1
+                seen_keys.add(key)
+            observed_dates.update(pd.Timestamp(value).normalize() for value in work_times)
+            partition_first = pd.Timestamp(work_times.min()).normalize()
+            partition_latest = pd.Timestamp(work_times.max()).normalize()
+            first = partition_first if first is None or partition_first < first else first
+            latest = partition_latest if latest is None or partition_latest > latest else latest
+        source_mismatch_rows += int((frame["source"].astype(str) != VNDIRECT_SOURCE).sum())
+        symbol_mismatch_rows += int((frame["symbol"].astype(str) != VNDIRECT_SYMBOL).sum())
+        del frame, numeric, times
+        release_unused_memory()
+
+    calendar_start = max(CALENDAR_ASSERTION_START, first) if first is not None else CALENDAR_ASSERTION_START
+    expected_days: set[pd.Timestamp] = set()
+    if calendar_start <= expected:
+        for day in pd.date_range(calendar_start, expected, freq="D"):
+            if is_trading_day(day.to_pydatetime()):
+                expected_days.add(day.normalize())
+    calendar_missing = sorted(expected_days - observed_dates)
+    integrity_errors = (
+        len(file_errors)
+        + duplicate_rows
+        + invalid_time_rows
+        + invalid_numeric_rows
+        + ohlc_bad_rows
+        + negative_rows
+        + weekend_rows
+        + source_mismatch_rows
+        + symbol_mismatch_rows
+    )
+    status = "pass" if files and integrity_errors == 0 and not calendar_missing and latest == expected else "fail"
+    payload: dict[str, object] = {
+        "dataset": "vn30f1m_vndirect_dchart_1d",
+        "service": "phase_d_vn30f1m_vndirect_daily",
+        "status": status,
+        "files": len(files),
+        "rows": rows,
+        "first": first.isoformat() if first is not None else None,
+        "latest": latest.isoformat() if latest is not None else None,
+        "expected_latest": expected.isoformat(),
+        "duplicate_rows": duplicate_rows,
+        "invalid_time_rows": invalid_time_rows,
+        "invalid_numeric_rows": invalid_numeric_rows,
+        "ohlc_bad_rows": ohlc_bad_rows,
+        "negative_rows": negative_rows,
+        "weekend_rows": weekend_rows,
+        "source_mismatch_rows": source_mismatch_rows,
+        "symbol_mismatch_rows": symbol_mismatch_rows,
+        "calendar_assertion_start": calendar_start.isoformat(),
+        "calendar_missing_trading_days": [day.date().isoformat() for day in calendar_missing[:100]],
+        "calendar_missing_trading_day_count": len(calendar_missing),
+        "pre_2024_continuity": "not_asserted: project VN holiday calendar is intentionally complete only from 2024 onward",
+        "file_errors": file_errors,
+        "validated_at": utc_now_iso(),
+    }
+    JsonState(PHASE_D_AUDIT_STATE).write(payload)
+    return payload
+
+
 def sync_vndirect_daily(options: VndirectDailyOptions | None = None) -> dict[str, object]:
     opts = options or VndirectDailyOptions()
     logger = setup_logging("vn30f1m_vndirect_daily")
@@ -199,7 +343,9 @@ def sync_vndirect_daily(options: VndirectDailyOptions | None = None) -> dict[str
     manifest.setdefault("windows", {})
 
     start = _default_daily_start(opts)
-    end = pd.Timestamp(opts.end).normalize() if opts.end else pd.Timestamp(vn_now()).tz_localize(None).normalize()
+    safe_end = last_closed_vn_daily()
+    requested_end = pd.Timestamp(opts.end).normalize() if opts.end else safe_end
+    end = min(requested_end, safe_end)
     if start > end:
         payload = {"status": "ok", "reason": "already_current", "start": start.isoformat(), "end": end.isoformat(), "rows_written": 0, "updated_at": utc_now_iso()}
         manifest.update(payload)
@@ -293,6 +439,12 @@ def sync_vndirect_daily(options: VndirectDailyOptions | None = None) -> dict[str
     }
     manifest.update({k: v for k, v in payload.items() if k != "windows"})
     state.write(manifest)
+    if opts.audit_phase_d:
+        audit = audit_vndirect_daily(expected_latest=end)
+        payload["audit"] = audit
+        if audit["status"] != "pass":
+            Heartbeat("vn30f1m_vndirect").beat(status="error", error="phase_d_audit_failed")
+            raise RuntimeError(f"VNDIRECT Phase D audit failed: {audit}")
     Heartbeat("vn30f1m_vndirect").beat(
         rows_written=total_rows_written,
         latest_time=manifest.get("latest_time"),

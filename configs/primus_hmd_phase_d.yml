@@ -6,7 +6,7 @@ phase_d_approval:
   status: approved
   approved_by: BobbyAxerol
   approved_at: "2026-08-13T16:18:00+00:00"
-  scope: "Sequential clean new-VPS BTCUSDT Binance USD-M perpetual and Binance spot 1m rebuilds only. No old-VPS import, default-universe expansion, derived matrix, consumer cutover, destructive operation, or Deribit request."
+  scope: "Sequential clean new-VPS BTCUSDT Binance USD-M perpetual and Binance spot 1m rebuilds plus the VNDIRECT VN30F1M daily continuous-alias source rebuild only. No old-VPS import, default-universe expansion, derived matrix, consumer cutover, destructive operation, or Deribit request."
   runtime_profile:
     max_concurrent_historical_jobs: 1
     cpus: 1.0
@@ -30,6 +30,12 @@ phase_d_approval:
         - binance_vision_spot_daily
         - binance_spot_rest_tail_and_bounded_gap_repair
       validation: streaming per-partition schema/OHLC/negative/duplicate/continuity audit; known upstream gaps stay explicit rather than synthetic
+    phase-d-vn30f1m-vndirect-daily:
+      dataset_id: vn30f1m_vndirect_dchart_1d
+      command: ["python", "-m", "collectors.vn_derivatives", "sync-vndirect", "--resolution", "1d", "--mode", "once", "--start", "2017-08-10", "--overlap-days", "14", "--audit-phase-d", "--json"]
+      sources:
+        - vndirect_dchart_continuous_alias_daily
+      validation: per-year append/deduplicate and streaming schema/OHLC/negative/duplicate/source-provenance audit; strict trading-calendar continuity is asserted from 2024 where the project holiday calendar is complete
 
 deribit:
   status: disabled_by_owner
