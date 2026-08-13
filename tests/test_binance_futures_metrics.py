@@ -199,15 +199,22 @@ class TestBinanceFuturesMetricsAudit(unittest.TestCase):
 
     def test_streaming_audit_rejects_non_numeric_metric_values(self):
         frame = self._metrics_frame("2020-01-01 00:00:00")
+        frame["sum_open_interest"] = frame["sum_open_interest"].astype("object")
         frame.loc[0, "sum_open_interest"] = "not-a-number"
-        append_metrics(self.store, frame, "BTCUSDT")
 
-        audit = audit_symbol(
-            self.store,
-            "BTCUSDT",
-            effective_start=pd.Timestamp("2020-01-01"),
-            expected_end=pd.Timestamp("2020-01-01"),
-        )
+        class Store:
+            def files(self, attrs):
+                if attrs != {"symbol": "BTCUSDT"}:
+                    raise AssertionError(attrs)
+                return [Path("2020-01.parquet")]
+
+        with patch("collectors.binance_futures_metrics_5m.read_partition_file", return_value=frame):
+            audit = audit_symbol(
+                Store(),
+                "BTCUSDT",
+                effective_start=pd.Timestamp("2020-01-01"),
+                expected_end=pd.Timestamp("2020-01-01"),
+            )
 
         self.assertEqual(audit["status"], "fail")
         self.assertEqual(audit["invalid_numeric_rows"], 1)
