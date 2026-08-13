@@ -179,6 +179,22 @@ PHASE_D_METRICS_COMMAND = [
     "24",
     "--audit-phase-d",
 ]
+PHASE_D_QUARTERLY_APPROVAL = "PRIMUS_HMD_PHASE_D_BINANCE_USDM_QUARTERLY_1M_APPROVED"
+PHASE_D_QUARTERLY_COMMAND = [
+    "python",
+    "-m",
+    "collectors.binance_usdm_quarterly_1m",
+    "--mode",
+    "once",
+    "--pairs",
+    "BTCUSDT",
+    "--start-month",
+    "2021-02",
+    "--repair-gaps",
+    "--max-gap-minutes",
+    "5",
+    "--audit-phase-d",
+]
 
 
 class TestCollectorEntrypoint(unittest.TestCase):
@@ -197,6 +213,7 @@ class TestCollectorEntrypoint(unittest.TestCase):
                 PHASE_D_SPOT_APPROVAL,
                 PHASE_D_VNDIRECT_APPROVAL,
                 PHASE_D_METRICS_APPROVAL,
+                PHASE_D_QUARTERLY_APPROVAL,
                 *STAGED_TAIL_COMMANDS,
             ]:
                 env.pop(name, None)
@@ -340,6 +357,19 @@ class TestCollectorEntrypoint(unittest.TestCase):
         self.assertEqual(rejected_workers.returncode, 64)
 
         wrong_phase_approval = self.run_entrypoint(*PHASE_D_METRICS_COMMAND, environment={PHASE_D_VNDIRECT_APPROVAL: "approved"})
+        self.assertEqual(wrong_phase_approval.returncode, 64)
+
+    def test_phase_d_quarterly_approval_accepts_only_its_exact_history_command(self) -> None:
+        permitted = self.run_entrypoint(*PHASE_D_QUARTERLY_COMMAND, environment={PHASE_D_QUARTERLY_APPROVAL: "approved"})
+        self.assertEqual(permitted.returncode, 0)
+        self.assertEqual(permitted.stdout, f"fake-python:{' '.join(PHASE_D_QUARTERLY_COMMAND[1:])}\n")
+
+        changed_pair = list(PHASE_D_QUARTERLY_COMMAND)
+        changed_pair[7] = "ETHUSDT"
+        rejected_pair = self.run_entrypoint(*changed_pair, environment={PHASE_D_QUARTERLY_APPROVAL: "approved"})
+        self.assertEqual(rejected_pair.returncode, 64)
+
+        wrong_phase_approval = self.run_entrypoint(*PHASE_D_QUARTERLY_COMMAND, environment={PHASE_D_METRICS_APPROVAL: "approved"})
         self.assertEqual(wrong_phase_approval.returncode, 64)
 
 

@@ -81,6 +81,23 @@ METRICS_COMMAND = [
     "24",
     "--audit-phase-d",
 ]
+QUARTERLY_SERVICE = "phase-d-binance-usdm-quarterly-1m"
+QUARTERLY_APPROVAL = "PRIMUS_HMD_PHASE_D_BINANCE_USDM_QUARTERLY_1M_APPROVED"
+QUARTERLY_COMMAND = [
+    "python",
+    "-m",
+    "collectors.binance_usdm_quarterly_1m",
+    "--mode",
+    "once",
+    "--pairs",
+    "BTCUSDT",
+    "--start-month",
+    "2021-02",
+    "--repair-gaps",
+    "--max-gap-minutes",
+    "5",
+    "--audit-phase-d",
+]
 
 
 class TestPhaseDComposeContract(unittest.TestCase):
@@ -114,6 +131,8 @@ class TestPhaseDComposeContract(unittest.TestCase):
         self.assertEqual(approval["services"][VNDIRECT_SERVICE]["command"], VNDIRECT_COMMAND)
         self.assertEqual(approval["services"][METRICS_SERVICE]["dataset_id"], "crypto_binance_futures_metrics_5m")
         self.assertEqual(approval["services"][METRICS_SERVICE]["command"], METRICS_COMMAND)
+        self.assertEqual(approval["services"][QUARTERLY_SERVICE]["dataset_id"], "crypto_binance_usdm_quarterly_1m")
+        self.assertEqual(approval["services"][QUARTERLY_SERVICE]["command"], QUARTERLY_COMMAND)
         self.assertEqual(policy["deribit"]["status"], "disabled_by_owner")
 
     def test_phase_d_spot_service_is_one_shot_and_has_its_own_approval(self) -> None:
@@ -154,6 +173,19 @@ class TestPhaseDComposeContract(unittest.TestCase):
         self.assertEqual(service["environment"][METRICS_APPROVAL], f"${{{METRICS_APPROVAL}:-}}")
         self.assertNotIn(METRICS_APPROVAL, compose["x-collector-gate-environment"])
         self.assertNotIn(VNDIRECT_APPROVAL, service["environment"])
+
+    def test_phase_d_quarterly_service_is_one_shot_and_has_its_own_approval(self) -> None:
+        compose = yaml.safe_load((REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
+        service = compose["services"][QUARTERLY_SERVICE]
+        self.assertEqual(service["profiles"], ["phase-d"])
+        self.assertEqual(service["restart"], "no")
+        self.assertEqual(service["command"], QUARTERLY_COMMAND)
+        self.assertEqual(service["pids_limit"], 256)
+        self.assertEqual(service["cpus"], 1.0)
+        self.assertEqual(service["mem_limit"], "1536m")
+        self.assertEqual(service["environment"][QUARTERLY_APPROVAL], f"${{{QUARTERLY_APPROVAL}:-}}")
+        self.assertNotIn(QUARTERLY_APPROVAL, compose["x-collector-gate-environment"])
+        self.assertNotIn(METRICS_APPROVAL, service["environment"])
 
 
 if __name__ == "__main__":

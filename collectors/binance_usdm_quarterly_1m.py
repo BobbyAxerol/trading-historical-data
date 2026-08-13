@@ -19,10 +19,11 @@ from collectors.common.logging import setup_logging
 from collectors.common.manifest import Heartbeat, JsonState, Manifest, sleep_with_heartbeat, utc_now_iso
 from collectors.common.retry import retry_sync
 from collectors.common.storage import PartitionedParquetStore as PartitionedCsvGzStore
-from collectors.common.storage import read_partition_file
+from collectors.common.storage import read_partition_file, release_unused_memory
 from collectors.crypto_1m import BINANCE_FAPI, _closed_until, fetch_1m
 
 DATASET = "crypto_binance_usdm_quarterly_1m"
+SERVICE = "phase_d_binance_usdm_quarterly_1m"
 STORE_PARTS = ["crypto", "binance_futures", "1m"]
 S3_NS = {"s3": "http://s3.amazonaws.com/doc/2006-03-01/"}
 VISION_BASE_URL = "https://data.binance.vision"
@@ -59,6 +60,29 @@ OUTPUT_COLUMNS = [
     "source",
     "ingested_at",
 ]
+ONE_MINUTE = pd.Timedelta(minutes=1)
+NUMERIC_COLUMNS = [
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+    "quote_volume",
+    "number_of_trades",
+    "taker_buy_base_volume",
+    "taker_buy_quote_volume",
+]
+# The staged tail predates Phase D and uses the same direct Binance REST
+# source.  It remains an allowed provenance only for its overlapping active
+# contract partition; no old-VPS or synthetic source is accepted here.
+PHASE_D_SOURCES = {
+    "binance_vision_futures_um_monthly",
+    "binance_vision_futures_um_daily",
+    "binance_vision_futures_um_daily_gap_repair",
+    "binance_futures_rest",
+    "binance_futures_rest_gap_repair",
+    "binance_futures",
+}
 
 
 def _request_json(url: str, *, params: dict[str, Any] | None = None) -> Any:
@@ -196,7 +220,15 @@ def read_vision_zip(content: bytes, *, symbol: str, source: str) -> pd.DataFrame
         if not csv_names:
             return pd.DataFrame(columns=OUTPUT_COLUMNS)
         with archive.open(csv_names[0]) as handle:
-            df = pd.read_csv(handle)
+            # Vision has published both headered and headerless Kline CSVs.
+            # Reading with a default header would silently discard the first
+            # candle of headerless archives.
+            df = pd.read_csv(handle, header=None)
+    if df.empty:
+        return pd.DataFrame(columns=OUTPUT_COLUMNS)
+    if str(df.iloc[0, 0]).strip().lower() in {"open_time", "open time", "timestamp"}:
+        df = df.iloc[1:].reset_index(drop=True)
+    df.columns = KLINE_COLUMNS[: len(df.columns)]
     return normalize_kline_frame(df, symbol=symbol, source=source)
 
 
@@ -298,26 +330,42 @@ def small_gap_repair_dates(store: PartitionedCsvGzStore, symbol: str, *, max_gap
 
 
 def small_gap_ranges(store: PartitionedCsvGzStore, symbol: str, *, max_gap_minutes: int) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
-    frames = []
-    for path in store.files({"symbol": symbol}):
+    """Find only bounded gaps while retaining one partition at a time."""
+
+    ranges: list[tuple[pd.Timestamp, pd.Timestamp]] = []
+    previous: pd.Timestamp | None = None
+    max_delta = pd.Timedelta(minutes=max_gap_minutes + 1)
+
+    for path in sorted(store.files({"symbol": symbol})):
         try:
-            frames.append(read_partition_file(path, usecols=["time"]))
+            frame = read_partition_file(path, usecols=["time"])
         except Exception:
             continue
-    if not frames:
-        return []
-    times = pd.concat(frames, ignore_index=True)["time"]
-    times = pd.to_datetime(times, errors="coerce").dropna().drop_duplicates().sort_values().reset_index(drop=True)
-    if len(times) < 2:
-        return []
-    diffs = times.diff()
-    mask = (diffs > pd.Timedelta(minutes=1)) & (diffs <= pd.Timedelta(minutes=max_gap_minutes))
-    ranges: list[tuple[pd.Timestamp, pd.Timestamp]] = []
-    for idx in mask[mask].index:
-        start = times.iloc[idx - 1] + pd.Timedelta(minutes=1)
-        end = times.iloc[idx] - pd.Timedelta(minutes=1)
-        if start <= end:
-            ranges.append((start, end))
+        times = (
+            pd.to_datetime(frame["time"], errors="coerce", utc=True)
+            .dropna()
+            .drop_duplicates()
+            .sort_values()
+            .reset_index(drop=True)
+        )
+        if times.empty:
+            del frame, times
+            release_unused_memory()
+            continue
+
+        if previous is not None:
+            boundary = times.iloc[0] - previous
+            if ONE_MINUTE < boundary <= max_delta:
+                ranges.append((previous + ONE_MINUTE, times.iloc[0] - ONE_MINUTE))
+
+        diffs = times.diff()
+        for index in diffs[(diffs > ONE_MINUTE) & (diffs <= max_delta)].index:
+            ranges.append((times.iloc[index - 1] + ONE_MINUTE, times.iloc[index] - ONE_MINUTE))
+
+        previous = pd.Timestamp(times.iloc[-1])
+        del frame, times, diffs
+        release_unused_memory()
+
     return ranges
 
 
@@ -347,7 +395,11 @@ def repair_small_gaps(
 
     for start, end in small_gap_ranges(store, symbol, max_gap_minutes=max_gap_minutes):
         logger.info("%s REST gap repair %s -> %s", symbol, start, end)
-        df = fetch_1m(symbol, start.tz_localize("UTC"), end.tz_localize("UTC"))
+        start_utc = pd.Timestamp(start)
+        end_utc = pd.Timestamp(end)
+        start_utc = start_utc.tz_localize("UTC") if start_utc.tzinfo is None else start_utc.tz_convert("UTC")
+        end_utc = end_utc.tz_localize("UTC") if end_utc.tzinfo is None else end_utc.tz_convert("UTC")
+        df = fetch_1m(symbol, start_utc, end_utc)
         if df.empty:
             manifest.update_symbol(symbol, last_error="empty_rest_gap_repair", last_gap_start=str(start), last_gap_end=str(end))
             continue
@@ -382,12 +434,12 @@ def sync_vision_file(
     if content is None:
         manifest.update_symbol(symbol, last_missing_vision_key=key, last_error="vision_404")
         logger.warning("%s missing Vision file: %s", symbol, key)
-        return {"rows_written": 0, "latest_time": None}
+        return {"rows_written": 0, "latest_time": None, "outcome": "missing"}
     df = read_vision_zip(content, symbol=symbol, source=source)
     if df.empty:
         manifest.update_symbol(symbol, last_empty_vision_key=key, last_error="empty_vision_file")
         logger.warning("%s empty Vision file: %s", symbol, key)
-        return {"rows_written": 0, "latest_time": None}
+        return {"rows_written": 0, "latest_time": None, "outcome": "empty"}
     result = _append(store, df, symbol)
     manifest.update_symbol(
         symbol,
@@ -399,7 +451,7 @@ def sync_vision_file(
         last_error=None,
     )
     logger.info("%s Vision wrote rows=%s latest=%s key=%s", symbol, result["rows_written"], result["latest_time"], Path(key).name)
-    return result
+    return {**result, "outcome": "written"}
 
 
 def sync_rest_tail(
@@ -451,6 +503,181 @@ def sync_rest_tail(
     return result
 
 
+def audit_symbol(
+    store: PartitionedCsvGzStore,
+    symbol: str,
+    *,
+    is_active: bool,
+    expected_first_archive_month: str | None,
+    expected_last_archive_month: str | None,
+) -> dict[str, object]:
+    """Audit one quarterly contract without loading its complete history.
+
+    Contract boundaries are intentionally assessed per concrete delivery symbol:
+    there is no fabricated continuity assertion between two different quarterly
+    contracts.  Within a contract, every canonical minute must still be
+    continuous after its first observed source candle.
+    """
+
+    paths = sorted(store.files({"symbol": symbol}))
+    previous: pd.Timestamp | None = None
+    first: pd.Timestamp | None = None
+    latest: pd.Timestamp | None = None
+    rows = 0
+    duplicate_rows = 0
+    invalid_time_rows = 0
+    invalid_numeric_rows = 0
+    ohlc_bad_rows = 0
+    negative_rows = 0
+    source_mismatch_rows = 0
+    symbol_mismatch_rows = 0
+    post_delivery_date_rows = 0
+    out_of_order_partition_rows = 0
+    gap_count = 0
+    max_gap_minutes = 0
+    gap_examples: list[dict[str, object]] = []
+    file_errors: list[str] = []
+    delivery_text = _delivery_from_symbol(symbol)
+    delivery_date = pd.Timestamp(delivery_text, tz="UTC").normalize() if delivery_text else None
+
+    for path in paths:
+        try:
+            frame = read_partition_file(
+                path,
+                usecols=["time", "symbol", *NUMERIC_COLUMNS, "source"],
+            )
+        except Exception as exc:
+            file_errors.append(f"{path.name}: {type(exc).__name__}: {exc}")
+            continue
+
+        rows += int(len(frame))
+        times_raw = pd.to_datetime(frame["time"], errors="coerce", utc=True)
+        invalid_time_rows += int(times_raw.isna().sum())
+        valid_time = times_raw.notna()
+        numeric = frame[NUMERIC_COLUMNS].apply(pd.to_numeric, errors="coerce")
+        invalid_numeric_rows += int(numeric.isna().any(axis=1).sum())
+        negative_rows += int((numeric < 0).any(axis=1).sum())
+        prices = numeric[["open", "high", "low", "close"]]
+        ohlc_bad_rows += int(
+            (
+                (prices["high"] < prices[["open", "low", "close"]].max(axis=1))
+                | (prices["low"] > prices[["open", "high", "close"]].min(axis=1))
+            ).sum()
+        )
+        symbol_mismatch_rows += int((frame["symbol"].astype(str) != symbol.upper()).sum())
+        source_mismatch_rows += int((~frame["source"].astype(str).isin(PHASE_D_SOURCES)).sum())
+        if delivery_date is not None:
+            post_delivery_date_rows += int((times_raw.loc[valid_time].dt.normalize() > delivery_date).sum())
+
+        times = times_raw.loc[valid_time].sort_values().reset_index(drop=True)
+        duplicate_rows += int(times.duplicated().sum())
+        times = times.drop_duplicates().reset_index(drop=True)
+        if not times.empty:
+            if previous is not None:
+                boundary = times.iloc[0] - previous
+                if boundary == pd.Timedelta(0):
+                    duplicate_rows += 1
+                elif boundary < pd.Timedelta(0):
+                    out_of_order_partition_rows += 1
+                elif boundary > ONE_MINUTE:
+                    gap_count += 1
+                    missing_minutes = int(boundary.total_seconds() // 60) - 1
+                    max_gap_minutes = max(max_gap_minutes, missing_minutes)
+                    if len(gap_examples) < 10:
+                        gap_examples.append(
+                            {
+                                "start": (previous + ONE_MINUTE).isoformat(),
+                                "end": (times.iloc[0] - ONE_MINUTE).isoformat(),
+                                "minutes": missing_minutes,
+                            }
+                        )
+
+            diffs = times.diff()
+            for index in diffs[diffs > ONE_MINUTE].index:
+                gap = diffs.loc[index]
+                missing_minutes = int(gap.total_seconds() // 60) - 1
+                gap_count += 1
+                max_gap_minutes = max(max_gap_minutes, missing_minutes)
+                if len(gap_examples) < 10:
+                    gap_examples.append(
+                        {
+                            "start": (times.iloc[index - 1] + ONE_MINUTE).isoformat(),
+                            "end": (times.iloc[index] - ONE_MINUTE).isoformat(),
+                            "minutes": missing_minutes,
+                        }
+                    )
+            first = times.iloc[0] if first is None else min(first, times.iloc[0])
+            latest = times.iloc[-1] if latest is None else max(latest, times.iloc[-1])
+            previous = times.iloc[-1]
+
+        del frame, times_raw, numeric, prices, times
+        release_unused_memory()
+
+    archive_start_covered = (
+        expected_first_archive_month is None
+        or (first is not None and first.strftime("%Y-%m") <= expected_first_archive_month)
+    )
+    archive_end_covered = (
+        expected_last_archive_month is None
+        or (latest is not None and latest.strftime("%Y-%m") >= expected_last_archive_month)
+    )
+    tail_lag_minutes = None
+    if is_active and latest is not None:
+        tail_lag_minutes = max(0, int((_closed_until() - latest).total_seconds() // 60))
+
+    integrity_errors = (
+        len(file_errors)
+        + duplicate_rows
+        + invalid_time_rows
+        + invalid_numeric_rows
+        + ohlc_bad_rows
+        + negative_rows
+        + source_mismatch_rows
+        + symbol_mismatch_rows
+        + post_delivery_date_rows
+        + out_of_order_partition_rows
+    )
+    tail_current = not is_active or (tail_lag_minutes is not None and tail_lag_minutes <= 5)
+    status = "pass" if (
+        paths
+        and first is not None
+        and latest is not None
+        and archive_start_covered
+        and archive_end_covered
+        and tail_current
+        and integrity_errors == 0
+        and gap_count == 0
+    ) else "requires_repair"
+    return {
+        "status": status,
+        "symbol": symbol,
+        "active": is_active,
+        "files": len(paths),
+        "rows": rows,
+        "first": first.isoformat() if first is not None else None,
+        "latest": latest.isoformat() if latest is not None else None,
+        "expected_first_archive_month": expected_first_archive_month,
+        "expected_last_archive_month": expected_last_archive_month,
+        "archive_start_covered": archive_start_covered,
+        "archive_end_covered": archive_end_covered,
+        "duplicate_rows": duplicate_rows,
+        "invalid_time_rows": invalid_time_rows,
+        "invalid_numeric_rows": invalid_numeric_rows,
+        "ohlc_bad_rows": ohlc_bad_rows,
+        "negative_rows": negative_rows,
+        "source_mismatch_rows": source_mismatch_rows,
+        "symbol_mismatch_rows": symbol_mismatch_rows,
+        "post_delivery_date_rows": post_delivery_date_rows,
+        "out_of_order_partition_rows": out_of_order_partition_rows,
+        "gap_count": gap_count,
+        "max_gap_minutes": max_gap_minutes,
+        "gap_examples": gap_examples,
+        "tail_lag_minutes": tail_lag_minutes,
+        "file_errors": file_errors,
+        "validated_at": utc_now_iso(),
+    }
+
+
 def sync_symbol(
     *,
     symbol: str,
@@ -474,8 +701,11 @@ def sync_symbol(
 ) -> dict[str, object]:
     total_rows = 0
     latest_time = None
+    monthly_keys: list[str] = []
+    unavailable_vision_keys: list[str] = []
     if include_monthly:
-        for key in vision_monthly_keys(symbol, interval=interval, start_month=start_month, s3_base_url=s3_base_url):
+        monthly_keys = vision_monthly_keys(symbol, interval=interval, start_month=start_month, s3_base_url=s3_base_url)
+        for key in monthly_keys:
             month = _month_from_key(key)
             if month and not refresh_archive and _month_partition_exists(store, symbol, month):
                 logger.debug("%s skip existing monthly partition %s", symbol, month)
@@ -491,6 +721,8 @@ def sync_symbol(
             )
             total_rows += int(result.get("rows_written") or 0)
             latest_time = result.get("latest_time") or latest_time
+            if result.get("outcome") in {"missing", "empty"}:
+                unavailable_vision_keys.append(key)
             time.sleep(0.05)
 
     if include_daily and symbol in active_symbols:
@@ -510,6 +742,8 @@ def sync_symbol(
             )
             total_rows += int(result.get("rows_written") or 0)
             latest_time = result.get("latest_time") or latest_time
+            if result.get("outcome") in {"missing", "empty"}:
+                unavailable_vision_keys.append(key)
             time.sleep(0.05)
 
     if include_rest and symbol in active_symbols:
@@ -536,7 +770,15 @@ def sync_symbol(
             logger=logger,
         )
 
-    return {"rows_written": total_rows, "latest_time": latest_time}
+    archive_months = [month for key in monthly_keys if (month := _month_from_key(key))]
+    return {
+        "rows_written": total_rows,
+        "latest_time": latest_time,
+        "archive_key_count": len(monthly_keys),
+        "first_archive_month": archive_months[0] if archive_months else None,
+        "last_archive_month": archive_months[-1] if archive_months else None,
+        "unavailable_vision_keys": unavailable_vision_keys,
+    }
 
 
 def sync_all(args: argparse.Namespace, logger) -> dict[str, Any]:
@@ -574,8 +816,23 @@ def sync_all(args: argparse.Namespace, logger) -> dict[str, Any]:
 
     store = PartitionedCsvGzStore(STORE_PARTS, partition="month")
     manifest = Manifest(DATASET)
-    heartbeat = Heartbeat(DATASET)
+    heartbeat = Heartbeat(SERVICE if args.audit_phase_d else DATASET)
     total_rows = 0
+    results: dict[str, dict[str, object]] = {}
+    phase_d_failures: list[str] = []
+    if args.audit_phase_d:
+        JsonState(f"phase_d/{SERVICE}.json").write(
+            {
+                "status": "running",
+                "dataset": DATASET,
+                "pairs": pairs,
+                "symbols": symbols,
+                "start_month": start_month,
+                "max_gap_minutes": args.max_gap_minutes,
+                "started_at": utc_now_iso(),
+            }
+        )
+
     for symbol in symbols:
         try:
             result = sync_symbol(
@@ -599,12 +856,64 @@ def sync_all(args: argparse.Namespace, logger) -> dict[str, Any]:
                 logger=logger,
             )
             total_rows += int(result.get("rows_written") or 0)
-            heartbeat.beat(symbol=symbol, latest_time=result.get("latest_time"))
+            if args.audit_phase_d:
+                audit = audit_symbol(
+                    store,
+                    symbol,
+                    is_active=symbol in active,
+                    expected_first_archive_month=str(result.get("first_archive_month")) if result.get("first_archive_month") else None,
+                    expected_last_archive_month=str(result.get("last_archive_month")) if result.get("last_archive_month") else None,
+                )
+                results[symbol] = {**result, "validation": audit}
+                JsonState(f"audits/{DATASET}_{symbol}_phase_d.json").write(
+                    {
+                        "dataset": DATASET,
+                        "service": SERVICE,
+                        "symbol": symbol,
+                        **audit,
+                    }
+                )
+                unavailable = list(result.get("unavailable_vision_keys") or [])
+                manifest.update_symbol(
+                    symbol,
+                    phase_d_validation=audit,
+                    phase_d_last_run_at=utc_now_iso(),
+                    last_error=None if audit["status"] == "pass" and not unavailable else "phase_d_validation_requires_repair",
+                )
+                if unavailable:
+                    phase_d_failures.append(f"{symbol}: unavailable Vision keys={len(unavailable)}")
+                if audit["status"] != "pass":
+                    phase_d_failures.append(f"{symbol}: validation={audit['status']}")
+                    heartbeat.beat(status="error", symbol=symbol, error="phase_d_validation_requires_repair", validation=audit)
+                else:
+                    heartbeat.beat(status="ok", symbol=symbol, latest_time=result.get("latest_time"), validation=audit)
+            else:
+                heartbeat.beat(symbol=symbol, latest_time=result.get("latest_time"))
         except Exception as exc:
             manifest.update_symbol(symbol, last_error=str(exc), last_failed_at=utc_now_iso())
             logger.exception("%s quarterly sync failed", symbol)
             heartbeat.beat(status="error", symbol=symbol, error=str(exc))
-    return {"symbols": symbols, "active_symbols": sorted(active), "rows_written": total_rows}
+            if args.audit_phase_d:
+                phase_d_failures.append(f"{symbol}: {type(exc).__name__}: {exc}")
+
+    payload: dict[str, Any] = {
+        "status": "pass" if not phase_d_failures else "requires_repair",
+        "dataset": DATASET,
+        "pairs": pairs,
+        "symbols": symbols,
+        "active_symbols": sorted(active),
+        "rows_written": total_rows,
+        "results": results,
+        "failures": phase_d_failures,
+        "completed_at": utc_now_iso(),
+    }
+    if args.audit_phase_d:
+        JsonState(f"phase_d/{SERVICE}.json").write(payload)
+        if phase_d_failures:
+            message = "Phase D Binance quarterly validation failed: " + "; ".join(phase_d_failures)
+            heartbeat.beat(status="error", error=message)
+            raise RuntimeError(message)
+    return payload
 
 
 def main() -> None:
@@ -634,6 +943,11 @@ def main() -> None:
     parser.add_argument("--refresh-archive", action="store_true", help="Re-download Vision archive files even when local partitions already exist.")
     parser.add_argument("--repair-gaps", action="store_true", help="Fetch daily Vision files for small internal gaps after monthly sync.")
     parser.add_argument("--max-gap-minutes", type=int, default=5)
+    parser.add_argument(
+        "--audit-phase-d",
+        action="store_true",
+        help="Write a durable, fail-closed Phase D audit after the exact historical rebuild.",
+    )
     args = parser.parse_args()
 
     config = load_yaml("symbols.binance_usdm_quarterly.yml")

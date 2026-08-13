@@ -1,5 +1,8 @@
+import io
 import sys
+import zipfile
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent.resolve()))
 
@@ -7,7 +10,20 @@ import unittest
 
 import pandas as pd
 
-from collectors.binance_usdm_quarterly_1m import _delivery_from_symbol, normalize_kline_frame
+from collectors.binance_usdm_quarterly_1m import (
+    NUMERIC_COLUMNS,
+    _delivery_from_symbol,
+    audit_symbol,
+    normalize_kline_frame,
+    read_vision_zip,
+)
+
+
+def _zip_csv(text: str) -> bytes:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, mode="w") as archive:
+        archive.writestr("BTCUSDT_240329-1m-test.csv", text)
+    return buffer.getvalue()
 
 
 class TestBinanceUsdmQuarterly(unittest.TestCase):
@@ -37,6 +53,49 @@ class TestBinanceUsdmQuarterly(unittest.TestCase):
         self.assertEqual(df.loc[0, "number_of_trades"], 84)
         self.assertAlmostEqual(df.loc[0, "taker_buy_base_volume"], 1.210)
         self.assertEqual(str(df.loc[0, "time"]), "2024-03-01 00:00:00")
+
+    def test_read_vision_zip_without_header_keeps_first_candle(self):
+        content = _zip_csv(
+            "1709251200000,62110.8,62163.7,62088.5,62162.9,1.805,1709251259999,112127.0301,84,1.210,75170.5038,0\n"
+            "1709251260000,62162.9,62170.0,62150.0,62160.0,2.000,1709251319999,124000.0000,85,1.000,62160.0000,0\n"
+        )
+
+        frame = read_vision_zip(content, symbol="BTCUSDT_240329", source="test")
+
+        self.assertEqual(len(frame), 2)
+        self.assertEqual(str(frame.loc[0, "time"]), "2024-03-01 00:00:00")
+
+    def test_streaming_audit_passes_a_complete_contract_partition(self):
+        class Store:
+            def files(self, attrs):
+                if attrs != {"symbol": "BTCUSDT_240329"}:
+                    raise AssertionError(attrs)
+                return [Path("2024-03.parquet")]
+
+        frame = pd.DataFrame(
+            {
+                "time": ["2024-03-01 00:00:00", "2024-03-01 00:01:00"],
+                "symbol": ["BTCUSDT_240329", "BTCUSDT_240329"],
+                "source": ["binance_vision_futures_um_monthly", "binance_vision_futures_um_monthly"],
+            }
+        )
+        for column in NUMERIC_COLUMNS:
+            frame[column] = 1.0
+        frame["high"] = 2.0
+
+        with patch("collectors.binance_usdm_quarterly_1m.read_partition_file", return_value=frame):
+            audit = audit_symbol(
+                Store(),
+                "BTCUSDT_240329",
+                is_active=False,
+                expected_first_archive_month="2024-03",
+                expected_last_archive_month="2024-03",
+            )
+
+        self.assertEqual(audit["status"], "pass")
+        self.assertEqual(audit["rows"], 2)
+        self.assertEqual(audit["gap_count"], 0)
+        self.assertEqual(audit["source_mismatch_rows"], 0)
 
 
 if __name__ == "__main__":

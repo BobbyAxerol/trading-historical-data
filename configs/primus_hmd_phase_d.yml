@@ -6,7 +6,7 @@ phase_d_approval:
   status: approved
   approved_by: BobbyAxerol
   approved_at: "2026-08-13T16:18:00+00:00"
-  scope: "Sequential clean new-VPS BTCUSDT Binance USD-M perpetual, spot 1m, futures metrics 5m, and VNDIRECT VN30F1M daily continuous-alias rebuilds only. No old-VPS import, default-universe expansion, derived matrix, consumer cutover, destructive operation, or Deribit request."
+  scope: "Sequential clean new-VPS BTCUSDT Binance USD-M perpetual, spot 1m, futures metrics 5m, concrete quarterly 1m, and VNDIRECT VN30F1M daily continuous-alias rebuilds only. No old-VPS import, default-universe expansion, derived matrix, consumer cutover, destructive operation, or Deribit request."
   runtime_profile:
     max_concurrent_historical_jobs: 1
     cpus: 1.0
@@ -43,6 +43,13 @@ phase_d_approval:
         - binance_vision_usdm_daily_metrics
         - binance_futures_data_rest_tail
       validation: streaming per-month schema/5-minute-bucket/numeric/negative/duplicate/continuity/partial-day/source-provenance audit; fail closed on a non-passing durable Phase D report
+    phase-d-binance-usdm-quarterly-1m:
+      dataset_id: crypto_binance_usdm_quarterly_1m
+      command: ["python", "-m", "collectors.binance_usdm_quarterly_1m", "--mode", "once", "--pairs", "BTCUSDT", "--start-month", "2021-02", "--repair-gaps", "--max-gap-minutes", "5", "--audit-phase-d"]
+      sources:
+        - binance_vision_usdm_quarterly_monthly
+        - binance_vision_usdm_quarterly_daily_and_bounded_rest_tail
+      validation: per-concrete-contract streaming schema/OHLC/numeric/negative/duplicate/continuity/archive-coverage/source-provenance audit; no synthetic continuity across delivery symbols and fail closed on a non-passing durable Phase D report
 
 deribit:
   status: disabled_by_owner

@@ -159,6 +159,25 @@ services:
       STATE_ROOT: /app/state
       LOG_ROOT: /app/logs
 
+  phase-d-binance-usdm-quarterly-1m:
+    <<: *get-data-service
+    # Concrete BTCUSDT quarterly contracts only.  Discovery is restricted by
+    # pair, each archive is appended atomically, and a per-contract streaming
+    # audit must pass before this detached historical job exits successfully.
+    profiles: ["phase-d"]
+    restart: "no"
+    pids_limit: 256
+    cpus: 1.0
+    mem_limit: 1536m
+    command: ["python", "-m", "collectors.binance_usdm_quarterly_1m", "--mode", "once", "--pairs", "BTCUSDT", "--start-month", "2021-02", "--repair-gaps", "--max-gap-minutes", "5", "--audit-phase-d"]
+    environment:
+      <<: *collector-gate-environment
+      PRIMUS_HMD_PHASE_D_BINANCE_USDM_QUARTERLY_1M_APPROVED: ${PRIMUS_HMD_PHASE_D_BINANCE_USDM_QUARTERLY_1M_APPROVED:-}
+      TZ: UTC
+      DATA_ROOT: /app/storage
+      STATE_ROOT: /app/state
+      LOG_ROOT: /app/logs
+
   binance-usdm-quarterly-1m:
     <<: *get-data-service
     # Explicit current contract and REST tail only: no archive listing or
