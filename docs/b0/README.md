@@ -73,6 +73,12 @@ collector approval:
 The runner is the only permitted writer before normal B0 approval. It is not a
 template for manually invoking a collector with a different start date.
 
+The production collector Compose anchor sets `HOME`, `XDG_CONFIG_HOME`,
+`XDG_CACHE_HOME`, and `MPLCONFIGDIR` below `/tmp/primus-hmd-home`. This keeps
+third-party provider profile/cache files ephemeral and prevents a non-root
+container from attempting to write at `/`; it must remain separate from
+canonical storage and runtime state.
+
 ## Bounded source probes
 
 `collectors.b0_source_probe` exists solely for B0. Its Binance probe makes

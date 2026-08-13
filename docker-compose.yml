@@ -5,6 +5,13 @@ x-collector-gate-environment: &collector-gate-environment
   PRIMUS_HMD_B0_SEED_APPROVED: ${PRIMUS_HMD_B0_SEED_APPROVED:-}
   PRIMUS_HMD_B0_SEED_RUNNER: ${PRIMUS_HMD_B0_SEED_RUNNER:-}
   PRIMUS_HMD_OPERATIONAL_EVENTS: ${PRIMUS_HMD_OPERATIONAL_EVENTS:-enabled}
+  # Provider libraries must never default to writing profiles/caches at `/`
+  # when collectors run as the non-root numeric UID.  These are ephemeral
+  # container paths, deliberately separate from canonical storage and state.
+  HOME: /tmp/primus-hmd-home
+  XDG_CONFIG_HOME: /tmp/primus-hmd-home/.config
+  XDG_CACHE_HOME: /tmp/primus-hmd-home/.cache
+  MPLCONFIGDIR: /tmp/primus-hmd-home/.config/matplotlib
 
 x-get-data-service: &get-data-service
   image: ${PRIMUS_HMD_IMAGE_REF:?PRIMUS_HMD_IMAGE_REF is required}
