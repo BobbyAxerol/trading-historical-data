@@ -20,6 +20,12 @@ if [[ ! -d "$output_dir" ]]; then
 fi
 
 base_image="python@sha256:d657ab0ade19f404a6ccc883ab399540de667aff751748ce23c07330c5a89e64"
+source_date_epoch="$(git -C "$repo_root" log -1 --format=%ct)"
+
+if [[ ! "$source_date_epoch" =~ ^[0-9]+$ ]]; then
+  echo "could not resolve a commit timestamp for reproducible wheel metadata" >&2
+  exit 70
+fi
 
 sudo -n docker run --rm \
   --read-only \
@@ -31,6 +37,7 @@ sudo -n docker run --rm \
   --tmpfs /tmp:rw,exec,nosuid,size=512m \
   -e HOME=/tmp \
   -e PIP_CACHE_DIR=/tmp/pip-cache \
+  -e SOURCE_DATE_EPOCH="$source_date_epoch" \
   --mount "type=bind,src=${repo_root},dst=/src,readonly" \
   --mount "type=bind,src=${output_dir},dst=/dist" \
   "$base_image" sh -lc '

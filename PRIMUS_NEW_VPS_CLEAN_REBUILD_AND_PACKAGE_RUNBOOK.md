@@ -222,7 +222,9 @@ tools/build_reader_wheel.sh /srv/primus/historical-market-data/releases
 
 The helper uses the digest-pinned Python 3.12 builder, mounts the checkout
 read-only, copies it only into the container's ephemeral `/tmp`, and writes
-only the requested wheel output directory. It must not be used to run a
+only the requested wheel output directory. It derives `SOURCE_DATE_EPOCH` from
+the checked-out commit so two clean builds of the same commit are
+byte-identical. It must not be used to run a
 collector. For acceptance, independently clean-install the resulting wheel
 with `requirements-reader.lock`, with no source checkout on `PYTHONPATH`, then
 record the wheel filename, SHA256, lock hashes, image digest, commit, and build
