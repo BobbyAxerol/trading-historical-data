@@ -137,6 +137,11 @@ def main() -> None:
     parser.add_argument("--schedule", default="16:30")
     parser.add_argument("--max-symbols", type=int, default=0)
     parser.add_argument("--backfill-start", default=None)
+    parser.add_argument(
+        "--skip-derived",
+        action="store_true",
+        help="Skip universe-report and matrix rebuilds; used by the bounded B0 source seed.",
+    )
     args = parser.parse_args()
 
     config = load_yaml("symbols.vn_daily.yml")
@@ -162,22 +167,25 @@ def main() -> None:
                     Manifest(DATASET).update_symbol(symbol, last_error=str(exc), last_failed_at=utc_now_iso())
                     logger.exception("%s daily failed", symbol)
                     heartbeat.beat(status="error", symbol=symbol, error=str(exc))
-            try:
-                report = build_universe_report(
-                    equity_symbols=[s.strip().upper() for s in symbols],
-                    external_symbols=configured_external_symbols(config),
-                    as_of_date=end,
-                    write=True,
-                )
-                logger.info("VN daily universe report wrote %s rows", len(report))
-            except Exception as exc:
-                logger.exception("VN daily universe report failed")
-                heartbeat.beat(status="error", error=f"universe_report_failed: {exc}")
-            try:
-                build_matrix(symbols=[s.strip().upper() for s in symbols], logger=logger)
-            except Exception as exc:
-                logger.exception("VN daily matrix build failed")
-                heartbeat.beat(status="error", error=f"matrix_build_failed: {exc}")
+            if not args.skip_derived:
+                try:
+                    report = build_universe_report(
+                        equity_symbols=[s.strip().upper() for s in symbols],
+                        external_symbols=configured_external_symbols(config),
+                        as_of_date=end,
+                        write=True,
+                    )
+                    logger.info("VN daily universe report wrote %s rows", len(report))
+                except Exception as exc:
+                    logger.exception("VN daily universe report failed")
+                    heartbeat.beat(status="error", error=f"universe_report_failed: {exc}")
+                try:
+                    build_matrix(symbols=[s.strip().upper() for s in symbols], logger=logger)
+                except Exception as exc:
+                    logger.exception("VN daily matrix build failed")
+                    heartbeat.beat(status="error", error=f"matrix_build_failed: {exc}")
+            else:
+                logger.info("VN daily bounded seed skipped derived universe and matrix outputs")
             last_run_date = datetime.now().strftime("%Y-%m-%d")
             schedule_state.write({
                 "last_run_date": last_run_date,

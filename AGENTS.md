@@ -64,6 +64,14 @@ user.email = vugioan11022002@gmail.com
 - Do not run Deribit Phase 6 or any other broad historical backfill merely because an old-VPS pilot passed; new-VPS probe/pilot/state gates must pass independently.
 - B0 must provide evidence for: capacity/concurrency, reproducible build artifacts, production Compose/runtime ownership, source inventory, storage compatibility manifest, backup/restore drill, monitoring/resource policy, clock/environment identity, and rollback.
 
+### Owner-approved B0 exception for this session
+
+- BobbyAxerol approved one narrow exception on 2026-08-13: the fixed new-VPS B0 seed may run only through `tools/run_b0_seed.sh` after its reviewed image has been built. It accepts no arguments and runs sequentially: BTCUSDT Binance windows capped at 24 hours, one current order-book snapshot, and seven-day FPT/VN30F1M VN windows.
+- Never substitute a manual `docker compose run`, direct collector invocation, alternate environment variable, changed seed argument, archive-wide discovery, concurrent seed, old-VPS import, or Deribit backfill for that runner. The Docker entrypoint permits the pre-B0 exception only for `collectors.b0_bounded_seed` with no arguments.
+- A B0 result of `pass_with_accepted_waivers` is transparent acceptance for bounded/staged collection only. It is not permission for consumer cutover, old-writer retirement, data deletion, mixed-root fallback, or unreviewed broad historical jobs.
+- Off-host backup/restore and consumer rollback identity are explicitly deferred technical debt for this session. They must remain reported as `waived`, never as passed, and must be closed before Phase E consumer cutover, old-writer retirement, or any destructive data operation.
+- The Discord webhook is a runtime secret only. Store it in the protected project runtime secret location with mode 0600; never read it back, print it, place it in Git, include it in evidence, or expose it in command output. The monitor records provider/status/timestamps only.
+
 ## Operational and data-safety invariants
 
 - Keep runtime mounts rooted at `PRIMUS_HMD_RUNTIME_ROOT=/srv/primus/historical-market-data`; no writable checkout mounts and no source-code bind mount for runtime services.
@@ -72,6 +80,7 @@ user.email = vugioan11022002@gmail.com
 - For Deribit, preserve disk-before-checkpoint, bounded queues, atomic writes, coverage-ledger validation, and cleanup-only-after-validation. Never equate API failure with confirmed empty data.
 - Never delete canonical data, staging evidence, or runtime directories as part of a diagnostic or cleanup action without a validated project procedure and explicit confirmation where required.
 - Do not read, print, commit, or move secrets, SSH private keys, API keys, or `.env` values.
+- `docker compose up` must leave writers stopped by default; start only a named, reviewed service after registering its active heartbeat dataset and confirming the Discord monitor has a fresh healthy cycle.
 
 ## Evidence and handoff
 

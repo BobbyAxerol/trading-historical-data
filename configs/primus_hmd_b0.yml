@@ -11,6 +11,29 @@ environment:
     previous_approved_release: "REQUIRED: previous wheel/release identifier"
     previous_approved_data_root: "REQUIRED: one approved data root, never a mixed root"
 
+# Owner-approved temporary exceptions.  These entries make deferred controls
+# visible as `waived` in preflight; they never claim that the controls passed.
+# They permit data collection only, never consumer cutover or old-root mixing.
+accepted_technical_debt:
+  backup_and_restore:
+    status: approved_deferred
+    approved_by: BobbyAxerol
+    approved_at: "2026-08-13T08:45:00+00:00"
+    reason: "Owner deferred off-host backup destination and restore drill as technical debt."
+    must_close_before: "Phase E consumer cutover, old-writer retirement, or any destructive data operation."
+  consumer_rollback:
+    status: approved_deferred
+    approved_by: BobbyAxerol
+    approved_at: "2026-08-13T08:45:00+00:00"
+    reason: "Owner deferred selection of a previous approved wheel and single data root as technical debt."
+    must_close_before: "Phase E consumer cutover; no mixed-root fallback is ever allowed."
+
+b0_seed_approval:
+  status: approved
+  approved_by: BobbyAxerol
+  approved_at: "2026-08-13T08:45:00+00:00"
+  scope: "Sequential bounded new-VPS seed writes only; no old-VPS data import and no broad concurrent backfill."
+
 runtime:
   root: /srv/primus/historical-market-data
   source_checkout: /srv/primus/src/historical-market-data
@@ -84,5 +107,20 @@ monitoring:
     - crypto_binance_orderbook_snapshot_1h
     - vn_equity_1d
     - vn30f1m_vndirect
+  # The runtime bootstrap evidence lists only services that are actually
+  # scheduled.  One-shot B0 seeds are deliberately not registered here.
+  discord_monitor_state_relative_path: state/monitoring/discord_monitor.json
+  discord_monitor_max_age_minutes: 3
+  retry_rate_limit_window_minutes: 10
+  default_rss_limit_mb: 1024
+  rss_limit_mb_by_dataset:
+    crypto_binance_futures_1m: 1024
+    crypto_binance_usdm_quarterly_1m: 1024
+    crypto_binance_spot_1m: 1024
+    crypto_binance_futures_metrics_5m: 1024
+    crypto_binance_orderbook_snapshot_1h: 512
+    vn_equity_1d: 768
+    vn30f1m_vndirect: 768
+    deribit_btc_options_v1_compact_liquid: 750
   operator_status_command: python -m collectors.b0_operational_status --strict --json
   resource_policy: single-heavy-job-until-bounded-seed-evidence

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import resource
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -65,11 +66,17 @@ class Heartbeat:
         self.service = service
 
     def beat(self, status: str = "ok", **values: Any) -> None:
+        peak_rss_mb = values.pop("peak_rss_mb", None)
+        if peak_rss_mb is None:
+            # Linux ru_maxrss is KiB.  This is process-local peak RSS, which is
+            # the safe measurement available without granting the monitor a
+            # Docker socket or host-administrator privilege.
+            peak_rss_mb = round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0, 2)
         payload = {
             "service": self.service,
             "status": status,
             "updated_at": utc_now_iso(),
+            "peak_rss_mb": peak_rss_mb,
             **values,
         }
         self.state.write(payload)
-

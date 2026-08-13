@@ -23,6 +23,14 @@ def retry_sync(
             return fn()
         except retryable as exc:
             last_error = exc
+            try:
+                from .operational_events import record_retry_exception
+
+                record_retry_exception(exc, attempt=attempt + 1, attempts=attempts)
+            except Exception:
+                # Observability must never hide or replace the original source
+                # failure/retry behavior.
+                pass
             if attempt == attempts - 1:
                 break
             sleep_for = min(base_sleep**attempt + random.uniform(0.2, 1.5), max_sleep)
@@ -49,4 +57,3 @@ class SlidingWindowRateLimiter:
                 time.sleep(sleep_for)
 
         self.calls.append(time.time())
-

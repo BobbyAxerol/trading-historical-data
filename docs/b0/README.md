@@ -21,8 +21,9 @@ python -m collectors.production_preflight status --strict --json
 
 It reports blockers for missing runtime ownership, capacity measurements,
 source probes, storage manifest, backup/restore evidence, and rollback data.
-`--strict` exits non-zero while a B0 gate is incomplete; that is expected until
-the gate has real evidence.
+`--strict` exits non-zero while a hard B0 gate is incomplete. A result of
+`pass_with_accepted_waivers` remains explicit about any owner-approved,
+time-bounded technical debt; it never relabels that debt as a passing control.
 
 The protected Compose environment file must define the variables documented in
 `.env.example`. `PRIMUS_HMD_PYTHON_BASE_IMAGE` must be a Docker image reference
@@ -48,6 +49,29 @@ Every collector image enters through `docker/entrypoint.sh`. It exits before
 executing a command unless the protected host deployment file supplies
 `PRIMUS_HMD_B0_APPROVED=approved`. Do not set that value while any B0 check is
 blocked. This guard is defense-in-depth, not evidence that B0 has passed.
+Collector services use the `collectors` profile, so a bare `docker compose up`
+does not start a writer.
+
+## Owner-approved bounded seed exception
+
+For the 2026-08-13 new-VPS session only, policy records BobbyAxerol's approval
+for a one-shot B0 seed. The exception is deliberately narrower than a normal
+collector approval:
+
+- run only `tools/run_b0_seed.sh`, with no arguments;
+- its image entrypoint permits only `collectors.b0_bounded_seed` with no
+  arguments, and the module owns the immutable plan;
+- execute one job at a time: BTCUSDT Binance 1m windows are capped at 24
+  hours, metrics at one day, order book at one current REST snapshot, and FPT
+  plus VN30F1M at seven calendar days;
+- skip Binance archive-wide discovery, all old-VPS imports, concurrent work,
+  and every Deribit backfill;
+- write secret-safe measurement/evidence to
+  `state/bootstrap/b0_bounded_seed.json`, and update capacity only if all fixed
+  seed checks prove a canonical Parquet publish plus a successful heartbeat.
+
+The runner is the only permitted writer before normal B0 approval. It is not a
+template for manually invoking a collector with a different start date.
 
 ## Bounded source probes
 
@@ -84,9 +108,11 @@ schema/layout version, and supported loader-contract versions.
 `assert_loader_compatible(storage_root, dataset_id=..., loader_contract_version=...)`
 refuses an absent, malformed, draft, undeclared, or incompatible release with a
 clear `StorageCompatibilityError`; it never returns possibly misinterpreted
-data. The module and its tests are delivered in B0. Public loader calls will
-use the assertion as a Phase C package-acceptance change, as required by the
-runbook.
+data. The reader-wheel implementation lives in top-level `storage_manifest` so
+the packaged consumer uses the same contract as collectors. Public loaders
+enforce it when a consumer declares `HISTORICAL_MARKET_DATA_ROOT` (or explicitly
+sets `HISTORICAL_MARKET_DATA_REQUIRE_RELEASE_MANIFEST=1`); collector-side
+`DATA_ROOT` alone does not turn a writer helper into a consumer.
 
 ## Operator-visible monitoring status
 
@@ -107,3 +133,16 @@ docker compose --env-file /srv/primus/historical-market-data/deploy/compose.env 
 Do not use `seed-existing-history` or otherwise import old-VPS `storage/`,
 `state/`, or `logs/`; that migration path is deliberately absent from the
 production Compose configuration.
+
+## Discord operational delivery and deferred controls
+
+The Discord monitor is a read-only service. Its webhook is supplied only as a
+mode-0600 Docker secret file, accepts only an HTTPS Discord webhook host, and
+never serializes the URL into state or output. It records delivery-provider
+status, test timestamps, monitor freshness, and alert-category results only.
+
+For this session, off-host backup/restore and an explicit consumer rollback
+release/root are recorded as `approved_deferred` technical debt in the B0
+policy. They may produce `waived` checks for bounded/staged collection, but
+remain mandatory before Phase E consumer cutover, old-writer retirement, or a
+destructive data operation. No mixed-root fallback is permitted.

@@ -152,6 +152,10 @@ def run_symbol(symbol: str, mode: str, backfill_start: str, logger) -> None:
                 legacy_latest=legacy_latest.isoformat() if legacy_latest is not None else None,
                 storage_latest=storage_latest.isoformat() if storage_latest is not None else None,
             )
+    elif mode == "live":
+        raise RuntimeError(
+            "live mode refuses an empty runtime; run the explicitly bounded B0 seed or an approved backfill first"
+        )
     else:
         start = pd.Timestamp(backfill_start, tz="UTC")
 
@@ -190,12 +194,17 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=["live", "once", "backfill"], default="once")
     parser.add_argument("--symbols", default=None, help="Comma-separated symbols override")
+    parser.add_argument(
+        "--backfill-start",
+        default=None,
+        help="UTC start used only by explicit --mode backfill/once when no existing canonical tail is present.",
+    )
     parser.add_argument("--sleep", type=int, default=70)
     args = parser.parse_args()
 
     config = load_yaml("symbols.crypto.yml")
     symbols = args.symbols.split(",") if args.symbols else config.get("symbols", ["BTCUSDT", "ETHUSDT"])
-    backfill_start = config.get("backfill_start", "2020-01-01")
+    backfill_start = args.backfill_start or config.get("backfill_start", "2020-01-01")
 
     logger = setup_logging(DATASET)
     heartbeat = Heartbeat(DATASET)

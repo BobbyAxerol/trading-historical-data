@@ -1,5 +1,11 @@
 name: primus-historical-market-data
 
+x-collector-gate-environment: &collector-gate-environment
+  PRIMUS_HMD_B0_APPROVED: ${PRIMUS_HMD_B0_APPROVED:-}
+  PRIMUS_HMD_B0_SEED_APPROVED: ${PRIMUS_HMD_B0_SEED_APPROVED:-}
+  PRIMUS_HMD_B0_SEED_RUNNER: ${PRIMUS_HMD_B0_SEED_RUNNER:-}
+  PRIMUS_HMD_OPERATIONAL_EVENTS: ${PRIMUS_HMD_OPERATIONAL_EVENTS:-enabled}
+
 x-get-data-service: &get-data-service
   image: ${PRIMUS_HMD_IMAGE_REF:?PRIMUS_HMD_IMAGE_REF is required}
   build:
@@ -8,22 +14,54 @@ x-get-data-service: &get-data-service
     args:
       PYTHON_BASE_IMAGE: ${PRIMUS_HMD_PYTHON_BASE_IMAGE:?PRIMUS_HMD_PYTHON_BASE_IMAGE must be pinned by digest}
   restart: unless-stopped
+  # A bare `docker compose up` must never start a writer.  Operators target a
+  # named service after the B0 status has accepted the relevant controls.
+  profiles: ["collectors"]
   user: "${PRIMUS_HMD_COLLECTOR_UID:?PRIMUS_HMD_COLLECTOR_UID is required}:${PRIMUS_HMD_COLLECTOR_GID:?PRIMUS_HMD_COLLECTOR_GID is required}"
+  pids_limit: 256
+  cpus: 1.0
+  mem_limit: 1536m
   env_file:
     - path: ${PRIMUS_HMD_SECRETS_FILE:?PRIMUS_HMD_SECRETS_FILE is required}
       required: true
   environment:
-    PRIMUS_HMD_B0_APPROVED: ${PRIMUS_HMD_B0_APPROVED:-}
+    <<: *collector-gate-environment
   volumes:
     - ${PRIMUS_HMD_RUNTIME_ROOT:?PRIMUS_HMD_RUNTIME_ROOT is required}/storage:/app/storage
     - ${PRIMUS_HMD_RUNTIME_ROOT:?PRIMUS_HMD_RUNTIME_ROOT is required}/state:/app/state
     - ${PRIMUS_HMD_RUNTIME_ROOT:?PRIMUS_HMD_RUNTIME_ROOT is required}/logs:/app/logs
 
 services:
+  b0-discord-monitor:
+    image: ${PRIMUS_HMD_IMAGE_REF:?PRIMUS_HMD_IMAGE_REF is required}
+    restart: unless-stopped
+    user: "${PRIMUS_HMD_COLLECTOR_UID:?PRIMUS_HMD_COLLECTOR_UID is required}:${PRIMUS_HMD_COLLECTOR_GID:?PRIMUS_HMD_COLLECTOR_GID is required}"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    cpus: 0.25
+    mem_limit: 256m
+    entrypoint: ["python", "-m", "collectors.b0_discord_monitor"]
+    command: ["--loop-seconds", "${PRIMUS_HMD_MONITOR_INTERVAL_SECONDS:-60}"]
+    environment:
+      HISTORICAL_MARKET_DATA_RUNTIME_ROOT: /runtime
+      DISCORD_WEBHOOK_URL_FILE: /run/secrets/primus_hmd_discord_webhook
+      PYTHONDONTWRITEBYTECODE: "1"
+    volumes:
+      - ${PRIMUS_HMD_RUNTIME_ROOT:?PRIMUS_HMD_RUNTIME_ROOT is required}/storage:/runtime/storage:ro
+      - ${PRIMUS_HMD_RUNTIME_ROOT:?PRIMUS_HMD_RUNTIME_ROOT is required}/state:/runtime/state:ro
+      - ${PRIMUS_HMD_RUNTIME_ROOT:?PRIMUS_HMD_RUNTIME_ROOT is required}/state/monitoring:/runtime/state/monitoring
+    secrets:
+      - primus_hmd_discord_webhook
+
   crypto-1m-live:
     <<: *get-data-service
     command: ["python", "-m", "collectors.crypto_1m", "--mode", "live"]
     environment:
+      <<: *collector-gate-environment
       TZ: UTC
       DATA_ROOT: /app/storage
       STATE_ROOT: /app/state
@@ -33,6 +71,7 @@ services:
     <<: *get-data-service
     command: ["python", "-m", "collectors.binance_usdm_quarterly_1m", "--mode", "live"]
     environment:
+      <<: *collector-gate-environment
       TZ: UTC
       DATA_ROOT: /app/storage
       STATE_ROOT: /app/state
@@ -42,6 +81,7 @@ services:
     <<: *get-data-service
     command: ["python", "-m", "collectors.binance_spot_1m", "--mode", "live", "--repair-gaps"]
     environment:
+      <<: *collector-gate-environment
       TZ: UTC
       DATA_ROOT: /app/storage
       STATE_ROOT: /app/state
@@ -51,6 +91,7 @@ services:
     <<: *get-data-service
     command: ["python", "-m", "collectors.binance_orderbook_snapshot_1h", "--mode", "live"]
     environment:
+      <<: *collector-gate-environment
       TZ: UTC
       DATA_ROOT: /app/storage
       STATE_ROOT: /app/state
@@ -60,6 +101,7 @@ services:
     <<: *get-data-service
     command: ["python", "-m", "collectors.binance_futures_metrics_5m", "--mode", "live"]
     environment:
+      <<: *collector-gate-environment
       TZ: UTC
       DATA_ROOT: /app/storage
       STATE_ROOT: /app/state
@@ -69,6 +111,7 @@ services:
     <<: *get-data-service
     command: ["python", "-m", "collectors.vn_daily", "--mode", "live", "--schedule", "16:30"]
     environment:
+      <<: *collector-gate-environment
       TZ: Asia/Ho_Chi_Minh
       DATA_ROOT: /app/storage
       STATE_ROOT: /app/state
@@ -78,6 +121,7 @@ services:
     <<: *get-data-service
     command: ["python", "-m", "collectors.vn_intraday_vnstock", "--mode", "live", "--schedule", "16:30"]
     environment:
+      <<: *collector-gate-environment
       TZ: Asia/Ho_Chi_Minh
       DATA_ROOT: /app/storage
       STATE_ROOT: /app/state
@@ -89,6 +133,7 @@ services:
     restart: "no"
     command: ["python", "-m", "collectors.vn_intraday_dnse", "--mode", "live", "--symbols", "VN30F1M", "--schedule", "16:30"]
     environment:
+      <<: *collector-gate-environment
       TZ: Asia/Ho_Chi_Minh
       DATA_ROOT: /app/storage
       STATE_ROOT: /app/state
@@ -100,6 +145,7 @@ services:
     restart: "no"
     command: ["python", "-m", "collectors.vn_derivatives", "probe-vndirect", "--json"]
     environment:
+      <<: *collector-gate-environment
       TZ: Asia/Ho_Chi_Minh
       DATA_ROOT: /app/storage
       STATE_ROOT: /app/state
@@ -109,6 +155,7 @@ services:
     <<: *get-data-service
     command: ["python", "-m", "collectors.vn_derivatives", "sync-vndirect", "--resolution", "1d", "--mode", "live", "--schedule", "16:30", "--update-matrix"]
     environment:
+      <<: *collector-gate-environment
       TZ: Asia/Ho_Chi_Minh
       DATA_ROOT: /app/storage
       STATE_ROOT: /app/state
@@ -120,6 +167,7 @@ services:
     restart: "no"
     command: ["python", "-m", "collectors.vn_derivatives", "probe", "--json"]
     environment:
+      <<: *collector-gate-environment
       TZ: Asia/Ho_Chi_Minh
       DATA_ROOT: /app/storage
       STATE_ROOT: /app/state
@@ -131,6 +179,7 @@ services:
     restart: "no"
     command: ["python", "-m", "collectors.vn_derivatives", "probe-free-sources", "--json"]
     environment:
+      <<: *collector-gate-environment
       TZ: Asia/Ho_Chi_Minh
       DATA_ROOT: /app/storage
       STATE_ROOT: /app/state
@@ -142,6 +191,7 @@ services:
     restart: "no"
     command: ["python", "-m", "collectors.vn_derivatives", "backfill", "--start", "2017-08-10", "--resolutions", "1m,1d", "--json"]
     environment:
+      <<: *collector-gate-environment
       TZ: Asia/Ho_Chi_Minh
       DATA_ROOT: /app/storage
       STATE_ROOT: /app/state
@@ -153,6 +203,7 @@ services:
     restart: "no"
     command: ["python", "-m", "collectors.vn_derivatives", "validate", "--json"]
     environment:
+      <<: *collector-gate-environment
       TZ: Asia/Ho_Chi_Minh
       DATA_ROOT: /app/storage
       STATE_ROOT: /app/state
@@ -162,6 +213,7 @@ services:
     <<: *get-data-service
     command: ["python", "-m", "collectors.vn_derivatives", "live", "--schedule", "16:30"]
     environment:
+      <<: *collector-gate-environment
       TZ: Asia/Ho_Chi_Minh
       DATA_ROOT: /app/storage
       STATE_ROOT: /app/state
@@ -174,6 +226,7 @@ services:
     <<: *get-data-service
     command: ["python", "-m", "collectors.binance_options_snapshot", "--mode", "live", "--interval-minutes", "5"]
     environment:
+      <<: *collector-gate-environment
       TZ: UTC
       DATA_ROOT: /app/storage
       STATE_ROOT: /app/state
@@ -183,6 +236,7 @@ services:
     <<: *get-data-service
     command: ["python", "-m", "collectors.binance_daily_matrix", "--mode", "live", "--schedule", "00:05", "--backfill-start", "2020-01-01", "--min-history-days", "365"]
     environment:
+      <<: *collector-gate-environment
       TZ: UTC
       DATA_ROOT: /app/storage
       STATE_ROOT: /app/state
@@ -194,6 +248,7 @@ services:
     restart: "no"
     command: ["python", "-m", "collectors.deribit_option_trades", "backfill", "--version", "v1", "--expiry-end", "2022-12-31", "--max-tasks", "${DERIBIT_BACKFILL_MAX_TASKS:-500}", "--progress-every", "${DERIBIT_PROGRESS_EVERY:-25}"]
     environment:
+      <<: *collector-gate-environment
       TZ: UTC
       DATA_ROOT: /app/storage
       STATE_ROOT: /app/state
@@ -205,6 +260,7 @@ services:
     restart: "no"
     command: ["python", "-m", "collectors.deribit_option_trades", "backfill", "--version", "v1", "--max-tasks", "${DERIBIT_BACKFILL_MAX_TASKS:-500}", "--progress-every", "${DERIBIT_PROGRESS_EVERY:-25}"]
     environment:
+      <<: *collector-gate-environment
       TZ: UTC
       DATA_ROOT: /app/storage
       STATE_ROOT: /app/state
@@ -225,6 +281,7 @@ services:
         && python -m collectors.deribit_option_trades cleanup --version v1 --confirm --json
         && python -m collectors.deribit_option_trades validate --version v1 --json
     environment:
+      <<: *collector-gate-environment
       TZ: UTC
       DATA_ROOT: /app/storage
       STATE_ROOT: /app/state
@@ -245,6 +302,7 @@ services:
         && python -m collectors.deribit_option_trades cleanup --version v1 --confirm --json
         && python -m collectors.deribit_option_trades validate --version v1 --json
     environment:
+      <<: *collector-gate-environment
       TZ: UTC
       DATA_ROOT: /app/storage
       STATE_ROOT: /app/state
@@ -256,6 +314,7 @@ services:
     restart: "no"
     command: ["python", "-m", "collectors.deribit_option_trades", "compact", "--version", "v1", "--progress-every", "${DERIBIT_PROGRESS_EVERY:-25}"]
     environment:
+      <<: *collector-gate-environment
       TZ: UTC
       DATA_ROOT: /app/storage
       STATE_ROOT: /app/state
@@ -267,6 +326,7 @@ services:
     restart: "no"
     command: ["python", "-m", "collectors.deribit_option_trades", "validate", "--version", "v1", "--json"]
     environment:
+      <<: *collector-gate-environment
       TZ: UTC
       DATA_ROOT: /app/storage
       STATE_ROOT: /app/state
@@ -278,6 +338,7 @@ services:
     restart: "no"
     command: ["python", "-m", "collectors.deribit_option_trades", "repair", "--version", "v1", "--only-unresolved", "--json"]
     environment:
+      <<: *collector-gate-environment
       TZ: UTC
       DATA_ROOT: /app/storage
       STATE_ROOT: /app/state
@@ -289,7 +350,12 @@ services:
     restart: "no"
     command: ["python", "-m", "collectors.deribit_option_trades", "cleanup", "--version", "v1", "--confirm", "--json"]
     environment:
+      <<: *collector-gate-environment
       TZ: UTC
       DATA_ROOT: /app/storage
       STATE_ROOT: /app/state
       LOG_ROOT: /app/logs
+
+secrets:
+  primus_hmd_discord_webhook:
+    file: ${PRIMUS_HMD_DISCORD_WEBHOOK_FILE:?PRIMUS_HMD_DISCORD_WEBHOOK_FILE is required}

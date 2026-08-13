@@ -18,23 +18,29 @@ class TestB0OperationalStatus(unittest.TestCase):
                 "inode_low_water_pct": 0,
                 "heartbeat_max_age_minutes": 20,
                 "expected_heartbeat_datasets": ["dataset_a"],
+                "discord_monitor_state_relative_path": "state/monitoring/discord_monitor.json",
+                "discord_monitor_max_age_minutes": 3,
             },
         }
 
-    def _write_evidence(self, root: Path, *, alert_status: str = "pass") -> None:
-        path = root / "state" / "bootstrap" / "monitoring.json"
+    def _write_evidence(self, root: Path, *, now: datetime, alert_status: str = "pass") -> None:
+        path = root / "state" / "monitoring" / "discord_monitor.json"
         path.parent.mkdir(parents=True)
         path.write_text(
             json.dumps(
                 {
-                    key: {"status": alert_status, "evidence": "unit"}
-                    for key in (
-                        "collector_exit_alert",
-                        "retry_rate_limit_alert",
-                        "validation_repair_alert",
-                        "rss_alert",
-                        "backup_failure_alert",
-                    )
+                    "status": "pass",
+                    "updated_at": now.isoformat(),
+                    "alert_categories": {
+                        key: {"status": alert_status, "evidence": "unit"}
+                        for key in (
+                            "collector_exit_alert",
+                            "retry_rate_limit_alert",
+                            "validation_repair_alert",
+                            "rss_alert",
+                            "backup_failure_alert",
+                        )
+                    },
                 }
             )
         )
@@ -56,7 +62,7 @@ class TestB0OperationalStatus(unittest.TestCase):
             heartbeat = root / "state" / "heartbeats" / "dataset_a.json"
             heartbeat.parent.mkdir(parents=True)
             heartbeat.write_text(json.dumps({"status": "ok", "updated_at": (now - timedelta(minutes=5)).isoformat()}))
-            self._write_evidence(root)
+            self._write_evidence(root, now=now)
             payload = operational_status(self._policy(root), now=now)
         self.assertEqual(payload["status"], "pass")
 
@@ -67,7 +73,7 @@ class TestB0OperationalStatus(unittest.TestCase):
             heartbeat = root / "state" / "heartbeats" / "dataset_a.json"
             heartbeat.parent.mkdir(parents=True)
             heartbeat.write_text(json.dumps({"status": "error", "updated_at": (now - timedelta(minutes=30)).isoformat()}))
-            self._write_evidence(root)
+            self._write_evidence(root, now=now)
             payload = operational_status(self._policy(root), now=now)
         heartbeat_check = next(check for check in payload["checks"] if check["name"] == "expected_heartbeats")
         self.assertEqual(payload["status"], "blocked")

@@ -374,6 +374,23 @@ rebuild:
 - heartbeat/disk/error monitoring and resource policy are active;
 - NTP, environment identity, and rollback path are recorded.
 
+### B0.10. Controlled Session Waiver (2026-08-13 Only)
+
+The permanent exit criteria above remain the default requirement. For the
+new-VPS session dated 2026-08-13, the owner may record a narrowly scoped,
+auditable `approved_deferred` waiver in the B0 policy for off-host
+backup/restore and consumer rollback identity. A waiver must name the owner,
+UTC approval time, reason, and mandatory closure condition. Preflight reports
+such a control as `waived` and the overall state as
+`pass_with_accepted_waivers`; it must never call it `pass`.
+
+That state permits only bounded/staged data collection under the documented
+single-writer policy. It does not permit consumer cutover, old-writer
+retirement, destructive data operations, mixed-root fallback, or removal of
+the deferred controls. The 2026-08-13 B0 seed is additionally constrained to a
+reviewed no-argument runner with fixed small source windows; it is not a
+general backfill exception.
+
 ## 6. Phase B: New VPS Foundation
 
 ### B1. Operating-System Layout

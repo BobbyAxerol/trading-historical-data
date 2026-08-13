@@ -409,10 +409,14 @@ def sync_rest_tail(
     store: PartitionedCsvGzStore,
     manifest: Manifest,
     overlap_minutes: int,
+    rest_start: str | None,
     logger,
 ) -> dict[str, object]:
     latest = store.latest_time(attrs={"symbol": symbol}, time_col="time")
-    if latest is None:
+    if rest_start:
+        explicit_start = pd.Timestamp(rest_start, tz="UTC")
+        start = explicit_start if latest is None else max(explicit_start, latest.tz_localize("UTC") - timedelta(minutes=int(overlap_minutes)))
+    elif latest is None:
         onboard = meta.get("onboard_time") if meta else None
         start = pd.Timestamp(onboard).tz_convert("UTC") if onboard else pd.Timestamp(_delivery_from_symbol(symbol) or "2021-01-01", tz="UTC")
     else:
@@ -465,6 +469,7 @@ def sync_symbol(
     vision_base_url: str,
     s3_base_url: str,
     overlap_minutes: int,
+    rest_start: str | None,
     logger,
 ) -> dict[str, object]:
     total_rows = 0
@@ -514,6 +519,7 @@ def sync_symbol(
             store=store,
             manifest=manifest,
             overlap_minutes=overlap_minutes,
+            rest_start=rest_start,
             logger=logger,
         )
         total_rows += int(result.get("rows_written") or 0)
@@ -543,7 +549,7 @@ def sync_all(args: argparse.Namespace, logger) -> dict[str, Any]:
     overlap_minutes = int(args.rest_overlap_minutes or config.get("rest_overlap_minutes", 10))
 
     active = discover_active_contracts(pairs)
-    archive_symbols = discover_archive_symbols(pairs, s3_base_url=s3_base_url)
+    archive_symbols = [] if args.no_archive_discovery else discover_archive_symbols(pairs, s3_base_url=s3_base_url)
     if args.symbols:
         symbols = [item.strip().upper() for item in args.symbols.split(",") if item.strip()]
     else:
@@ -589,6 +595,7 @@ def sync_all(args: argparse.Namespace, logger) -> dict[str, Any]:
                 vision_base_url=vision_base_url,
                 s3_base_url=s3_base_url,
                 overlap_minutes=overlap_minutes,
+                rest_start=args.rest_start,
                 logger=logger,
             )
             total_rows += int(result.get("rows_written") or 0)
@@ -610,10 +617,20 @@ def main() -> None:
     parser.add_argument("--start-month", default=None)
     parser.add_argument("--sleep", type=int, default=None)
     parser.add_argument("--rest-overlap-minutes", type=int, default=None)
+    parser.add_argument(
+        "--rest-start",
+        default=None,
+        help="Explicit UTC lower bound for REST tail collection; intended for a bounded seed on an empty runtime.",
+    )
     parser.add_argument("--max-symbols", type=int, default=0)
     parser.add_argument("--no-monthly", action="store_true")
     parser.add_argument("--no-daily", action="store_true")
     parser.add_argument("--no-rest", action="store_true")
+    parser.add_argument(
+        "--no-archive-discovery",
+        action="store_true",
+        help="Skip the historical archive listing and operate only on explicit/current active contracts.",
+    )
     parser.add_argument("--refresh-archive", action="store_true", help="Re-download Vision archive files even when local partitions already exist.")
     parser.add_argument("--repair-gaps", action="store_true", help="Fetch daily Vision files for small internal gaps after monthly sync.")
     parser.add_argument("--max-gap-minutes", type=int, default=5)

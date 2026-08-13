@@ -59,7 +59,10 @@ def _load_policy(path: Path = POLICY_PATH) -> dict[str, Any]:
 
 
 def _runtime_paths(policy: dict[str, Any]) -> dict[str, Path]:
-    runtime_root = Path(str(policy["runtime"]["root"])).resolve()
+    # The host policy remains authoritative.  The read-only monitor container
+    # sets this narrow override so it can inspect the same runtime tree through
+    # its `/runtime` mounts without requiring a source-checkout bind mount.
+    runtime_root = Path(os.getenv("HISTORICAL_MARKET_DATA_RUNTIME_ROOT", str(policy["runtime"]["root"]))).resolve()
     return {
         "root": runtime_root,
         "storage": runtime_root / "storage",
@@ -73,6 +76,38 @@ def _runtime_paths(policy: dict[str, Any]) -> dict[str, Path]:
 
 def _contains_required(value: Any) -> bool:
     return isinstance(value, str) and value.strip() and not value.startswith("REQUIRED")
+
+
+def _parse_utc(value: object) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.astimezone(timezone.utc)
+
+
+def accepted_technical_debt_waiver(policy: dict[str, Any], gate: str) -> dict[str, Any] | None:
+    """Return a reviewed, explicitly-scoped owner waiver for one B0 gate.
+
+    A waiver is never treated as evidence that the underlying control passed.
+    It exists solely to make the owner-approved temporary risk visible in the
+    preflight result and must name its closure condition.
+    """
+
+    waivers = policy.get("accepted_technical_debt")
+    candidate = waivers.get(gate) if isinstance(waivers, dict) else None
+    if not isinstance(candidate, dict) or candidate.get("status") != "approved_deferred":
+        return None
+    required = ("approved_by", "approved_at", "reason", "must_close_before")
+    if not all(_contains_required(candidate.get(key)) for key in required):
+        return None
+    if _parse_utc(candidate.get("approved_at")) is None:
+        return None
+    return candidate
 
 
 def _artifact_value(payload: dict[str, Any], key: str) -> str | None:
@@ -135,8 +170,22 @@ def _reproducible_release_evidence_errors(release: dict[str, Any] | None, releas
     return errors
 
 
-def _check(name: str, ok: bool, detail: str, **evidence: Any) -> dict[str, Any]:
-    return {"name": name, "status": "pass" if ok else "blocked", "detail": detail, "evidence": evidence}
+def _check(
+    name: str,
+    ok: bool,
+    detail: str,
+    *,
+    accepted_waiver: dict[str, Any] | None = None,
+    **evidence: Any,
+) -> dict[str, Any]:
+    status = "pass" if ok else "waived" if accepted_waiver is not None else "blocked"
+    if accepted_waiver is not None:
+        evidence["accepted_technical_debt"] = accepted_waiver
+    return {"name": name, "status": status, "detail": detail, "evidence": evidence}
+
+
+def _is_accepted_status(status: str) -> bool:
+    return status in {"pass", "waived"}
 
 
 def _filesystem_snapshot(path: Path) -> dict[str, Any]:
@@ -255,6 +304,8 @@ def initialize_runtime(policy: dict[str, Any], *, overwrite_drafts: bool = False
                 "heartbeat_max_age_minutes": policy["monitoring"]["heartbeat_max_age_minutes"],
                 "operator_status_command": policy["monitoring"]["operator_status_command"],
                 "expected_heartbeat_datasets": policy["monitoring"]["expected_heartbeat_datasets"],
+                "active_heartbeat_datasets": [],
+                "discord_monitor_state": policy["monitoring"]["discord_monitor_state_relative_path"],
                 "collector_exit_alert": "REQUIRED: operator-visible evidence",
                 "retry_rate_limit_alert": "REQUIRED: operator-visible evidence",
                 "validation_repair_alert": "REQUIRED: operator-visible evidence",
@@ -316,6 +367,90 @@ def initialize_runtime(policy: dict[str, Any], *, overwrite_drafts: bool = False
             },
         )
     return {"status": "ok", "runtime_root": str(paths["root"]), "created_at": utc_now_iso()}
+
+
+def set_active_heartbeat_datasets(policy: dict[str, Any], datasets: list[str]) -> dict[str, Any]:
+    """Declare the only scheduled writers that the monitor must keep fresh.
+
+    A one-shot B0 seed is deliberately not registered.  Calling this before a
+    long-lived service starts makes a missing heartbeat fail closed instead of
+    silently treating every historical seed as a scheduled service.
+    """
+
+    configured = {str(name) for name in policy["monitoring"].get("expected_heartbeat_datasets", [])}
+    active = sorted(dict.fromkeys(str(name).strip() for name in datasets if str(name).strip()))
+    unknown = sorted(set(active) - configured)
+    if unknown:
+        raise ValueError(f"unknown scheduled heartbeat datasets: {unknown!r}")
+
+    paths = _runtime_paths(policy)
+    path = paths["bootstrap"] / "monitoring.json"
+    evidence = _read_json(path) or {}
+    evidence.update(
+        {
+            "schema_version": SCHEMA_VERSION,
+            "status": "draft",
+            "status_reason": "Active scheduled datasets changed; record a fresh monitor cycle before enabling more writers.",
+            "observed_at": utc_now_iso(),
+            "expected_heartbeat_datasets": policy["monitoring"]["expected_heartbeat_datasets"],
+            "active_heartbeat_datasets": active,
+            "discord_monitor_state": policy["monitoring"]["discord_monitor_state_relative_path"],
+        }
+    )
+    _atomic_write_json(path, evidence)
+    return {
+        "phase": "B0",
+        "status": "ok",
+        "monitoring_evidence_path": str(path),
+        "active_heartbeat_datasets": active,
+    }
+
+
+def record_monitoring_evidence(policy: dict[str, Any]) -> dict[str, Any]:
+    """Promote factual Discord-monitor evidence only when its read-only check passes.
+
+    The persisted bootstrap summary intentionally contains status/result names
+    rather than raw exception text or webhook data.  The monitor state remains
+    the detailed operational source of truth and is checked for freshness by
+    :func:`_status` on every preflight run.
+    """
+
+    # Import lazily: b0_operational_status imports policy helpers from here.
+    from collectors.b0_operational_status import operational_status
+
+    status_payload = operational_status(policy, require_monitor_service=True)
+    if status_payload["status"] not in {"pass", "pass_with_accepted_waivers"}:
+        raise RuntimeError("refusing to record monitoring evidence while the Discord operational status is blocked")
+
+    paths = _runtime_paths(policy)
+    path = paths["bootstrap"] / "monitoring.json"
+    existing = _read_json(path) or {}
+    active = existing.get("active_heartbeat_datasets")
+    if not isinstance(active, list):
+        active = []
+    checks = {
+        str(item["name"]): str(item["status"])
+        for item in status_payload["checks"]
+        if isinstance(item, dict) and isinstance(item.get("name"), str)
+    }
+    evidence = {
+        **existing,
+        "schema_version": SCHEMA_VERSION,
+        "status": status_payload["status"],
+        "status_reason": "Discord delivery, disk/inode, heartbeat, retry, validation, RSS, and backup alert controls were checked.",
+        "observed_at": utc_now_iso(),
+        "expected_heartbeat_datasets": policy["monitoring"]["expected_heartbeat_datasets"],
+        "active_heartbeat_datasets": active,
+        "discord_monitor_state": policy["monitoring"]["discord_monitor_state_relative_path"],
+        "operational_check_statuses": checks,
+    }
+    _atomic_write_json(path, evidence)
+    return {
+        "phase": "B0",
+        "status": status_payload["status"],
+        "monitoring_evidence_path": str(path),
+        "operational_check_statuses": checks,
+    }
 
 
 def _status(policy: dict[str, Any]) -> dict[str, Any]:
@@ -419,26 +554,72 @@ def _status(policy: dict[str, Any]) -> dict[str, Any]:
     restore_path = paths["bootstrap"] / "restore_drill.json"
     restore = _read_json(restore_path)
     backup_ok = _contains_required(backup.get("destination")) and _contains_required(backup.get("retention")) and bool(restore and restore.get("status") == "pass")
-    checks.append(_check("backup_and_restore", backup_ok, "An off-host destination, retention policy, and successful restore drill are required.", path=str(restore_path)))
+    backup_waiver = None if backup_ok else accepted_technical_debt_waiver(policy, "backup_and_restore")
+    checks.append(
+        _check(
+            "backup_and_restore",
+            backup_ok,
+            "An off-host destination, retention policy, and successful restore drill are required.",
+            path=str(restore_path),
+            accepted_waiver=backup_waiver,
+        )
+    )
 
     monitoring_path = paths["bootstrap"] / "monitoring.json"
     monitoring = _read_json(monitoring_path)
-    monitoring_ok = bool(monitoring and monitoring.get("status") == "pass")
-    checks.append(_check("monitoring_and_resource_policy", monitoring_ok, "Disk/inode, heartbeat, error, retry, validation, RSS, and backup monitoring must be active.", path=str(monitoring_path)))
+    monitoring_relative = str(policy["monitoring"].get("discord_monitor_state_relative_path", "state/monitoring/discord_monitor.json"))
+    monitor_state_path = root / monitoring_relative
+    monitor_state = _read_json(monitor_state_path)
+    monitor_updated_at = None if monitor_state is None else _parse_utc(monitor_state.get("updated_at"))
+    monitor_max_age = float(policy["monitoring"].get("discord_monitor_max_age_minutes", 3))
+    monitor_fresh = bool(monitor_updated_at and (datetime.now(timezone.utc) - monitor_updated_at).total_seconds() <= monitor_max_age * 60)
+    monitor_status = None if monitor_state is None else monitor_state.get("status")
+    monitoring_ok = bool(
+        monitoring
+        and monitoring.get("status") in {"pass", "pass_with_accepted_waivers"}
+        and monitor_fresh
+        and monitor_status in {"pass", "pass_with_accepted_waivers"}
+    )
+    checks.append(
+        _check(
+            "monitoring_and_resource_policy",
+            monitoring_ok,
+            "Disk/inode, heartbeat, error, retry, validation, RSS, and backup monitoring must be active.",
+            path=str(monitoring_path),
+            monitor_state_path=str(monitor_state_path),
+            monitor_status=monitor_status,
+            monitor_updated_at=None if monitor_updated_at is None else monitor_updated_at.isoformat(),
+            monitor_max_age_minutes=monitor_max_age,
+        )
+    )
 
     clock_path = paths["bootstrap"] / "clock.json"
     clock = _read_json(clock_path)
     clock_ok = bool(clock and clock.get("status") == "pass" and clock.get("ntp_synchronized") is True)
     rollback = policy["environment"]["rollback"]
     rollback_ok = _contains_required(rollback.get("previous_approved_release")) and _contains_required(rollback.get("previous_approved_data_root"))
-    checks.append(_check("clock_environment_and_rollback", clock_ok and rollback_ok, "NTP evidence, environment identity, and an explicit single-root rollback path are required.", clock_path=str(clock_path), environment_id=policy["environment"]["id"], rollback=rollback))
+    rollback_waiver = None if rollback_ok else accepted_technical_debt_waiver(policy, "consumer_rollback")
+    checks.append(
+        _check(
+            "clock_environment_and_rollback",
+            clock_ok and rollback_ok,
+            "NTP evidence, environment identity, and an explicit single-root rollback path are required.",
+            clock_path=str(clock_path),
+            environment_id=policy["environment"]["id"],
+            rollback=rollback,
+            accepted_waiver=rollback_waiver if clock_ok else None,
+        )
+    )
+
+    accepted = all(_is_accepted_status(check["status"]) for check in checks)
+    has_waiver = any(check["status"] == "waived" for check in checks)
 
     return {
         "schema_version": SCHEMA_VERSION,
         "phase": "B0",
         "generated_at": utc_now_iso(),
         "runtime_root": str(root),
-        "status": "pass" if all(check["status"] == "pass" for check in checks) else "blocked",
+        "status": "pass_with_accepted_waivers" if accepted and has_waiver else "pass" if accepted else "blocked",
         "checks": checks,
     }
 
@@ -463,6 +644,17 @@ def build_parser() -> argparse.ArgumentParser:
     status = subparsers.add_parser("status", help="Report B0 gate status without starting any collector.")
     status.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
     status.add_argument("--strict", action="store_true", help="Document that any incomplete B0 gate returns a non-zero exit code.")
+    record_monitoring = subparsers.add_parser(
+        "record-monitoring",
+        help="Record a secret-safe B0 monitoring summary after a current Discord monitor cycle passes.",
+    )
+    record_monitoring.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
+    active = subparsers.add_parser(
+        "set-active-heartbeats",
+        help="Declare the scheduled collector heartbeat datasets before starting a long-lived writer.",
+    )
+    active.add_argument("--datasets", required=True, help="Comma-separated names from monitoring.expected_heartbeat_datasets; use an empty value to clear.")
+    active.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
     return parser
 
 
@@ -472,9 +664,16 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "init-runtime":
         _print(initialize_runtime(policy, overwrite_drafts=bool(args.overwrite_drafts)), args.json)
         return 0
+    if args.command == "record-monitoring":
+        _print(record_monitoring_evidence(policy), args.json)
+        return 0
+    if args.command == "set-active-heartbeats":
+        datasets = [item.strip() for item in args.datasets.split(",") if item.strip()]
+        _print(set_active_heartbeat_datasets(policy, datasets), args.json)
+        return 0
     payload = _status(policy)
     _print(payload, args.json)
-    return 0 if payload["status"] == "pass" else 2
+    return 0 if payload["status"] in {"pass", "pass_with_accepted_waivers"} else 2
 
 
 if __name__ == "__main__":  # pragma: no cover

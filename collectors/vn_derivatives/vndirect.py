@@ -294,6 +294,11 @@ def sync_vndirect_daily(options: VndirectDailyOptions | None = None) -> dict[str
     }
     manifest.update({k: v for k, v in payload.items() if k != "windows"})
     state.write(manifest)
+    Heartbeat("vn30f1m_vndirect").beat(
+        rows_written=total_rows_written,
+        latest_time=manifest.get("latest_time"),
+        source=VNDIRECT_SOURCE,
+    )
     release_unused_memory()
     return payload
 

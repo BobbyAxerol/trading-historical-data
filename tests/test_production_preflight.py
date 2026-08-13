@@ -7,6 +7,7 @@ import os
 import tempfile
 import unittest
 from contextlib import redirect_stdout
+from datetime import datetime, timezone
 from io import StringIO
 from pathlib import Path
 
@@ -132,6 +133,26 @@ class TestProductionPreflight(unittest.TestCase):
             if filename == "clock.json":
                 payload["ntp_synchronized"] = True
             path.write_text(json.dumps(payload))
+        monitor_state = paths["state"] / "monitoring" / "discord_monitor.json"
+        monitor_state.parent.mkdir(parents=True)
+        monitor_state.write_text(
+            json.dumps(
+                {
+                    "status": "pass",
+                    "updated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+                    "alert_categories": {
+                        name: {"status": "pass"}
+                        for name in (
+                            "collector_exit_alert",
+                            "retry_rate_limit_alert",
+                            "validation_repair_alert",
+                            "rss_alert",
+                            "backup_failure_alert",
+                        )
+                    },
+                }
+            )
+        )
         payload = production_preflight._status(policy)
         names = {check["name"]: check["status"] for check in payload["checks"]}
         self.assertEqual(names["capacity_and_concurrency"], "pass")
