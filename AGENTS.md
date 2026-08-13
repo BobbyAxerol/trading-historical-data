@@ -70,16 +70,17 @@ user.email = vugioan11022002@gmail.com
   remain running, but any shared canonical dataset must use the same
   partition/manifest locking discipline and Phase D must validate its result.
 - The initial USD-M perpetual job completed cleanly on 2026-08-13 with a
-  durable passing audit. The next owner-approved, sequential Phase D job is
-  exactly `phase-d-binance-spot-1m`, defined in
-  `configs/primus_hmd_phase_d.yml` and launched only with
-  `tools/run_phase_d_binance_spot_1m.sh`. It rebuilds BTCUSDT spot 1m data
-  from new upstream sources with one Vision worker and a streaming audit.
+  durable passing audit. The subsequent owner-approved BTCUSDT spot 1m job
+  also exited cleanly after a one-worker rebuild and streaming audit. Its raw
+  result has 16 explicitly documented Binance upstream gaps in 2018--2019;
+  do not synthesize candles for them or describe that source as strict
+  continuity-pass data. Later gaps with complete local USD-M coverage were
+  repaired under the approved proxy policy only.
 - Do not start a default-universe expansion, derived matrix, VN historical
-  batch, metrics/quarterly historical batch, repair sweep outside the literal
-  spot command, consumer cutover, old-writer retirement, destructive data
-  operation, or **any
-  Deribit command** under this approval. Each needs its own recorded gate.
+  batch, metrics/quarterly historical batch, repair sweep, consumer cutover,
+  old-writer retirement, destructive data operation, or **any Deribit
+  command** without its own recorded Phase D gate. Each source gate must name
+  the exact service, command, bounds, validation, and resulting evidence.
 
 ### Owner-approved B0 exception for this session
 

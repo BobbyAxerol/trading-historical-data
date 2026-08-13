@@ -199,13 +199,32 @@ or historical backfill was started during this work.
   `2026-08-13T16:15:00Z`, zero duplicate/OHLC/negative rows, zero continuity
   gaps, and one-minute closed-candle tail lag. Status: `pass`.
 
-#### Next sequential Phase D source — BTCUSDT spot 1m
+#### Phase D execution — BTCUSDT spot 1m
 
-- After perpetual acceptance, owner-approved scope now includes one exact
-  BTCUSDT spot service. It uses a single Vision worker and changed the spot
-  quality audit to stream one partition at a time before any full-history
-  source call. It remains raw-source-only; daily matrix work does not begin
-  until the spot result is inspected.
+- Commits `c9adf3a` and `3cf9e18` add the exact-command, one-worker service
+  and ensure that both audit and futures-proxy repair operate one partition or
+  one gap range at a time. The first run was stopped before the former
+  whole-history proxy branch could write its repair result; partition writes
+  are atomic. The resumed run reused completed archives and remained below
+  229 MiB of its 1536 MiB limit. The focused 24-test collector/entrypoint/
+  manifest suite passed before resumption.
+- The detached job exited `0` at `2026-08-13T16:35:44Z`. Its durable audit at
+  `state/audits/crypto_binance_spot_1m_BTCUSDT.json` reports 4,525,494
+  canonical rows from `2018-01-01T00:00:00Z` through
+  `2026-08-13T16:33:00Z`, with zero duplicate, OHLC-invalid, and negative
+  rows.
+- Repair rechecked each continuity gap through the configured daily Vision
+  and REST sources. It filled 2,325 later gaps only where local USD-M Futures
+  covered every minute, using the approved provenance
+  `binance_usdm_futures_proxy_gap_fill`. The 16 remaining gaps are known
+  Binance spot-provider absences in 2018--2019, before that local futures
+  coverage begins; they are listed in `BINANCE_SPOT_1M.md` and the audit.
+  No synthetic or forward-filled candles were written. Result status:
+  `pass_with_documented_source_gaps`, not a strict all-minute continuity pass.
+- No matrix, default-universe expansion, metrics/quarterly historical batch,
+  VN historical batch, or Deribit work starts from this result automatically.
+  The next Phase D source must receive its own exact-command gate and focused
+  validation first.
 
 ## Active Job: VN30F1M VNDIRECT DChart Single-Source Upgrade
 
