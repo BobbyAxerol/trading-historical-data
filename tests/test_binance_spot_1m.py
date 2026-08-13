@@ -10,7 +10,7 @@ import unittest
 
 import pandas as pd
 
-from collectors.binance_spot_1m import audit_symbol, normalize_kline_frame, read_vision_zip
+from collectors.binance_spot_1m import audit_symbol, normalize_kline_frame, proxy_fill_gaps_from_futures, read_vision_zip
 from data_loader import CryptoBinanceSpot1m
 
 
@@ -128,6 +128,24 @@ class TestBinanceSpot1m(unittest.TestCase):
         self.assertEqual(audit["rows"], 4)
         self.assertEqual(audit["gaps"], [])
         self.assertEqual(audit["duplicate_rows"], 0)
+
+    def test_proxy_gap_check_does_not_load_complete_spot_or_futures_history(self):
+        gap = {"start": "2018-01-04 03:01:00", "end": "2018-01-04 05:05:00", "minutes": "125"}
+        with patch("collectors.binance_spot_1m.load_symbol_range", return_value=pd.DataFrame()) as range_loader, patch(
+            "collectors.binance_spot_1m.load_symbol_frame", side_effect=AssertionError("must not load all partitions")
+        ):
+            rows = proxy_fill_gaps_from_futures(
+                symbol="BTCUSDT",
+                spot_store=object(),
+                futures_store=object(),
+                manifest=object(),
+                gaps=[gap],
+                max_gap_minutes=10080,
+                context_hours=6,
+                logger=__import__("logging").getLogger("test"),
+            )
+        self.assertEqual(rows, 0)
+        self.assertEqual(range_loader.call_count, 1)
 
 
 if __name__ == "__main__":

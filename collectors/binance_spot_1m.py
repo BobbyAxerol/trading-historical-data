@@ -601,6 +601,77 @@ def load_symbol_frame(store: PartitionedCsvGzStore, symbol: str, *, usecols: lis
     return df
 
 
+def _range_partition_paths(
+    store: PartitionedCsvGzStore,
+    symbol: str,
+    *,
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+) -> list[Path]:
+    """Return only month partitions that can overlap a requested UTC range."""
+
+    start = pd.Timestamp(start)
+    end = pd.Timestamp(end)
+    if start.tzinfo is not None:
+        start = start.tz_convert(None)
+    if end.tzinfo is not None:
+        end = end.tz_convert(None)
+    if end < start:
+        return []
+
+    paths: list[Path] = []
+    for month in pd.period_range(start.to_period("M"), end.to_period("M"), freq="M"):
+        directory = store.root / f"symbol={symbol}" / f"year={month.year:04d}" / f"month={month.month:02d}"
+        parquet = directory / "part.parquet"
+        csv = directory / "part.csv.gz"
+        if parquet.exists():
+            paths.append(parquet)
+        elif csv.exists():
+            paths.append(csv)
+    return paths
+
+
+def load_symbol_range(
+    store: PartitionedCsvGzStore,
+    symbol: str,
+    *,
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+    usecols: list[str] | None = None,
+) -> pd.DataFrame:
+    """Load only a short interval, never an entire symbol history for a gap."""
+
+    start = pd.Timestamp(start)
+    end = pd.Timestamp(end)
+    if start.tzinfo is not None:
+        start = start.tz_convert(None)
+    if end.tzinfo is not None:
+        end = end.tz_convert(None)
+    frames: list[pd.DataFrame] = []
+    for path in _range_partition_paths(store, symbol, start=start, end=end):
+        try:
+            frame = read_partition_file(path, usecols=usecols)
+        except ValueError:
+            frame = read_partition_file(path)
+        except Exception:
+            continue
+        if "time" not in frame.columns:
+            del frame
+            release_unused_memory()
+            continue
+        frame["time"] = pd.to_datetime(frame["time"], errors="coerce")
+        frame = frame.dropna(subset=["time"])
+        frame = frame[(frame["time"] >= start) & (frame["time"] <= end)].copy()
+        if frame.empty:
+            del frame
+            release_unused_memory()
+            continue
+        frames.append(frame)
+    if not frames:
+        return pd.DataFrame()
+    return pd.concat(frames, ignore_index=True)
+
+
 def _median_scale(
     spot: pd.DataFrame,
     futures: pd.DataFrame,
@@ -664,16 +735,6 @@ def proxy_fill_gaps_from_futures(
     logger,
 ) -> int:
     rows_written = 0
-    spot_context_all = load_symbol_frame(
-        spot_store,
-        symbol,
-        usecols=["time", "volume", "quote_volume", "number_of_trades", "taker_buy_base_volume", "taker_buy_quote_volume"],
-    )
-    futures_all = load_symbol_frame(futures_store, symbol, usecols=OUTPUT_COLUMNS)
-    if futures_all.empty:
-        logger.warning("%s skip futures proxy fill: no local futures data", symbol)
-        return 0
-
     for gap in gaps:
         minutes = int(gap.get("minutes") or 0)
         if minutes <= 0 or minutes > max_gap_minutes:
@@ -682,15 +743,26 @@ def proxy_fill_gaps_from_futures(
         end = pd.Timestamp(gap["end"]).tz_localize(None)
         expected_times = pd.date_range(start, end, freq="min")
 
-        futures_df = futures_all[(futures_all["time"] >= start) & (futures_all["time"] <= end)].copy()
-        if len(futures_df) != len(expected_times) or set(futures_df["time"]) != set(expected_times):
+        # A historical spot gap must not load multi-million-row spot/futures
+        # tables merely to decide whether a short futures proxy is available.
+        # Read only the gap month(s) and its small scaling context instead.
+        futures_df = load_symbol_range(futures_store, symbol, start=start, end=end, usecols=OUTPUT_COLUMNS)
+        if "time" not in futures_df.columns or len(futures_df) != len(expected_times) or set(futures_df["time"]) != set(expected_times):
             logger.info("%s skip futures proxy gap %s -> %s: futures coverage %s/%s", symbol, start, end, len(futures_df), len(expected_times))
+            del futures_df
+            release_unused_memory()
             continue
 
         context_start = start - pd.Timedelta(int(context_hours), unit="h")
         context_end = end + pd.Timedelta(int(context_hours), unit="h")
-        spot_context = spot_context_all[(spot_context_all["time"] >= context_start) & (spot_context_all["time"] <= context_end)].copy()
-        futures_context = futures_all[(futures_all["time"] >= context_start) & (futures_all["time"] <= context_end)].copy()
+        spot_context = load_symbol_range(
+            spot_store,
+            symbol,
+            start=context_start,
+            end=context_end,
+            usecols=["time", "volume", "quote_volume", "number_of_trades", "taker_buy_base_volume", "taker_buy_quote_volume"],
+        )
+        futures_context = load_symbol_range(futures_store, symbol, start=context_start, end=context_end, usecols=OUTPUT_COLUMNS)
         proxy = _build_futures_proxy_rows(
             symbol=symbol,
             futures_df=futures_df,
@@ -698,6 +770,8 @@ def proxy_fill_gaps_from_futures(
             futures_context=futures_context,
         )
         if proxy.empty:
+            del futures_df, spot_context, futures_context, proxy
+            release_unused_memory()
             continue
         result = _append(spot_store, proxy, symbol)
         written = int(result.get("rows_written") or 0)
@@ -712,6 +786,8 @@ def proxy_fill_gaps_from_futures(
             last_error=None,
         )
         logger.info("%s futures proxy filled rows=%s gap=%s -> %s", symbol, written, start, end)
+        del futures_df, spot_context, futures_context, proxy
+        release_unused_memory()
     return rows_written
 
 
