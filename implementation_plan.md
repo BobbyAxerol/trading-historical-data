@@ -43,10 +43,13 @@ Completed evidence:
   `dbfac6a45518d1a439d5ce8e26cc8cd9e8e730e2d1c0911b018d2ecfd5ee0130`.
 - Pinned the Linux/amd64 Python base manifest to
   `sha256:d657ab0ade19f404a6ccc883ab399540de667aff751748ce23c07330c5a89e64`.
-  Shared image and a second `--no-cache` image both built successfully and each
-  passed the same 15 focused preflight/parquet-loader tests. The differing local
-  image IDs are expected build timestamp/provenance metadata, not dependency
-  resolution drift.
+  At commit `7c9d17bac30772bab0a2872414bd8969d407fdb7`, the shared image
+  `sha256:deab1bf20c1d7ee6c01761f907dee72d7c11ab0cf6df3c7d13e4a69eeb4e6a79`
+  and a `--no-cache` image
+  `sha256:0a0e51ab12c9fadf8a89ec76fbd680b12001cf70197f1cc0ad4e8d261b7f20b8`
+  both passed the same 29 focused B0/Deribit/preflight/parquet-loader tests.
+  The differing image IDs are expected build timestamp/provenance metadata, not
+  dependency resolution drift.
 - Resolved Compose using the protected mode-0600 host deployment file. An
   inspection-only container was observed in `created` state, never started,
   with entrypoint gate, user `1000:1000`, and exactly the storage/state/logs
@@ -78,6 +81,14 @@ Completed evidence:
   dataset contract. Public loader enforcement remains a Phase C package
   acceptance change per the runbook; the runtime manifest stays draft until a
   package tag/wheel and final dataset layout declarations are accepted.
+- B0.2 capacity evidence was refreshed after image builds: ext4 mount options
+  are `rw,relatime,discard,errors=remount-ro`, with 600.76 GiB free and
+  82,193,707 free inodes. After the 35 GiB OS/state-log/Docker reserve, 565.76
+  GiB remains for collectors; the known Deribit 9 GiB canonical plus 20 GiB
+  staging/repair requirement fits. Capacity report SHA-256:
+  `36e3beb9916c6e90c378c86f183d372a3dd8fe44dc5ccf1c19fa8f424af5142b`.
+  It remains draft because the other three enabled dataset families have no
+  bounded-seed measurements and no owner approval exists.
 
 Current B0 blockers (not bypassed): capacity/concurrency requires bounded-seed
 measurements plus approval; release/storage manifest is not accepted until a
