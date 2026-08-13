@@ -23,6 +23,18 @@ and time/environment isolation.
 
 Status: in progress; collector and backfill remain blocked.
 
+#### Staged BTCUSDT writer scope correction (in verification)
+
+- The first staged `crypto-1m-live` invocation used the collector's configured
+  default symbol list. It was stopped immediately after the BTCUSDT tail
+  completed one successful cycle (126 rows through 2026-08-13T12:30:00Z).
+  ETHUSDT, SOLUSDT, BNBUSDT, and DOGEUSDT were rejected before writing because
+  their new-VPS runtimes were empty.
+- The replacement deployment must require the literal `--symbols BTCUSDT`
+  argument in both Compose and the image entrypoint. It is not permitted to
+  restart until rebuilt-image, isolated test, Compose inspection, heartbeat,
+  and reader-parity evidence are refreshed.
+
 Completed evidence:
 
 - Verified the immutable bootstrap reference

@@ -10,7 +10,15 @@ from collectors.production_preflight import REPO_ROOT
 
 
 ENTRYPOINT = REPO_ROOT / "docker" / "entrypoint.sh"
-STAGED_CRYPTO_COMMAND = ["python", "-m", "collectors.crypto_1m", "--mode", "live"]
+STAGED_CRYPTO_COMMAND = [
+    "python",
+    "-m",
+    "collectors.crypto_1m",
+    "--mode",
+    "live",
+    "--symbols",
+    "BTCUSDT",
+]
 
 
 class TestCollectorEntrypoint(unittest.TestCase):
@@ -43,7 +51,29 @@ class TestCollectorEntrypoint(unittest.TestCase):
         approved = {"PRIMUS_HMD_STAGED_CRYPTO_1M_APPROVED": "approved"}
         permitted = self.run_entrypoint(*STAGED_CRYPTO_COMMAND, environment=approved)
         self.assertEqual(permitted.returncode, 0)
-        self.assertEqual(permitted.stdout, "fake-python:-m collectors.crypto_1m --mode live\n")
+        self.assertEqual(permitted.stdout, "fake-python:-m collectors.crypto_1m --mode live --symbols BTCUSDT\n")
+
+        missing_symbol_scope = self.run_entrypoint(
+            "python",
+            "-m",
+            "collectors.crypto_1m",
+            "--mode",
+            "live",
+            environment=approved,
+        )
+        self.assertEqual(missing_symbol_scope.returncode, 64)
+
+        wrong_symbol_scope = self.run_entrypoint(
+            "python",
+            "-m",
+            "collectors.crypto_1m",
+            "--mode",
+            "live",
+            "--symbols",
+            "ETHUSDT",
+            environment=approved,
+        )
+        self.assertEqual(wrong_symbol_scope.returncode, 64)
 
         wrong_module = self.run_entrypoint(
             "python",

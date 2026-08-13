@@ -67,7 +67,9 @@ services:
 
   crypto-1m-live:
     <<: *get-data-service
-    command: ["python", "-m", "collectors.crypto_1m", "--mode", "live"]
+    # Do not rely on the collector's multi-symbol default here.  This is the
+    # one owner-approved B0 tail writer and it is deliberately BTCUSDT-only.
+    command: ["python", "-m", "collectors.crypto_1m", "--mode", "live", "--symbols", "BTCUSDT"]
     environment:
       <<: *collector-gate-environment
       # This approval is intentionally injected into this one staged service

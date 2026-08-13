@@ -34,6 +34,19 @@ b0_seed_approval:
   approved_at: "2026-08-13T08:45:00+00:00"
   scope: "Sequential bounded new-VPS seed writes only; no old-VPS data import and no broad concurrent backfill."
 
+# Audit record for the one post-B0 writer approved in this session.  Compose
+# and the image entrypoint enforce the same literal command; this record does
+# not approve any default-symbol expansion, other service, backfill, or
+# consumer cutover.
+staged_crypto_1m_approval:
+  status: approved
+  approved_by: BobbyAxerol
+  approved_at: "2026-08-13T08:45:00+00:00"
+  service: crypto-1m-live
+  dataset_id: crypto_binance_futures_1m
+  command: ["python", "-m", "collectors.crypto_1m", "--mode", "live", "--symbols", "BTCUSDT"]
+  scope: "Single BTCUSDT 1m Binance futures tail writer only; no default-symbol expansion, no other collector, no broad historical backfill, and no consumer cutover."
+
 runtime:
   root: /srv/primus/historical-market-data
   source_checkout: /srv/primus/src/historical-market-data

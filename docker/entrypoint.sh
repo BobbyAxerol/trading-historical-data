@@ -14,7 +14,9 @@ if [ "${PRIMUS_HMD_STAGED_CRYPTO_1M_APPROVED:-}" = "approved" ] \
   && [ "${3:-}" = "collectors.crypto_1m" ] \
   && [ "${4:-}" = "--mode" ] \
   && [ "${5:-}" = "live" ] \
-  && [ "$#" -eq 5 ]; then
+  && [ "${6:-}" = "--symbols" ] \
+  && [ "${7:-}" = "BTCUSDT" ] \
+  && [ "$#" -eq 7 ]; then
   exec "$@"
 fi
 

@@ -49,10 +49,11 @@ Every collector image enters through `docker/entrypoint.sh`. It exits before
 executing a command by default. There is no blanket
 `PRIMUS_HMD_B0_APPROVED` flag: the protected host deployment file can supply
 `PRIMUS_HMD_STAGED_CRYPTO_1M_APPROVED=approved` only to `crypto-1m-live`, and
-the entrypoint then accepts only the exact `collectors.crypto_1m --mode live`
-command. This is a narrowly staged B0 permission, not a consumer cutover or
-approval for any other collector. The guard is defense-in-depth, not evidence
-that B0 has passed.
+the entrypoint then accepts only the exact
+`collectors.crypto_1m --mode live --symbols BTCUSDT` command. This is a
+narrowly staged B0 permission, not a consumer cutover or approval for any
+other collector. The guard is defense-in-depth, not evidence that B0 has
+passed.
 Collector services use the `collectors` profile, so a bare `docker compose up`
 does not start a writer.
 

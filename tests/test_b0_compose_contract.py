@@ -29,6 +29,10 @@ class TestB0ComposeContract(unittest.TestCase):
             crypto_environment["PRIMUS_HMD_STAGED_CRYPTO_1M_APPROVED"],
             "${PRIMUS_HMD_STAGED_CRYPTO_1M_APPROVED:-}",
         )
+        self.assertEqual(
+            services["crypto-1m-live"]["command"],
+            ["python", "-m", "collectors.crypto_1m", "--mode", "live", "--symbols", "BTCUSDT"],
+        )
         for service_name, service in services.items():
             if service_name == "crypto-1m-live":
                 continue
