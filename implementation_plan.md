@@ -35,6 +35,22 @@ Status: in progress; collector and backfill remain blocked.
   restart until rebuilt-image, isolated test, Compose inspection, heartbeat,
   and reader-parity evidence are refreshed.
 
+#### 2026-08-13 UTC — owner-approved non-Deribit tail expansion
+
+- Owner approved the seven B0-seeded live tails only: BTCUSDT futures/spot,
+  BTCUSDT_260925 quarterly, BTCUSDT metrics/orderbook, FPT daily, and
+  VN30F1M VNDIRECT daily. The runtime command contracts disable archive
+  discovery/sync, default universe expansion, repair, broad historical work,
+  and derived matrix work; Deribit remains off.
+- Each service has its own protected approval variable and immutable
+  entrypoint command. First cycles must be started and observed sequentially;
+  a service with an error heartbeat is stopped and isolated rather than being
+  retried by enabling another service.
+- The resident-tail profile is bounded to seven services at 0.5 CPU, 512 MiB,
+  and 128 PIDs each. `b0_seed_evidence --activate-staged-tails` records that
+  profile only after the fixed B0 seed evidence passes; it does not start a
+  writer and retains the prohibition on every heavy historical job.
+
 Completed evidence:
 
 - Verified the immutable bootstrap reference

@@ -33,6 +33,7 @@ SEED_GROUPS = {
     "binance_metrics_orderbook": ("binance_metrics_5m", "binance_orderbook_1h"),
     "vn_daily_derivatives": ("vn_equity_daily", "vn30f1m_vndirect_daily"),
 }
+STAGED_TAIL_APPROVAL_KEY = "staged_non_deribit_tail_approval"
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -379,12 +380,99 @@ def finalize_bounded_seed(policy: dict[str, Any]) -> dict[str, Any]:
     return evidence
 
 
+def activate_staged_tail_capacity(policy: dict[str, Any]) -> dict[str, Any]:
+    """Record the narrowly approved resident-tail capacity profile.
+
+    This does not start a writer or relax the historical-job policy.  It is
+    available only after the fixed B0 seed has passed and records the exact
+    service list/configured resource ceilings that an operator must use for
+    sequential first-cycle activation.
+    """
+
+    runtime = _runtime_paths(policy)
+    approval = policy.get(STAGED_TAIL_APPROVAL_KEY)
+    if not isinstance(approval, dict) or approval.get("status") != "approved":
+        raise RuntimeError("staged non-Deribit tail approval is absent or not approved")
+    services = approval.get("services")
+    profile = approval.get("runtime_profile")
+    if not isinstance(services, dict) or not services:
+        raise RuntimeError("staged non-Deribit tail approval has no services")
+    if not isinstance(profile, dict):
+        raise RuntimeError("staged non-Deribit tail approval has no runtime profile")
+    if profile.get("first_cycles") != "sequential" or profile.get("heavy_historical_jobs") != "prohibited":
+        raise RuntimeError("staged tail profile must retain sequential first cycles and prohibit heavy historical jobs")
+    if int(profile.get("max_resident_tail_services") or 0) != len(services):
+        raise RuntimeError("staged tail profile resident-service limit does not match the approved service list")
+
+    capacity_path = runtime["bootstrap"] / "capacity_report.json"
+    capacity = _read_json(capacity_path)
+    seed_evidence = _read_json(_evidence_path(runtime))
+    capacity_approval = capacity.get("approval") if isinstance(capacity.get("approval"), dict) else {}
+    if capacity.get("status") != "pass" or capacity_approval.get("status") != "approved" or seed_evidence.get("status") != "pass":
+        raise RuntimeError("bounded B0 seed capacity evidence must pass before staged tails are activated")
+
+    ordered_services = sorted(str(name) for name in services)
+    dataset_ids = sorted(
+        str(item.get("dataset_id"))
+        for item in services.values()
+        if isinstance(item, dict) and isinstance(item.get("dataset_id"), str)
+    )
+    activated_at = utc_now_iso()
+    activation = {
+        "status": "approved",
+        "activated_at": activated_at,
+        "approved_by": approval.get("approved_by"),
+        "approved_at": approval.get("approved_at"),
+        "services": ordered_services,
+        "dataset_ids": dataset_ids,
+        "runtime_profile": profile,
+        "scope": approval.get("scope"),
+        "runtime_snapshot": _runtime_snapshot(runtime),
+    }
+    capacity.update(
+        {
+            "status": "pass",
+            "status_reason": "Measured B0 seed supports only the owner-approved bounded non-Deribit resident tails; first cycles are sequential and heavy historical jobs remain prohibited.",
+            "approval": {
+                **capacity_approval,
+                "status": "approved",
+                "scope": "B0 bounded seed plus the explicitly approved B0-seeded non-Deribit tail profile only",
+                "staged_tail_approval": {
+                    "approved_by": approval.get("approved_by"),
+                    "approved_at": approval.get("approved_at"),
+                    "service_count": len(ordered_services),
+                },
+            },
+            "staged_tail_activation": activation,
+        }
+    )
+    _atomic_write_json(capacity_path, capacity)
+    return {
+        "phase": "B0",
+        "status": "pass",
+        "capacity_report": str(capacity_path),
+        "staged_tail_activation": activation,
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Inspect B0 bounded-seed evidence without contacting a source.")
     parser.add_argument("--policy", type=Path, default=POLICY_PATH)
     parser.add_argument("--json", action="store_true")
+    parser.add_argument(
+        "--activate-staged-tails",
+        action="store_true",
+        help="Record the approved bounded non-Deribit tail capacity profile; never starts a writer.",
+    )
     args = parser.parse_args(argv)
     policy = _load_policy(args.policy)
+    if args.activate_staged_tails:
+        payload = activate_staged_tail_capacity(policy)
+        if args.json:
+            print(json.dumps(payload, indent=2, sort_keys=True))
+        else:
+            print(f"B0 staged tail capacity: {payload['status']}")
+        return 0
     payload = _read_json(_evidence_path(_runtime_paths(policy)))
     if args.json:
         print(json.dumps(payload, indent=2, sort_keys=True))

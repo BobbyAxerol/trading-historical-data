@@ -34,18 +34,45 @@ b0_seed_approval:
   approved_at: "2026-08-13T08:45:00+00:00"
   scope: "Sequential bounded new-VPS seed writes only; no old-VPS data import and no broad concurrent backfill."
 
-# Audit record for the one post-B0 writer approved in this session.  Compose
-# and the image entrypoint enforce the same literal command; this record does
-# not approve any default-symbol expansion, other service, backfill, or
-# consumer cutover.
-staged_crypto_1m_approval:
+# Audit record for the post-B0 tail writers approved in this session. Compose
+# and the image entrypoint enforce each literal command independently; this is
+# not a blanket approval, default-symbol expansion, archive/repair job, broad
+# backfill, or consumer cutover.
+staged_non_deribit_tail_approval:
   status: approved
   approved_by: BobbyAxerol
-  approved_at: "2026-08-13T08:45:00+00:00"
-  service: crypto-1m-live
-  dataset_id: crypto_binance_futures_1m
-  command: ["python", "-m", "collectors.crypto_1m", "--mode", "live", "--symbols", "BTCUSDT"]
-  scope: "Single BTCUSDT 1m Binance futures tail writer only; no default-symbol expansion, no other collector, no broad historical backfill, and no consumer cutover."
+  approved_at: "2026-08-13T13:17:33+00:00"
+  scope: "Only the seven B0-seeded non-Deribit tails below. First cycles are started and checked sequentially; no archive discovery, archive sync, repair, default-universe expansion, broad historical backfill, consumer cutover, or Deribit call is approved."
+  runtime_profile:
+    first_cycles: sequential
+    max_resident_tail_services: 7
+    per_service_limits:
+      cpus: 0.5
+      memory_mib: 512
+      pids: 128
+    heavy_historical_jobs: prohibited
+  services:
+    crypto-1m-live:
+      dataset_id: crypto_binance_futures_1m
+      command: ["python", "-m", "collectors.crypto_1m", "--mode", "live", "--symbols", "BTCUSDT"]
+    binance-usdm-quarterly-1m:
+      dataset_id: crypto_binance_usdm_quarterly_1m
+      command: ["python", "-m", "collectors.binance_usdm_quarterly_1m", "--mode", "live", "--pairs", "BTCUSDT", "--symbols", "BTCUSDT_260925", "--no-archive-discovery", "--no-monthly", "--no-daily", "--sleep", "21600"]
+    binance-spot-1m:
+      dataset_id: crypto_binance_spot_1m
+      command: ["python", "-m", "collectors.binance_spot_1m", "--mode", "live", "--symbols", "BTCUSDT", "--no-monthly", "--no-daily", "--no-validate", "--sleep", "75"]
+    binance-orderbook-snapshot-1h:
+      dataset_id: crypto_binance_orderbook_snapshot_1h
+      command: ["python", "-m", "collectors.binance_orderbook_snapshot_1h", "--mode", "live", "--symbols", "BTCUSDT", "--no-vision", "--no-validate", "--sleep", "3600"]
+    binance-futures-metrics-5m:
+      dataset_id: crypto_binance_futures_metrics_5m
+      command: ["python", "-m", "collectors.binance_futures_metrics_5m", "--mode", "live", "--symbols", "BTCUSDT", "--no-legacy", "--no-vision", "--rest-tail-days", "1", "--rest-overlap-hours", "1", "--no-validate", "--sleep", "21600"]
+    vn-daily:
+      dataset_id: vn_equity_1d
+      command: ["python", "-m", "collectors.vn_daily", "--mode", "live", "--symbols", "FPT", "--schedule", "16:30", "--skip-derived"]
+    vn30f1m-vndirect:
+      dataset_id: vn30f1m_vndirect
+      command: ["python", "-m", "collectors.vn_derivatives", "sync-vndirect", "--resolution", "1d", "--mode", "live", "--schedule", "16:30", "--overlap-days", "14"]
 
 runtime:
   root: /srv/primus/historical-market-data

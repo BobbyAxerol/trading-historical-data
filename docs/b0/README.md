@@ -47,15 +47,24 @@ Its multi-architecture index digest is
 
 Every collector image enters through `docker/entrypoint.sh`. It exits before
 executing a command by default. There is no blanket
-`PRIMUS_HMD_B0_APPROVED` flag: the protected host deployment file can supply
-`PRIMUS_HMD_STAGED_CRYPTO_1M_APPROVED=approved` only to `crypto-1m-live`, and
-the entrypoint then accepts only the exact
-`collectors.crypto_1m --mode live --symbols BTCUSDT` command. This is a
-narrowly staged B0 permission, not a consumer cutover or approval for any
-other collector. The guard is defense-in-depth, not evidence that B0 has
-passed.
+`PRIMUS_HMD_B0_APPROVED` flag: the protected host deployment file can supply a
+distinct service-scoped approval to each of the seven owner-approved,
+B0-seeded non-Deribit tails. The entrypoint accepts only the literal
+commands declared in `configs/primus_hmd_b0.yml`: BTCUSDT futures/spot,
+BTCUSDT_260925 quarterly, BTCUSDT metrics/orderbook, FPT daily, and VN30F1M
+VNDIRECT daily. Their commands suppress default symbol expansion, historical
+archive sync, repair, and derived matrix work. No flag is shared between
+services; no other collector, broad backfill, consumer cutover, or Deribit call
+is approved. The guard is defense-in-depth, not evidence that B0 has passed.
 Collector services use the `collectors` profile, so a bare `docker compose up`
 does not start a writer.
+
+After the fixed B0 seed has passed, an operator may run
+`python -m collectors.b0_seed_evidence --activate-staged-tails` in a
+network-disabled, runtime-mounted image to record the approved resident-tail
+profile. It does not start a collector. The profile permits only the seven
+service-scoped tails, requires sequential first cycles, caps each at 0.5 CPU,
+512 MiB, and 128 PIDs, and continues to prohibit every heavy historical job.
 
 ## Owner-approved bounded seed exception
 

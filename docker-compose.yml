@@ -67,8 +67,12 @@ services:
 
   crypto-1m-live:
     <<: *get-data-service
-    # Do not rely on the collector's multi-symbol default here.  This is the
-    # one owner-approved B0 tail writer and it is deliberately BTCUSDT-only.
+    # Do not rely on the collector's multi-symbol default here.  Each staged
+    # service below is an owner-approved, B0-seeded tail only. B0 observed
+    # a 136 MiB peak for this family; 512 MiB keeps bounded tail headroom.
+    pids_limit: 128
+    cpus: 0.50
+    mem_limit: 512m
     command: ["python", "-m", "collectors.crypto_1m", "--mode", "live", "--symbols", "BTCUSDT"]
     environment:
       <<: *collector-gate-environment
@@ -82,9 +86,15 @@ services:
 
   binance-usdm-quarterly-1m:
     <<: *get-data-service
-    command: ["python", "-m", "collectors.binance_usdm_quarterly_1m", "--mode", "live"]
+    # Explicit current contract and REST tail only: no archive listing or
+    # historical Vision monthly/daily download.
+    pids_limit: 128
+    cpus: 0.50
+    mem_limit: 512m
+    command: ["python", "-m", "collectors.binance_usdm_quarterly_1m", "--mode", "live", "--pairs", "BTCUSDT", "--symbols", "BTCUSDT_260925", "--no-archive-discovery", "--no-monthly", "--no-daily", "--sleep", "21600"]
     environment:
       <<: *collector-gate-environment
+      PRIMUS_HMD_STAGED_BINANCE_USDM_QUARTERLY_1M_APPROVED: ${PRIMUS_HMD_STAGED_BINANCE_USDM_QUARTERLY_1M_APPROVED:-}
       TZ: UTC
       DATA_ROOT: /app/storage
       STATE_ROOT: /app/state
@@ -92,9 +102,15 @@ services:
 
   binance-spot-1m:
     <<: *get-data-service
-    command: ["python", "-m", "collectors.binance_spot_1m", "--mode", "live", "--repair-gaps"]
+    # REST tail only; archive sync, broad gap repair, and full-history audit
+    # remain separate approved jobs.
+    pids_limit: 128
+    cpus: 0.50
+    mem_limit: 512m
+    command: ["python", "-m", "collectors.binance_spot_1m", "--mode", "live", "--symbols", "BTCUSDT", "--no-monthly", "--no-daily", "--no-validate", "--sleep", "75"]
     environment:
       <<: *collector-gate-environment
+      PRIMUS_HMD_STAGED_BINANCE_SPOT_1M_APPROVED: ${PRIMUS_HMD_STAGED_BINANCE_SPOT_1M_APPROVED:-}
       TZ: UTC
       DATA_ROOT: /app/storage
       STATE_ROOT: /app/state
@@ -102,9 +118,14 @@ services:
 
   binance-orderbook-snapshot-1h:
     <<: *get-data-service
-    command: ["python", "-m", "collectors.binance_orderbook_snapshot_1h", "--mode", "live"]
+    # One current REST snapshot per hour; do not fill the Vision lookback.
+    pids_limit: 128
+    cpus: 0.50
+    mem_limit: 512m
+    command: ["python", "-m", "collectors.binance_orderbook_snapshot_1h", "--mode", "live", "--symbols", "BTCUSDT", "--no-vision", "--no-validate", "--sleep", "3600"]
     environment:
       <<: *collector-gate-environment
+      PRIMUS_HMD_STAGED_BINANCE_ORDERBOOK_SNAPSHOT_1H_APPROVED: ${PRIMUS_HMD_STAGED_BINANCE_ORDERBOOK_SNAPSHOT_1H_APPROVED:-}
       TZ: UTC
       DATA_ROOT: /app/storage
       STATE_ROOT: /app/state
@@ -112,9 +133,15 @@ services:
 
   binance-futures-metrics-5m:
     <<: *get-data-service
-    command: ["python", "-m", "collectors.binance_futures_metrics_5m", "--mode", "live"]
+    # Bounded REST tail for the B0-seeded BTCUSDT perpetual only.  Archive,
+    # legacy import, and full-history audit stay disabled.
+    pids_limit: 128
+    cpus: 0.50
+    mem_limit: 512m
+    command: ["python", "-m", "collectors.binance_futures_metrics_5m", "--mode", "live", "--symbols", "BTCUSDT", "--no-legacy", "--no-vision", "--rest-tail-days", "1", "--rest-overlap-hours", "1", "--no-validate", "--sleep", "21600"]
     environment:
       <<: *collector-gate-environment
+      PRIMUS_HMD_STAGED_BINANCE_FUTURES_METRICS_5M_APPROVED: ${PRIMUS_HMD_STAGED_BINANCE_FUTURES_METRICS_5M_APPROVED:-}
       TZ: UTC
       DATA_ROOT: /app/storage
       STATE_ROOT: /app/state
@@ -122,9 +149,15 @@ services:
 
   vn-daily:
     <<: *get-data-service
-    command: ["python", "-m", "collectors.vn_daily", "--mode", "live", "--schedule", "16:30"]
+    # B0-seeded FPT tail only; the 272-symbol universe and derived matrix are
+    # intentionally not started by this staged service.
+    pids_limit: 128
+    cpus: 0.50
+    mem_limit: 512m
+    command: ["python", "-m", "collectors.vn_daily", "--mode", "live", "--symbols", "FPT", "--schedule", "16:30", "--skip-derived"]
     environment:
       <<: *collector-gate-environment
+      PRIMUS_HMD_STAGED_VN_DAILY_APPROVED: ${PRIMUS_HMD_STAGED_VN_DAILY_APPROVED:-}
       TZ: Asia/Ho_Chi_Minh
       DATA_ROOT: /app/storage
       STATE_ROOT: /app/state
@@ -166,9 +199,15 @@ services:
 
   vn30f1m-vndirect:
     <<: *get-data-service
-    command: ["python", "-m", "collectors.vn_derivatives", "sync-vndirect", "--resolution", "1d", "--mode", "live", "--schedule", "16:30", "--update-matrix"]
+    # Retained daily tail only.  Matrix rebuild is a separate derived-data
+    # operation and full contract backfill remains disabled.
+    pids_limit: 128
+    cpus: 0.50
+    mem_limit: 512m
+    command: ["python", "-m", "collectors.vn_derivatives", "sync-vndirect", "--resolution", "1d", "--mode", "live", "--schedule", "16:30", "--overlap-days", "14"]
     environment:
       <<: *collector-gate-environment
+      PRIMUS_HMD_STAGED_VN30F1M_VNDIRECT_APPROVED: ${PRIMUS_HMD_STAGED_VN30F1M_VNDIRECT_APPROVED:-}
       TZ: Asia/Ho_Chi_Minh
       DATA_ROOT: /app/storage
       STATE_ROOT: /app/state

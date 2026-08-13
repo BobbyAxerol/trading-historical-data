@@ -60,6 +60,24 @@ class TestB0SeedEvidence(unittest.TestCase):
         self.assertEqual(capacity["status"], "pass")
         self.assertEqual(capacity["approval"]["scope"], "B0 bounded seed and staged single-writer operation only")
 
+    def test_staged_tail_activation_requires_bounded_seed_then_records_exact_profile(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "bounded B0 seed capacity evidence"):
+            b0_seed_evidence.activate_staged_tail_capacity(self.policy)
+
+        b0_seed_evidence.start_bounded_seed(self.policy, plan={"unit": True})
+        path = self.root / b0_seed_evidence.EVIDENCE_RELATIVE_PATH
+        evidence = json.loads(path.read_text())
+        evidence["steps"] = {seed_id: {"seed_id": seed_id, "status": "pass", "runtime_delta_bytes": {}, "heartbeat": {}} for seed_id in b0_seed_evidence.SEED_IDS}
+        path.write_text(json.dumps(evidence))
+        b0_seed_evidence.finalize_bounded_seed(self.policy)
+
+        result = b0_seed_evidence.activate_staged_tail_capacity(self.policy)
+        self.assertEqual(result["status"], "pass")
+        self.assertEqual(result["staged_tail_activation"]["services"], sorted(self.policy["staged_non_deribit_tail_approval"]["services"]))
+        capacity = json.loads((self.root / "state" / "bootstrap" / "capacity_report.json").read_text())
+        self.assertEqual(capacity["approval"]["staged_tail_approval"]["service_count"], 7)
+        self.assertEqual(capacity["staged_tail_activation"]["runtime_profile"]["heavy_historical_jobs"], "prohibited")
+
 
 if __name__ == "__main__":
     unittest.main()
