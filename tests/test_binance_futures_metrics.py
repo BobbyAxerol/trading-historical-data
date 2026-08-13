@@ -65,6 +65,26 @@ class TestBinanceFuturesMetrics(unittest.TestCase):
         self.assertAlmostEqual(df.loc[0, "sum_open_interest"], 103887.929)
         self.assertAlmostEqual(df.loc[0, "count_long_short_ratio"], 1.26964914)
 
+    def test_normalize_metrics_coalesces_duplicate_bucket_without_inventing_values(self):
+        raw = pd.DataFrame(
+            {
+                "create_time": ["2026-07-11 00:05:01", "2026-07-11 00:09:59"],
+                "sum_open_interest": [100.0, 101.0],
+                "sum_open_interest_value": [200.0, 201.0],
+                "count_toptrader_long_short_ratio": [1.2, pd.NA],
+                "sum_toptrader_long_short_ratio": [1.3, pd.NA],
+                "count_long_short_ratio": [1.4, 1.5],
+                "sum_taker_long_short_vol_ratio": [1.6, 1.7],
+            }
+        )
+
+        df = normalize_metrics_frame(raw, symbol="BTCUSDT", contract_type="PERPETUAL", source="test")
+
+        self.assertEqual(len(df), 1)
+        self.assertAlmostEqual(df.loc[0, "count_toptrader_long_short_ratio"], 1.2)
+        self.assertAlmostEqual(df.loc[0, "sum_toptrader_long_short_ratio"], 1.3)
+        self.assertAlmostEqual(df.loc[0, "sum_open_interest"], 101.0)
+
     def test_date_from_key_supports_quarterly_symbols(self):
         key = "data/futures/um/daily/metrics/BTCUSDT_260925/BTCUSDT_260925-metrics-2026-07-11.zip"
         self.assertEqual(_date_from_key(key), "2026-07-11")
@@ -87,6 +107,22 @@ class TestBinanceFuturesMetrics(unittest.TestCase):
         )
         self.assertEqual([str(day.date()) for day in key_days], ["2020-01-01", "2020-01-02"])
         self.assertEqual(missing_days, [{"date": "2020-01-02", "rows": 287, "expected_rows": 288}])
+
+    def test_missing_coverage_reschedules_nullable_metric_day(self):
+        available_days = pd.to_datetime(["2020-01-01", "2020-01-02"]).tolist()
+        key_days, missing_days = missing_coverage_key_days(
+            available_days=available_days,
+            local_day_counts={"2020-01-01": 287, "2020-01-02": 288},
+            nullable_metric_rows={"2020-01-02": 2},
+            effective_start=pd.Timestamp("2020-01-01"),
+            min_rows_per_full_day=288,
+        )
+
+        self.assertEqual([str(day.date()) for day in key_days], ["2020-01-01", "2020-01-02"])
+        self.assertEqual(
+            missing_days,
+            [{"date": "2020-01-02", "rows": 288, "expected_rows": 288, "nullable_metric_rows": 2}],
+        )
 
 
 class TestBinanceFuturesMetricsAudit(unittest.TestCase):
@@ -144,9 +180,26 @@ class TestBinanceFuturesMetricsAudit(unittest.TestCase):
         self.assertEqual(audit["gap_count"], 0)
         self.assertEqual(audit["partial_day_count"], 0)
 
-    def test_streaming_audit_rejects_missing_metric_values(self):
+    def test_streaming_audit_reports_nullable_upstream_metric_values(self):
         frame = self._metrics_frame("2020-01-01 00:00:00")
         frame.loc[0, "sum_open_interest"] = pd.NA
+        append_metrics(self.store, frame, "BTCUSDT")
+
+        audit = audit_symbol(
+            self.store,
+            "BTCUSDT",
+            effective_start=pd.Timestamp("2020-01-01"),
+            expected_end=pd.Timestamp("2020-01-01"),
+        )
+
+        self.assertEqual(audit["status"], "pass_with_documented_source_gaps")
+        self.assertEqual(audit["invalid_numeric_rows"], 0)
+        self.assertEqual(audit["nullable_metric_rows"], 1)
+        self.assertEqual(audit["nullable_metric_values"]["sum_open_interest"], 1)
+
+    def test_streaming_audit_rejects_non_numeric_metric_values(self):
+        frame = self._metrics_frame("2020-01-01 00:00:00")
+        frame.loc[0, "sum_open_interest"] = "not-a-number"
         append_metrics(self.store, frame, "BTCUSDT")
 
         audit = audit_symbol(

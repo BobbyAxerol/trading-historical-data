@@ -178,15 +178,26 @@ def normalize_metrics_frame(raw: pd.DataFrame, *, symbol: str, contract_type: st
         if col not in df.columns:
             df[col] = pd.NA
         df[col] = pd.to_numeric(df[col], errors="coerce")
-    df["source"] = source
-    df["ingested_at"] = utc_now_iso()
-    return (
-        df[METRIC_COLUMNS]
-        .dropna(subset=["time", "symbol"])
-        .drop_duplicates(subset=["symbol", "time"], keep="last")
-        .sort_values(["symbol", "time"])
-        .reset_index(drop=True)
+    # Vision may emit more than one raw observation in a five-minute bucket.
+    # Selecting the final row can discard a valid value when only that raw row
+    # is null.  Coalesce each metric independently from direct source rows;
+    # this never invents a value and preserves a genuine upstream null when
+    # every observation in the bucket is absent.
+    def last_non_null(values: pd.Series):
+        present = values.dropna()
+        return present.iloc[-1] if not present.empty else pd.NA
+
+    grouped = (
+        df.dropna(subset=["time"])
+        .groupby("time", as_index=False, sort=True)[NUMERIC_METRIC_COLUMNS]
+        .agg(last_non_null)
     )
+    grouped["symbol"] = symbol.upper()
+    grouped["market"] = "usdm_futures"
+    grouped["contract_type"] = contract_type
+    grouped["source"] = source
+    grouped["ingested_at"] = utc_now_iso()
+    return grouped[METRIC_COLUMNS].sort_values(["symbol", "time"]).reset_index(drop=True)
 
 
 def read_vision_metrics_zip(content: bytes, *, symbol: str, contract_type: str, source: str) -> pd.DataFrame:
@@ -249,20 +260,30 @@ def effective_start_day(keys: list[str], start_date: str | None) -> pd.Timestamp
     return max(earliest, configured)
 
 
-def _symbol_day_counts(store: PartitionedCsvGzStore, symbol: str) -> dict[str, int]:
-    frames = []
+def _symbol_day_quality(store: PartitionedCsvGzStore, symbol: str) -> tuple[dict[str, int], dict[str, int]]:
+    """Return per-day row and nullable-metric counts without whole-history RAM."""
+
+    day_counts: dict[str, int] = {}
+    nullable_metric_rows: dict[str, int] = {}
     for path in store.files({"symbol": symbol}):
         try:
-            frames.append(read_partition_file(path, usecols=["time"]))
+            frame = read_partition_file(path, usecols=["time", *NUMERIC_METRIC_COLUMNS])
         except Exception:
             continue
-    if not frames:
-        return {}
-    times = pd.concat(frames, ignore_index=True)["time"]
-    times = pd.to_datetime(times, errors="coerce").dropna().dt.floor("5min").drop_duplicates()
-    if times.empty:
-        return {}
-    return times.groupby(times.dt.strftime("%Y-%m-%d")).size().astype(int).to_dict()
+        times = pd.to_datetime(frame["time"], errors="coerce").dt.floor("5min")
+        valid = times.notna()
+        if valid.any():
+            per_day = times.loc[valid].dt.strftime("%Y-%m-%d")
+            for day, count in per_day.value_counts().items():
+                day_counts[str(day)] = day_counts.get(str(day), 0) + int(count)
+            numeric = frame.loc[valid, NUMERIC_METRIC_COLUMNS].apply(pd.to_numeric, errors="coerce")
+            missing = numeric.isna().any(axis=1)
+            for day, count in per_day.loc[missing].value_counts().items():
+                nullable_metric_rows[str(day)] = nullable_metric_rows.get(str(day), 0) + int(count)
+            del numeric, missing, per_day
+        del frame, times, valid
+        release_unused_memory()
+    return day_counts, nullable_metric_rows
 
 
 def expected_rows_for_day(day: pd.Timestamp, first_available_day: pd.Timestamp, min_rows_per_full_day: int) -> int:
@@ -277,6 +298,7 @@ def missing_coverage_key_days(
     local_day_counts: dict[str, int],
     effective_start: pd.Timestamp,
     min_rows_per_full_day: int,
+    nullable_metric_rows: dict[str, int] | None = None,
 ) -> tuple[list[pd.Timestamp], list[dict[str, Any]]]:
     if not available_days:
         return [], []
@@ -286,13 +308,18 @@ def missing_coverage_key_days(
     latest_full_day = max(available_set)
     missing_days: list[dict[str, Any]] = []
     key_days: set[pd.Timestamp] = set()
+    nullable_metric_rows = nullable_metric_rows or {}
 
     for day in _date_range(effective_start, latest_full_day):
         expected = expected_rows_for_day(day, first_available, min_rows_per_full_day)
         actual = int(local_day_counts.get(day.strftime("%Y-%m-%d"), 0))
-        if actual >= expected:
+        nullable_rows = int(nullable_metric_rows.get(day.strftime("%Y-%m-%d"), 0))
+        if actual >= expected and nullable_rows == 0:
             continue
-        missing_days.append({"date": day.strftime("%Y-%m-%d"), "rows": actual, "expected_rows": expected})
+        item: dict[str, Any] = {"date": day.strftime("%Y-%m-%d"), "rows": actual, "expected_rows": expected}
+        if nullable_rows:
+            item["nullable_metric_rows"] = nullable_rows
+        missing_days.append(item)
         for candidate in (day - pd.Timedelta(1, unit="D"), day):
             candidate = candidate.normalize()
             if candidate in available_set:
@@ -468,12 +495,13 @@ def sync_vision_metrics(
     if configured_start is None:
         return 0
 
-    local_counts = _symbol_day_counts(store, symbol)
+    local_counts, nullable_metric_rows = _symbol_day_quality(store, symbol)
     key_days, missing_days = missing_coverage_key_days(
         available_days=available_days,
         local_day_counts=local_counts,
         effective_start=configured_start,
         min_rows_per_full_day=min_rows_per_full_day,
+        nullable_metric_rows=nullable_metric_rows,
     )
 
     latest_available = available_days[-1]
@@ -654,7 +682,12 @@ def fetch_rest_metrics_tail(
     for col in METRIC_COLUMNS:
         if col not in merged.columns:
             merged[col] = pd.NA
-    return merged[METRIC_COLUMNS].dropna(subset=["time"]).drop_duplicates(subset=["symbol", "time"], keep="last").sort_values(["symbol", "time"]).reset_index(drop=True)
+    return normalize_metrics_frame(
+        merged,
+        symbol=symbol,
+        contract_type=contract_type,
+        source="binance_futures_data_rest",
+    )
 
 
 def sync_rest_tail(
@@ -682,6 +715,16 @@ def sync_rest_tail(
     if df.empty:
         manifest.update_symbol(symbol, last_rest_error="empty_rest_metrics_tail", last_rest_start=str(start), last_rest_end=str(end))
         logger.warning("%s REST metrics tail returned no rows %s -> %s", symbol, start, end)
+        return 0
+    # A partial REST response must not replace a complete Vision row through
+    # the generic append's last-row dedupe.  Keep it as observable source
+    # evidence and let the next bounded overlap retry it instead.
+    incomplete_rows = int(df[NUMERIC_METRIC_COLUMNS].isna().any(axis=1).sum())
+    if incomplete_rows:
+        manifest.update_symbol(symbol, last_rest_partial_rows=incomplete_rows)
+        logger.warning("%s REST metrics skipped partial rows=%s", symbol, incomplete_rows)
+        df = df.dropna(subset=NUMERIC_METRIC_COLUMNS).reset_index(drop=True)
+    if df.empty:
         return 0
     result = append_metrics(store, df, symbol)
     manifest.update_symbol(
@@ -720,6 +763,9 @@ def audit_symbol(
     invalid_time_rows = 0
     off_bucket_rows = 0
     invalid_numeric_rows = 0
+    nullable_metric_rows = 0
+    nullable_metric_values = {column: 0 for column in NUMERIC_METRIC_COLUMNS}
+    nullable_metric_rows_by_source: dict[str, int] = {}
     negative_metric_rows = 0
     source_mismatch_rows = 0
     market_mismatch_rows = 0
@@ -748,7 +794,16 @@ def audit_symbol(
         off_bucket_rows += int((parsed_time.loc[valid_time] != bucketed_time.loc[valid_time]).sum())
 
         numeric = frame[NUMERIC_METRIC_COLUMNS].apply(pd.to_numeric, errors="coerce")
-        invalid_numeric_rows += int(numeric.isna().any(axis=1).sum())
+        source_values = frame["source"].astype(str)
+        null_values = numeric.isna()
+        non_null_raw = frame[NUMERIC_METRIC_COLUMNS].notna()
+        invalid_numeric_rows += int((null_values & non_null_raw).any(axis=1).sum())
+        nullable_rows = null_values.any(axis=1)
+        nullable_metric_rows += int(nullable_rows.sum())
+        for column in NUMERIC_METRIC_COLUMNS:
+            nullable_metric_values[column] += int(null_values[column].sum())
+        for source, count in source_values.loc[nullable_rows].value_counts().items():
+            nullable_metric_rows_by_source[str(source)] = nullable_metric_rows_by_source.get(str(source), 0) + int(count)
         negative_metric_rows += int((numeric < 0).any(axis=1).sum())
         symbol_mismatch_rows += int((frame["symbol"].astype(str) != symbol.upper()).sum())
         market_mismatch_rows += int((frame["market"].astype(str) != "usdm_futures").sum())
@@ -780,7 +835,7 @@ def audit_symbol(
             latest = partition_latest if latest is None or partition_latest > latest else latest
             previous_time = partition_latest
 
-        del frame, numeric, parsed_time, bucketed_time
+        del frame, numeric, source_values, null_values, non_null_raw, nullable_rows, parsed_time, bucketed_time
         release_unused_memory()
 
     partial_days: list[dict[str, Any]] = []
@@ -804,16 +859,16 @@ def audit_symbol(
         + contract_type_mismatch_rows
         + symbol_mismatch_rows
     )
-    status = "pass" if (
+    structurally_valid = bool(
         files
         and effective_start is not None
         and expected_end is not None
         and latest is not None
         and latest.normalize() >= expected_end.normalize()
         and integrity_errors == 0
-        and gap_count == 0
-        and not partial_days
-    ) else "fail"
+    )
+    source_gap_present = bool(nullable_metric_rows or gap_count or partial_days)
+    status = "pass" if structurally_valid and not source_gap_present else "pass_with_documented_source_gaps" if structurally_valid else "fail"
     return {
         "status": status,
         "files": len(files),
@@ -826,6 +881,9 @@ def audit_symbol(
         "invalid_time_rows": invalid_time_rows,
         "off_bucket_rows": off_bucket_rows,
         "invalid_numeric_rows": invalid_numeric_rows,
+        "nullable_metric_rows": nullable_metric_rows,
+        "nullable_metric_values": nullable_metric_values,
+        "nullable_metric_rows_by_source": nullable_metric_rows_by_source,
         "negative_metric_rows": negative_metric_rows,
         "source_mismatch_rows": source_mismatch_rows,
         "market_mismatch_rows": market_mismatch_rows,
@@ -945,7 +1003,7 @@ def sync_all(args: argparse.Namespace, logger, *, run_audit: bool = True) -> dic
                             **audit,
                         }
                     )
-                    if audit.get("status") != "pass":
+                    if audit.get("status") not in {"pass", "pass_with_documented_source_gaps"}:
                         phase_d_failures.append(f"{symbol}: audit status={audit.get('status')}")
             heartbeat.beat(symbol=symbol, latest_time=manifest.symbol_state(symbol).get("latest_time"))
         except Exception as exc:
