@@ -172,6 +172,15 @@ def _delivery_from_symbol(symbol: str) -> str | None:
     return f"20{code[:2]}-{code[2:4]}-{code[4:6]}"
 
 
+def _archive_symbol_in_scope(symbol: str, start_month: str) -> bool:
+    """Keep only contracts whose delivery can overlap the configured history."""
+
+    delivery = _delivery_from_symbol(symbol)
+    if delivery is None:
+        return True
+    return pd.Timestamp(delivery).normalize() >= pd.Timestamp(f"{start_month}-01").normalize()
+
+
 def normalize_kline_frame(df: pd.DataFrame, *, symbol: str, source: str) -> pd.DataFrame:
     if "open_time" not in df.columns:
         df = df.copy()
@@ -792,6 +801,7 @@ def sync_all(args: argparse.Namespace, logger) -> dict[str, Any]:
 
     active = discover_active_contracts(pairs)
     archive_symbols = [] if args.no_archive_discovery else discover_archive_symbols(pairs, s3_base_url=s3_base_url)
+    archive_symbols = [symbol for symbol in archive_symbols if _archive_symbol_in_scope(symbol, start_month)]
     if args.symbols:
         symbols = [item.strip().upper() for item in args.symbols.split(",") if item.strip()]
     else:

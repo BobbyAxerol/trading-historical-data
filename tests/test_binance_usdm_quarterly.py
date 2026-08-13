@@ -12,6 +12,7 @@ import pandas as pd
 
 from collectors.binance_usdm_quarterly_1m import (
     NUMERIC_COLUMNS,
+    _archive_symbol_in_scope,
     _delivery_from_symbol,
     audit_symbol,
     normalize_kline_frame,
@@ -30,6 +31,10 @@ class TestBinanceUsdmQuarterly(unittest.TestCase):
     def test_delivery_from_symbol(self):
         self.assertEqual(_delivery_from_symbol("BTCUSDT_240329"), "2024-03-29")
         self.assertIsNone(_delivery_from_symbol("BTCUSDT"))
+
+    def test_archive_scope_excludes_contracts_before_configured_start(self):
+        self.assertFalse(_archive_symbol_in_scope("BTCUSDT_201225", "2021-02"))
+        self.assertTrue(_archive_symbol_in_scope("BTCUSDT_210326", "2021-02"))
 
     def test_normalize_vision_header_schema(self):
         raw = pd.DataFrame(
