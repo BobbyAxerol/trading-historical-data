@@ -73,6 +73,21 @@ unique `trade_seq` values. A contract with fewer sequences establishes endpoint
 availability but cannot establish sorting or inclusive sequence-boundary
 semantics, so it is skipped rather than producing a misleading pass.
 
+## Storage release-manifest contract
+
+`collectors.common.storage_manifest` defines the B0 metadata contract at
+`storage/_primus_metadata/release_manifest.json`. Its writer validates a full
+manifest and replaces it atomically. A complete manifest declares environment,
+Git/tag and build identifiers, the source-inventory reference, each dataset's
+schema/layout version, and supported loader-contract versions.
+
+`assert_loader_compatible(storage_root, dataset_id=..., loader_contract_version=...)`
+refuses an absent, malformed, draft, undeclared, or incompatible release with a
+clear `StorageCompatibilityError`; it never returns possibly misinterpreted
+data. The module and its tests are delivered in B0. Public loader calls will
+use the assertion as a Phase C package-acceptance change, as required by the
+runbook.
+
 Before using a production Compose command, inspect the resolved configuration:
 
 ```bash

@@ -18,6 +18,8 @@ from typing import Any
 
 import yaml
 
+from collectors.common.storage_manifest import StorageManifestError, validate_accepted_release_manifest
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 POLICY_PATH = REPO_ROOT / "configs" / "primus_hmd_b0.yml"
@@ -333,8 +335,24 @@ def _status(policy: dict[str, Any]) -> dict[str, Any]:
 
     release_path = paths["metadata"] / "release_manifest.json"
     release = _read_json(release_path)
-    release_required = bool(release) and release.get("status") == "pass"
-    checks.append(_check("reproducible_release_and_storage_manifest", release_required, "Release/storage manifest requires resolved hashes, image digest, build evidence, and compatibility contract.", path=str(release_path)))
+    release_error = None
+    try:
+        if release is None:
+            raise StorageManifestError("release manifest is missing or invalid JSON")
+        validate_accepted_release_manifest(release)
+        release_required = True
+    except StorageManifestError as exc:
+        release_required = False
+        release_error = str(exc)
+    checks.append(
+        _check(
+            "reproducible_release_and_storage_manifest",
+            release_required,
+            "Release/storage manifest requires resolved hashes, image digest, build evidence, and compatibility contract.",
+            path=str(release_path),
+            validation_error=release_error,
+        )
+    )
 
     compose_path = paths["bootstrap"] / "compose_contract.json"
     compose = _read_json(compose_path)

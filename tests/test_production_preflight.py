@@ -84,7 +84,29 @@ class TestProductionPreflight(unittest.TestCase):
         inventory_path.write_text(json.dumps(inventory))
         release_path = paths["metadata"] / "release_manifest.json"
         release = json.loads(release_path.read_text())
-        release["status"] = "pass"
+        release.update(
+            {
+                "status": "pass",
+                "source_inventory_reference": "state/bootstrap/source_inventory.json",
+                "git": {"commit": "test-commit", "tag": "test-tag"},
+                "build": {
+                    "collector_image": "test-image@sha256:test",
+                    "python_base_image": "python@sha256:test",
+                    "python": "3.12.13",
+                    "duckdb": "1.5.5",
+                    "pyarrow": "20.0.0",
+                },
+                "datasets": [
+                    {
+                        "dataset_id": "test-dataset",
+                        "canonical_schema_version": "test-schema-v1",
+                        "partition_layout_version": "test-layout-v1",
+                        "supported_loader_contract_versions": ["hmd-loader-v1"],
+                        "source_report_reference": "state/test-source-probe.json",
+                    }
+                ],
+            }
+        )
         release_path.write_text(json.dumps(release))
         for filename in ("restore_drill.json", "monitoring.json", "clock.json", "access_control.json", "compose_contract.json"):
             path = paths["bootstrap"] / filename

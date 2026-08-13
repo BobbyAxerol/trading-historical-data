@@ -72,6 +72,12 @@ Completed evidence:
 - Compose contract and clock evidence now pass. The created-but-never-started
   inspection container had only the three runtime binds and user `1000:1000`;
   host NTP reports synchronized with `Etc/UTC` and `LocalRTC=no`.
+- B0.6 metadata writer/reader contract is implemented and tested. It atomically
+  writes only a complete storage release manifest and fail-closes reader
+  compatibility for an absent, draft, undeclared, malformed, or incompatible
+  dataset contract. Public loader enforcement remains a Phase C package
+  acceptance change per the runbook; the runtime manifest stays draft until a
+  package tag/wheel and final dataset layout declarations are accepted.
 
 Current B0 blockers (not bypassed): capacity/concurrency requires bounded-seed
 measurements plus approval; release/storage manifest is not accepted until a
