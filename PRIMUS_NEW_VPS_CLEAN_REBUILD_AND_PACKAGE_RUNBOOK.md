@@ -57,8 +57,8 @@ At the time this runbook was written:
 - Phase 6 Docker cycle/backfill mechanics exist, but its old-VPS historical
   output is partial and is not migrated.
 - Phase 7 candidate tape and later option work remain pending.
-- The Binance daily matrix volume repair commit `48ffd74` must be pushed before
-  the migration checkpoint is tagged.
+- The Binance daily matrix volume repair commit `48ffd74` and the initial
+  migration runbook are already pushed on `feat/option-ingestion`.
 
 ### Freeze Rule
 
@@ -135,7 +135,220 @@ The handoff must include:
 - focused test results;
 - known pending option phases: Phase 6 fresh rebuild, Phase 7 and later.
 
-## 5. Phase B: New VPS Foundation
+## 5. Phase B0: Production Preflight And Release Controls
+
+### B0.1. Execution Location Decision
+
+Perform only the Git freeze, documentation, source-level tests, and migration
+tag preparation on the old VPS. Do not retrofit the live old-VPS runtime paths,
+ACLs, package installation, or Docker mounts during this migration.
+
+Perform the complete B0 implementation on the new VPS after it checks out the
+frozen bootstrap tag. This keeps the current live data services unchanged and
+makes the new environment prove that it is self-sufficient.
+
+Code/configuration changes created during B0 or package work on the new VPS
+must still be committed and pushed to `feat/option-ingestion`. After clean-venv
+package acceptance, create a second immutable package tag, for example:
+
+```text
+primus-historical-market-data-v0.1.0rc1
+```
+
+The earlier `bootstrap` tag is a migration starting point; the package tag is
+the release from which broad new-VPS collectors and consumers operate.
+
+### B0.2. Capacity, Filesystem, And Concurrency Gate
+
+Before any collector writes, create and commit a new-VPS capacity report. It
+must contain, per enabled dataset:
+
+| Dataset | Canonical target | Peak staging/temp | State/log reserve | Source window | Max concurrent job |
+| --- | ---: | ---: | ---: | --- | --- |
+| Binance perpetual/spot/quarterly | measured during bounded seed | measured | measured | config-defined | one source family |
+| Binance metrics/order book | measured during bounded seed | measured | measured | retention-defined | one source family |
+| VN daily/derivatives | measured during bounded seed | measured | measured | provider-defined | one provider family |
+| Deribit BTC options V1 | official plan target `6-9 GiB` | official plan peak requirement | SQLite/log reserve | full V1 | one cycle |
+
+The capacity report must also record:
+
+- filesystem type, total/free bytes, available inodes, and mount options;
+- Docker image/cache budget and log retention budget;
+- operating-system reserve not available to collectors;
+- the largest expected compaction/repair temporary footprint;
+- the selected concurrency matrix: which service families may run together and
+  which are mutually exclusive.
+
+Hard gates:
+
+- Never start a job unless its worst-case temporary requirement plus the
+  configured OS/log reserve fits in current free disk.
+- Do not run two heavy historical jobs concurrently until measured RSS, I/O,
+  source rate, and disk headroom prove that the capacity matrix permits it.
+- Deribit must honor the free-disk requirement in its official plan and must
+  stop before the configured low-water mark, not after the filesystem is full.
+- Record `df -h`, `df -i`, and the capacity-report SHA in the implementation
+  log before broad backfill.
+
+### B0.3. Reproducible Build And Supply-Chain Gate
+
+The current `python:3.12-slim` image tag and dependency ranges are not a fully
+reproducible release by themselves. Before package acceptance:
+
+1. Record Docker Engine, Docker Compose, Linux distribution, kernel, Python,
+   DuckDB, PyArrow, and timezone/NTP synchronization status.
+2. Resolve reader and collector dependencies in clean Python 3.12 environments
+   into versioned lock artifacts. Hash-pinned install input is preferred for
+   the image build and wheel test environment.
+3. Pin the production Docker base image by digest, not only a mutable tag.
+4. Build the shared collector image and record its image digest.
+5. Build the wheel and record its filename, version, SHA256, and dependency
+   lock SHA256 in a release manifest.
+6. Verify a second clean build produces the same resolved versions and passes
+   the same focused tests.
+
+The release manifest must include the Git commit/tag, configuration file
+hashes, image digest, wheel SHA256, dependency lock hashes, and build UTC time.
+
+### B0.4. Production Compose And Runtime Ownership Gate
+
+Create a production Compose layer or equivalent deployment configuration. It
+must replace the development-relative mounts in `docker-compose.yml` with a
+required runtime-root variable:
+
+```text
+PRIMUS_HMD_RUNTIME_ROOT=/srv/primus/historical-market-data
+```
+
+Collector containers must mount only:
+
+```text
+${PRIMUS_HMD_RUNTIME_ROOT}/storage:/app/storage
+${PRIMUS_HMD_RUNTIME_ROOT}/state:/app/state
+${PRIMUS_HMD_RUNTIME_ROOT}/logs:/app/logs
+```
+
+Requirements:
+
+- no writable runtime path inside the Git checkout;
+- no source-code bind mount for collector or consumer images;
+- collector UID/GID and host directory ownership are explicit and tested;
+- default ACLs expose new canonical Parquet files to the reader group without
+  granting write permission;
+- secrets are injected from a protected host file or Docker secret, never from
+  committed Compose data;
+- `docker compose config` and container mount inspection prove the resolved
+  paths before services start;
+- long-lived services retain `restart: unless-stopped`; historical cycle jobs
+  remain intentional run-to-completion jobs.
+
+### B0.5. Source Inventory And Bootstrap Manifest Gate
+
+Before data collection, create `state/bootstrap/source_inventory.json` on the
+new VPS and commit a redacted report/template to Git. Each enabled dataset must
+state:
+
+| Field | Required value |
+| --- | --- |
+| dataset id and schema/layout version | canonical reader contract |
+| upstream/provider and endpoint family | provenance |
+| symbols/universe config hash | exact requested scope |
+| requested start/end and expected first available time | historical target |
+| source probe result and UTC timestamp | availability proof |
+| credentials required | secret reference name only |
+| rate/concurrency limit | operational bound |
+| partition/repair policy | write semantics |
+| expected duration/disk/RSS | capacity input |
+| acceptance validator/report path | evidence location |
+
+No broad backfill may start for a dataset whose source probe is missing,
+ambiguous, rate-limited without a backoff plan, or unable to expose the desired
+history. Such a dataset is marked `blocked` with evidence; it is not silently
+seeded from the old VPS.
+
+### B0.6. Storage Schema And Consumer Compatibility Gate
+
+Add a storage release manifest under a dedicated metadata path outside data
+partitions, for example:
+
+```text
+storage/_primus_metadata/release_manifest.json
+```
+
+It must record at least:
+
+- environment id and creation UTC time;
+- Git/package/image release identifiers;
+- dataset IDs, canonical schema versions, partition-layout versions, and
+  supported loader contract versions;
+- source inventory/report references;
+- schema migration policy and incompatible-version behavior.
+
+Define and test the metadata writer/reader compatibility contract during B0.
+Phase C implements the package loader check: before a dataset query it raises a
+clear compatibility error when its supported reader version cannot interpret
+the declared layout/schema. It must not return silently malformed data.
+
+Each successful collector/derived-matrix publish updates the relevant dataset
+manifest atomically after its own storage validation has passed.
+
+### B0.7. Backup, Restore, Observability, And Resource Gate
+
+Clean rebuild is not a backup strategy. Before enabling broad jobs, define and
+test an off-host backup destination and retention policy for:
+
+- canonical validated Parquet;
+- release/configuration manifests;
+- SQLite/checkpoint state needed to resume incomplete jobs on the new VPS;
+- package wheels and release manifests.
+
+Do not back up transient staging as a substitute for canonical data. A restore
+drill must recover a small canonical partition and a checkpoint into an empty
+test root, then pass its loader/validator smoke test.
+
+Define observable alerts or at minimum an operator-visible status check for:
+
+- free disk and inode low-water marks;
+- stale heartbeat or missed scheduled cycle;
+- collector/container exit with error;
+- retry/rate-limit escalation;
+- validation/repair failure;
+- RSS above the source-specific budget;
+- backup failure.
+
+Set explicit CPU/memory constraints or a documented single-heavy-job policy.
+The chosen limits must be tested against the bounded seed before full history.
+
+### B0.8. Environment Isolation, Clock, And Cutover Gate
+
+- Synchronize host time with NTP and record UTC/Asia-Ho-Chi-Minh timezone
+  behavior before schedule tests.
+- Assign a unique environment ID to the new storage manifest. Consumers may
+  point to one data root per run; do not union old and new roots.
+- Keep old and new scheduled writers logically isolated. Their simultaneous
+  operation is allowed only because they write different hosts/roots and use
+  separately budgeted upstream quotas.
+- Define an explicit consumer rollback: previous wheel version plus previous
+  approved data root. Do not use an ad hoc mixed-root fallback.
+- Do not retire old writers until the new environment has passed the planned
+  source-specific schedule and acceptance windows.
+
+### B0.9. B0 Exit Criteria
+
+All items below are required before Phase C package acceptance or broad data
+rebuild:
+
+- capacity report and concurrency matrix approved;
+- reproducible release manifest recorded;
+- production Compose resolves `/srv/primus/...` mounts and non-root ownership;
+- source inventory has a passing bounded probe for every enabled source;
+- storage release-manifest writer and compatibility contract are implemented
+  and tested; package-side enforcement is a Phase C acceptance requirement;
+- backup destination and restore drill pass;
+- heartbeat/disk/error monitoring and resource policy are active;
+- NTP, environment identity, and rollback path are recorded.
+
+## 6. Phase B: New VPS Foundation
 
 ### B1. Operating-System Layout
 
@@ -199,7 +412,7 @@ necessary read-only data mount.
 No collector is allowed to write data until the source-specific probe and
 storage paths have been verified.
 
-## 6. Phase C: Package The Reader Before Historical Backfill
+## 7. Phase C: Package The Reader Before Historical Backfill
 
 ### C1. Packaging Goal
 
@@ -260,7 +473,7 @@ Package acceptance must pass before broad historical jobs start. This limits
 the chance of discovering an import/path contract break after many hours of
 backfill.
 
-## 7. Phase D: Clean Source Rebuild On The New VPS
+## 8. Phase D: Clean Source Rebuild On The New VPS
 
 ### D1. General Rules
 
@@ -332,7 +545,7 @@ invariants, pilot gate, and Phase 7 deliverables:
 - Inspect bounded log tails and manifests; do not rely on an unattended tmux
   session as the source of truth.
 
-## 8. Phase E: Data Acceptance And Cutover
+## 9. Phase E: Data Acceptance And Cutover
 
 ### E1. Per-Dataset Acceptance
 
@@ -372,7 +585,7 @@ After the relevant dataset gates pass:
    verified for at least one expected schedule cycle.
 4. Do not delete the old archive until an explicit separate retention decision.
 
-## 9. Explicit Non-Goals
+## 10. Explicit Non-Goals
 
 - Do not publish the package to public PyPI.
 - Do not put Parquet or SQLite state in Git, a wheel, or GitHub source history.
@@ -382,7 +595,7 @@ After the relevant dataset gates pass:
   packaging.
 - Do not use old-VPS checkpoints to skip new-VPS Deribit probe/pilot gates.
 
-## 10. Implementation Log Template
+## 11. Implementation Log Template
 
 Append a dated entry after each completed migration phase:
 
@@ -415,7 +628,7 @@ Decision/next gate:
 -
 ```
 
-## 11. Handoff Checklist For The Next Agent
+## 12. Handoff Checklist For The Next Agent
 
 - Read this runbook first.
 - Read `README.md` for current service and endpoint inventory.
@@ -423,6 +636,8 @@ Decision/next gate:
   Deribit operation.
 - Confirm the migration tag and current branch before editing.
 - Treat old VPS data as reference only; do not copy it to new VPS.
+- Complete and log every B0 exit criterion on the new VPS before package or
+  broad historical work.
 - Implement package changes as compatibility-preserving changes with clean-venv
   tests before starting expensive historical jobs.
 - Resume the option roadmap at fresh new-VPS Phase 0/1 verification, then

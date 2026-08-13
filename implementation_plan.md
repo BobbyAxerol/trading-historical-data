@@ -12,6 +12,13 @@ an audit/reference archive. Package the reader as
 `primus-historical-market-data` before broad new-VPS historical backfills, then
 resume the remaining Deribit option roadmap from fresh new-VPS gates/state.
 
+Execution boundary: old VPS performs only source freeze/push/tag and remains
+live. New VPS performs Phase B0 production preflight, package implementation,
+and all clean historical rebuild work. Phase B0 is a mandatory gate covering
+capacity/concurrency, reproducible artifacts, production Compose mounts/ACLs,
+source inventory, storage compatibility manifest, backup/restore, monitoring,
+and time/environment isolation.
+
 ## Active Job: VN30F1M VNDIRECT DChart Single-Source Upgrade
 
 Source guide: `VN30_FUTURES_FREE_DATA_UPGRADE_PLAN_V2.md`
