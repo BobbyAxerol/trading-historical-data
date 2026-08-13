@@ -210,6 +210,25 @@ reproducible release by themselves. Before package acceptance:
 The release manifest must include the Git commit/tag, configuration file
 hashes, image digest, wheel SHA256, dependency lock hashes, and build UTC time.
 
+#### B0.3 Reader Wheel Procedure
+
+The repository records the build frontend and backend in
+`requirements-build.in` and the hash-pinned `requirements-build.lock`. Build
+the code-only reader wheel from a committed checkout with:
+
+```bash
+tools/build_reader_wheel.sh /srv/primus/historical-market-data/releases
+```
+
+The helper uses the digest-pinned Python 3.12 builder, mounts the checkout
+read-only, copies it only into the container's ephemeral `/tmp`, and writes
+only the requested wheel output directory. It must not be used to run a
+collector. For acceptance, independently clean-install the resulting wheel
+with `requirements-reader.lock`, with no source checkout on `PYTHONPATH`, then
+record the wheel filename, SHA256, lock hashes, image digest, commit, and build
+UTC in the draft release manifest. A manifest becomes `pass` only after all B0
+exit criteria and the sample-data parity checks in Phase C have passed.
+
 ### B0.4. Production Compose And Runtime Ownership Gate
 
 Create a production Compose layer or equivalent deployment configuration. It

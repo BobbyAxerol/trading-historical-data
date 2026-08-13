@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import gc
 import logging
+import os
 import re
 from datetime import timedelta
 from pathlib import Path
@@ -23,7 +24,12 @@ if not logger.handlers:
 
 # Base directories resolved relative to this module file location
 BASE_DIR = Path(__file__).parent.resolve()
-STORAGE_DIR = BASE_DIR / "storage"
+STORAGE_DIR = Path(
+    os.getenv(
+        "HISTORICAL_MARKET_DATA_ROOT",
+        os.getenv("DATA_ROOT", str(BASE_DIR / "storage")),
+    )
+).resolve()
 OHLCV_COLUMNS = ("time", "symbol", "open", "high", "low", "close", "volume")
 _TIMEFRAME_RE = re.compile(r"^(?P<count>\d+)\s*(?P<unit>s|sec|secs|second|seconds|min|minute|minutes|h|hour|hours|d|day|days)$")
 

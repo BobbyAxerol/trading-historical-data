@@ -6,13 +6,18 @@ from typing import Any
 
 import pandas as pd
 
-from collectors.deribit.schema import CANONICAL_TRADE_COLUMNS, SNAPSHOT_5M_COLUMNS
+from loaders.deribit_columns import CANONICAL_TRADE_COLUMNS, SNAPSHOT_5M_COLUMNS
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 
 
 def _storage_root() -> Path:
-    return Path(os.getenv("DATA_ROOT", str(BASE_DIR / "storage"))).resolve()
+    return Path(
+        os.getenv(
+            "HISTORICAL_MARKET_DATA_ROOT",
+            os.getenv("DATA_ROOT", str(BASE_DIR / "storage")),
+        )
+    ).resolve()
 
 
 def _path_list(paths: list[Path]) -> str:

@@ -4,6 +4,8 @@ from enum import IntFlag
 
 import pyarrow as pa
 
+from loaders.deribit_columns import CANONICAL_TRADE_COLUMNS, SNAPSHOT_5M_COLUMNS
+
 DATASET_VERSION = "deribit_btc_options_v1"
 SCHEMA_VERSION = "trade_schema_v1"
 UNIVERSE_VERSION = "compact_liquid_v1"
@@ -75,41 +77,6 @@ STAGING_TRADE_COLUMNS = [
     "ingested_at",
     "dataset_version_id",
 ]
-
-CANONICAL_TRADE_COLUMNS = [
-    "timestamp_ms",
-    "instrument_id",
-    "trade_seq",
-    "trade_id_hash",
-    "price_btc",
-    "mark_price_btc",
-    "iv_pct",
-    "index_price_usd",
-    "amount_base",
-    "contracts",
-    "direction",
-    "tick_direction",
-    "flags",
-    "dataset_version_id",
-]
-
-SNAPSHOT_5M_COLUMNS = [
-    "timestamp_ms",
-    "instrument_id",
-    "mark_price_btc",
-    "last_trade_price_btc",
-    "index_price_usd",
-    "iv_pct",
-    "model_delta",
-    "volume_5m",
-    "trade_count_5m",
-    "buy_volume_5m",
-    "sell_volume_5m",
-    "anchor_age_seconds",
-    "quality_flags",
-    "entry_eligible",
-]
-
 
 def instrument_schema() -> pa.Schema:
     return pa.schema(
