@@ -80,6 +80,12 @@ user.email = vugioan11022002@gmail.com
   on 2026-08-13. Its raw continuous-alias result spans `2017-08-10` through
   `2026-08-13` with a durable passing audit; it wrote no matrix or
   contract-derived output. Do not use that approval to start another source.
+- The next owner-approved sequential Phase D source is exactly
+  `phase-d-binance-futures-metrics-5m`, defined in
+  `configs/primus_hmd_phase_d.yml` and launched only with
+  `tools/run_phase_d_binance_futures_metrics_5m.sh`. It rebuilds BTCUSDT
+  USD-M metrics from `2020-01-01` with at most two Vision downloads in flight,
+  no legacy import, bounded REST overlap, and a durable fail-closed audit.
 - Do not start a default-universe expansion, derived matrix, VN historical
   batch, metrics/quarterly historical batch, repair sweep, consumer cutover,
   old-writer retirement, destructive data operation, or **any Deribit

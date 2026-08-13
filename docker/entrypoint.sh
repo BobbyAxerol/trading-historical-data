@@ -186,6 +186,28 @@ if [ "${PRIMUS_HMD_PHASE_D_VN30F1M_VNDIRECT_DAILY_APPROVED:-}" = "approved" ] \
   exec "$@"
 fi
 
+if [ "${PRIMUS_HMD_PHASE_D_BINANCE_FUTURES_METRICS_5M_APPROVED:-}" = "approved" ] \
+  && [ "${1:-}" = "python" ] \
+  && [ "${2:-}" = "-m" ] \
+  && [ "${3:-}" = "collectors.binance_futures_metrics_5m" ] \
+  && [ "${4:-}" = "--mode" ] \
+  && [ "${5:-}" = "once" ] \
+  && [ "${6:-}" = "--symbols" ] \
+  && [ "${7:-}" = "BTCUSDT" ] \
+  && [ "${8:-}" = "--start-date" ] \
+  && [ "${9:-}" = "2020-01-01" ] \
+  && [ "${10:-}" = "--max-workers" ] \
+  && [ "${11:-}" = "2" ] \
+  && [ "${12:-}" = "--no-legacy" ] \
+  && [ "${13:-}" = "--rest-tail-days" ] \
+  && [ "${14:-}" = "7" ] \
+  && [ "${15:-}" = "--rest-overlap-hours" ] \
+  && [ "${16:-}" = "24" ] \
+  && [ "${17:-}" = "--audit-phase-d" ] \
+  && [ "$#" -eq 17 ]; then
+  exec "$@"
+fi
+
 # The only pre-B0 writer exception is the owner-approved, one-shot bounded
 # seed.  `tools/run_b0_seed.sh` supplies both values transiently and invokes
 # one fixed runner with no operator-provided collector arguments.  The runner

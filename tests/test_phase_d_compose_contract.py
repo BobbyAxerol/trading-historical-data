@@ -60,6 +60,27 @@ VNDIRECT_COMMAND = [
     "--audit-phase-d",
     "--json",
 ]
+METRICS_SERVICE = "phase-d-binance-futures-metrics-5m"
+METRICS_APPROVAL = "PRIMUS_HMD_PHASE_D_BINANCE_FUTURES_METRICS_5M_APPROVED"
+METRICS_COMMAND = [
+    "python",
+    "-m",
+    "collectors.binance_futures_metrics_5m",
+    "--mode",
+    "once",
+    "--symbols",
+    "BTCUSDT",
+    "--start-date",
+    "2020-01-01",
+    "--max-workers",
+    "2",
+    "--no-legacy",
+    "--rest-tail-days",
+    "7",
+    "--rest-overlap-hours",
+    "24",
+    "--audit-phase-d",
+]
 
 
 class TestPhaseDComposeContract(unittest.TestCase):
@@ -91,6 +112,8 @@ class TestPhaseDComposeContract(unittest.TestCase):
         self.assertEqual(approval["services"][SPOT_SERVICE]["command"], SPOT_COMMAND)
         self.assertEqual(approval["services"][VNDIRECT_SERVICE]["dataset_id"], "vn30f1m_vndirect_dchart_1d")
         self.assertEqual(approval["services"][VNDIRECT_SERVICE]["command"], VNDIRECT_COMMAND)
+        self.assertEqual(approval["services"][METRICS_SERVICE]["dataset_id"], "crypto_binance_futures_metrics_5m")
+        self.assertEqual(approval["services"][METRICS_SERVICE]["command"], METRICS_COMMAND)
         self.assertEqual(policy["deribit"]["status"], "disabled_by_owner")
 
     def test_phase_d_spot_service_is_one_shot_and_has_its_own_approval(self) -> None:
@@ -118,6 +141,19 @@ class TestPhaseDComposeContract(unittest.TestCase):
         self.assertEqual(service["environment"][VNDIRECT_APPROVAL], f"${{{VNDIRECT_APPROVAL}:-}}")
         self.assertNotIn(VNDIRECT_APPROVAL, compose["x-collector-gate-environment"])
         self.assertNotIn(SPOT_APPROVAL, service["environment"])
+
+    def test_phase_d_metrics_service_is_one_shot_and_has_its_own_approval(self) -> None:
+        compose = yaml.safe_load((REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
+        service = compose["services"][METRICS_SERVICE]
+        self.assertEqual(service["profiles"], ["phase-d"])
+        self.assertEqual(service["restart"], "no")
+        self.assertEqual(service["command"], METRICS_COMMAND)
+        self.assertEqual(service["pids_limit"], 256)
+        self.assertEqual(service["cpus"], 1.0)
+        self.assertEqual(service["mem_limit"], "1536m")
+        self.assertEqual(service["environment"][METRICS_APPROVAL], f"${{{METRICS_APPROVAL}:-}}")
+        self.assertNotIn(METRICS_APPROVAL, compose["x-collector-gate-environment"])
+        self.assertNotIn(VNDIRECT_APPROVAL, service["environment"])
 
 
 if __name__ == "__main__":

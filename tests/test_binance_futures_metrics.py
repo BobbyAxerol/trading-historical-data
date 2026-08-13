@@ -1,4 +1,6 @@
+import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -10,6 +12,11 @@ import pandas as pd
 from collectors.binance_futures_metrics_5m import (
     _date_from_key,
     _fetch_rest_metric,
+    METRIC_COLUMNS,
+    STORE_PARTS,
+    PartitionedCsvGzStore,
+    append_metrics,
+    audit_symbol,
     effective_start_day,
     missing_coverage_key_days,
     normalize_metrics_frame,
@@ -80,6 +87,77 @@ class TestBinanceFuturesMetrics(unittest.TestCase):
         )
         self.assertEqual([str(day.date()) for day in key_days], ["2020-01-01", "2020-01-02"])
         self.assertEqual(missing_days, [{"date": "2020-01-02", "rows": 287, "expected_rows": 288}])
+
+
+class TestBinanceFuturesMetricsAudit(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.old_data_root = os.environ.get("DATA_ROOT")
+        self.old_state_root = os.environ.get("STATE_ROOT")
+        root = Path(self.tmp.name)
+        os.environ["DATA_ROOT"] = str(root / "storage")
+        os.environ["STATE_ROOT"] = str(root / "state")
+        self.store = PartitionedCsvGzStore(STORE_PARTS, partition="month")
+
+    def tearDown(self):
+        if self.old_data_root is None:
+            os.environ.pop("DATA_ROOT", None)
+        else:
+            os.environ["DATA_ROOT"] = self.old_data_root
+        if self.old_state_root is None:
+            os.environ.pop("STATE_ROOT", None)
+        else:
+            os.environ["STATE_ROOT"] = self.old_state_root
+        self.tmp.cleanup()
+
+    @staticmethod
+    def _metrics_frame(start: str, periods: int = 288) -> pd.DataFrame:
+        times = pd.date_range(start, periods=periods, freq="5min")
+        frame = pd.DataFrame({"time": times})
+        frame["market"] = "usdm_futures"
+        frame["symbol"] = "BTCUSDT"
+        frame["contract_type"] = "PERPETUAL"
+        for column in METRIC_COLUMNS:
+            if column.startswith(("sum_", "count_")):
+                frame[column] = 1.0
+        frame["source"] = "binance_vision_usdm_metrics"
+        frame["ingested_at"] = "2026-08-13T00:00:00+00:00"
+        return frame[METRIC_COLUMNS]
+
+    def test_streaming_audit_passes_complete_metrics_partitions(self):
+        frame = pd.concat([
+            self._metrics_frame("2020-01-01 00:00:00"),
+            self._metrics_frame("2020-01-02 00:00:00"),
+        ], ignore_index=True)
+        append_metrics(self.store, frame, "BTCUSDT")
+
+        audit = audit_symbol(
+            self.store,
+            "BTCUSDT",
+            effective_start=pd.Timestamp("2020-01-01"),
+            expected_end=pd.Timestamp("2020-01-02"),
+        )
+
+        self.assertEqual(audit["status"], "pass")
+        self.assertEqual(audit["rows"], 576)
+        self.assertEqual(audit["duplicate_rows"], 0)
+        self.assertEqual(audit["gap_count"], 0)
+        self.assertEqual(audit["partial_day_count"], 0)
+
+    def test_streaming_audit_rejects_missing_metric_values(self):
+        frame = self._metrics_frame("2020-01-01 00:00:00")
+        frame.loc[0, "sum_open_interest"] = pd.NA
+        append_metrics(self.store, frame, "BTCUSDT")
+
+        audit = audit_symbol(
+            self.store,
+            "BTCUSDT",
+            effective_start=pd.Timestamp("2020-01-01"),
+            expected_end=pd.Timestamp("2020-01-01"),
+        )
+
+        self.assertEqual(audit["status"], "fail")
+        self.assertEqual(audit["invalid_numeric_rows"], 1)
 
 
 if __name__ == "__main__":

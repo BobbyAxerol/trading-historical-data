@@ -20,7 +20,7 @@ from collectors.common.logging import setup_logging
 from collectors.common.manifest import Heartbeat, JsonState, Manifest, sleep_with_heartbeat, utc_now_iso
 from collectors.common.retry import retry_sync
 from collectors.common.storage import PartitionedParquetStore as PartitionedCsvGzStore
-from collectors.common.storage import read_partition_file, write_partition_file
+from collectors.common.storage import read_partition_file, release_unused_memory, write_partition_file
 
 DATASET = "crypto_binance_futures_metrics_5m"
 STORE_PARTS = ["crypto", "binance_futures_metrics", "5m"]
@@ -43,6 +43,18 @@ METRIC_COLUMNS = [
     "source",
     "ingested_at",
 ]
+NUMERIC_METRIC_COLUMNS = [
+    "sum_open_interest",
+    "sum_open_interest_value",
+    "count_toptrader_long_short_ratio",
+    "sum_toptrader_long_short_ratio",
+    "count_long_short_ratio",
+    "sum_taker_long_short_vol_ratio",
+]
+PHASE_D_METRICS_SOURCES = {
+    "binance_vision_usdm_metrics",
+    "binance_futures_data_rest",
+}
 
 
 def _request_json(url: str, *, params: dict[str, Any] | None = None) -> Any:
@@ -694,38 +706,136 @@ def audit_symbol(
     expected_end: pd.Timestamp | None = None,
     min_rows_per_full_day: int = 288,
 ) -> dict[str, Any]:
-    frames = []
-    for path in store.files({"symbol": symbol}):
+    """Audit one metrics symbol without concatenating its full history.
+
+    Phase D must keep the historical data path bounded even after six or more
+    years of 5-minute rows.  Monthly files are chronological canonical
+    partitions, so continuity can be checked with only the previous timestamp
+    and daily counters in memory.
+    """
+
+    files = store.files({"symbol": symbol})
+    rows = 0
+    duplicate_rows = 0
+    invalid_time_rows = 0
+    off_bucket_rows = 0
+    invalid_numeric_rows = 0
+    negative_metric_rows = 0
+    source_mismatch_rows = 0
+    market_mismatch_rows = 0
+    contract_type_mismatch_rows = 0
+    symbol_mismatch_rows = 0
+    file_errors: list[str] = []
+    day_counts: dict[str, int] = {}
+    previous_time: pd.Timestamp | None = None
+    first: pd.Timestamp | None = None
+    latest: pd.Timestamp | None = None
+    gap_count = 0
+    max_gap: pd.Timedelta | None = None
+
+    for path in files:
         try:
-            frames.append(read_partition_file(path, usecols=["time", "symbol"]))
-        except Exception:
+            frame = read_partition_file(path, usecols=METRIC_COLUMNS)
+        except Exception as exc:
+            file_errors.append(f"{path.name}: {type(exc).__name__}: {exc}")
             continue
-    if not frames:
-        return {"rows": 0, "duplicate_rows": 0, "gap_count": 0}
-    df = pd.concat(frames, ignore_index=True)
-    df["time"] = pd.to_datetime(df["time"], errors="coerce").dt.floor("5min")
-    df = df.dropna(subset=["time"]).sort_values("time")
-    times = df["time"].drop_duplicates().sort_values().reset_index(drop=True)
-    diffs = times.diff().dropna()
-    gaps = diffs[diffs > pd.Timedelta(5, unit="min")]
-    partial_days = []
-    if effective_start is not None and expected_end is not None and not times.empty:
-        counts = times.groupby(times.dt.strftime("%Y-%m-%d")).size().astype(int).to_dict()
-        first_day = min(effective_start.normalize(), times.min().normalize())
+
+        rows += int(len(frame))
+        parsed_time = pd.to_datetime(frame["time"], errors="coerce")
+        bucketed_time = parsed_time.dt.floor("5min")
+        invalid_time_rows += int(bucketed_time.isna().sum())
+        valid_time = bucketed_time.notna()
+        off_bucket_rows += int((parsed_time.loc[valid_time] != bucketed_time.loc[valid_time]).sum())
+
+        numeric = frame[NUMERIC_METRIC_COLUMNS].apply(pd.to_numeric, errors="coerce")
+        invalid_numeric_rows += int(numeric.isna().any(axis=1).sum())
+        negative_metric_rows += int((numeric < 0).any(axis=1).sum())
+        symbol_mismatch_rows += int((frame["symbol"].astype(str) != symbol.upper()).sum())
+        market_mismatch_rows += int((frame["market"].astype(str) != "usdm_futures").sum())
+        contract_type_mismatch_rows += int((frame["contract_type"].astype(str) != "PERPETUAL").sum())
+        source_mismatch_rows += int((~frame["source"].astype(str).isin(PHASE_D_METRICS_SOURCES)).sum())
+
+        times = bucketed_time.loc[valid_time].sort_values().reset_index(drop=True)
+        if not times.empty:
+            duplicate_rows += int(times.duplicated().sum())
+            unique_times = times.drop_duplicates().reset_index(drop=True)
+            if previous_time is not None:
+                boundary_gap = unique_times.iloc[0] - previous_time
+                if boundary_gap == pd.Timedelta(0):
+                    duplicate_rows += 1
+                elif boundary_gap > pd.Timedelta(5, unit="min"):
+                    gap_count += 1
+                    max_gap = boundary_gap if max_gap is None or boundary_gap > max_gap else max_gap
+            diffs = unique_times.diff().dropna()
+            gaps = diffs[diffs > pd.Timedelta(5, unit="min")]
+            gap_count += int(len(gaps))
+            if not gaps.empty:
+                local_max_gap = gaps.max()
+                max_gap = local_max_gap if max_gap is None or local_max_gap > max_gap else max_gap
+            for date, count in unique_times.dt.strftime("%Y-%m-%d").value_counts().items():
+                day_counts[str(date)] = day_counts.get(str(date), 0) + int(count)
+            partition_first = pd.Timestamp(unique_times.iloc[0])
+            partition_latest = pd.Timestamp(unique_times.iloc[-1])
+            first = partition_first if first is None or partition_first < first else first
+            latest = partition_latest if latest is None or partition_latest > latest else latest
+            previous_time = partition_latest
+
+        del frame, numeric, parsed_time, bucketed_time
+        release_unused_memory()
+
+    partial_days: list[dict[str, Any]] = []
+    if effective_start is not None and expected_end is not None and first is not None:
+        first_day = min(effective_start.normalize(), first.normalize())
         for day in _date_range(effective_start, expected_end):
             expected = expected_rows_for_day(day, first_day, min_rows_per_full_day)
-            actual = int(counts.get(day.strftime("%Y-%m-%d"), 0))
+            actual = int(day_counts.get(day.strftime("%Y-%m-%d"), 0))
             if actual < expected:
                 partial_days.append({"date": day.strftime("%Y-%m-%d"), "rows": actual, "expected_rows": expected})
+
+    integrity_errors = (
+        len(file_errors)
+        + duplicate_rows
+        + invalid_time_rows
+        + off_bucket_rows
+        + invalid_numeric_rows
+        + negative_metric_rows
+        + source_mismatch_rows
+        + market_mismatch_rows
+        + contract_type_mismatch_rows
+        + symbol_mismatch_rows
+    )
+    status = "pass" if (
+        files
+        and effective_start is not None
+        and expected_end is not None
+        and latest is not None
+        and latest.normalize() >= expected_end.normalize()
+        and integrity_errors == 0
+        and gap_count == 0
+        and not partial_days
+    ) else "fail"
     return {
-        "rows": int(len(df)),
-        "min_time": str(times.min()) if not times.empty else None,
-        "max_time": str(times.max()) if not times.empty else None,
-        "duplicate_rows": int(df.duplicated(subset=["symbol", "time"]).sum()),
-        "gap_count": int(len(gaps)),
-        "max_gap": str(gaps.max()) if not gaps.empty else None,
+        "status": status,
+        "files": len(files),
+        "rows": rows,
+        "min_time": first.isoformat() if first is not None else None,
+        "max_time": latest.isoformat() if latest is not None else None,
+        "effective_start": effective_start.isoformat() if effective_start is not None else None,
+        "expected_end": expected_end.isoformat() if expected_end is not None else None,
+        "duplicate_rows": duplicate_rows,
+        "invalid_time_rows": invalid_time_rows,
+        "off_bucket_rows": off_bucket_rows,
+        "invalid_numeric_rows": invalid_numeric_rows,
+        "negative_metric_rows": negative_metric_rows,
+        "source_mismatch_rows": source_mismatch_rows,
+        "market_mismatch_rows": market_mismatch_rows,
+        "contract_type_mismatch_rows": contract_type_mismatch_rows,
+        "symbol_mismatch_rows": symbol_mismatch_rows,
+        "gap_count": gap_count,
+        "max_gap": str(max_gap) if max_gap is not None else None,
         "partial_day_count": len(partial_days),
         "partial_days_sample": partial_days[:50],
+        "file_errors": file_errors,
     }
 
 
@@ -765,6 +875,7 @@ def sync_all(args: argparse.Namespace, logger, *, run_audit: bool = True) -> dic
     heartbeat = Heartbeat(DATASET)
     total_rows = 0
     audits = {}
+    phase_d_failures: list[str] = []
 
     for symbol, meta in sorted(symbol_meta.items()):
         try:
@@ -824,11 +935,30 @@ def sync_all(args: argparse.Namespace, logger, *, run_audit: bool = True) -> dic
             if audit:
                 audits[symbol] = audit
                 JsonState(f"audits/{DATASET}_{symbol}.json").write({"dataset": DATASET, "symbol": symbol, "updated_at": utc_now_iso(), **audit})
+                if args.audit_phase_d:
+                    JsonState(f"audits/{DATASET}_{symbol}_phase_d.json").write(
+                        {
+                            "dataset": DATASET,
+                            "symbol": symbol,
+                            "service": "phase_d_binance_futures_metrics_5m",
+                            "validated_at": utc_now_iso(),
+                            **audit,
+                        }
+                    )
+                    if audit.get("status") != "pass":
+                        phase_d_failures.append(f"{symbol}: audit status={audit.get('status')}")
             heartbeat.beat(symbol=symbol, latest_time=manifest.symbol_state(symbol).get("latest_time"))
         except Exception as exc:
             manifest.update_symbol(symbol, last_error=str(exc), last_failed_at=utc_now_iso())
             logger.exception("%s futures metrics sync failed", symbol)
             heartbeat.beat(status="error", symbol=symbol, error=str(exc))
+            if args.audit_phase_d:
+                phase_d_failures.append(f"{symbol}: {type(exc).__name__}: {exc}")
+
+    if args.audit_phase_d and phase_d_failures:
+        message = "Phase D Binance futures metrics validation failed: " + "; ".join(phase_d_failures)
+        heartbeat.beat(status="error", error=message)
+        raise RuntimeError(message)
 
     return {"symbols": sorted(symbol_meta), "rows_written": total_rows, "audits": audits}
 
@@ -848,6 +978,7 @@ def main() -> None:
     parser.add_argument("--rest-tail-days", type=int, default=None)
     parser.add_argument("--rest-overlap-hours", type=int, default=None)
     parser.add_argument("--no-validate", action="store_true")
+    parser.add_argument("--audit-phase-d", action="store_true", help="Write a durable, fail-closed Phase D audit for the reviewed source scope.")
     args = parser.parse_args()
 
     config = load_yaml("symbols.binance_futures_metrics.yml")

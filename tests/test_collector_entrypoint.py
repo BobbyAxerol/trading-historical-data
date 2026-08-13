@@ -159,6 +159,26 @@ PHASE_D_VNDIRECT_COMMAND = [
     "--audit-phase-d",
     "--json",
 ]
+PHASE_D_METRICS_APPROVAL = "PRIMUS_HMD_PHASE_D_BINANCE_FUTURES_METRICS_5M_APPROVED"
+PHASE_D_METRICS_COMMAND = [
+    "python",
+    "-m",
+    "collectors.binance_futures_metrics_5m",
+    "--mode",
+    "once",
+    "--symbols",
+    "BTCUSDT",
+    "--start-date",
+    "2020-01-01",
+    "--max-workers",
+    "2",
+    "--no-legacy",
+    "--rest-tail-days",
+    "7",
+    "--rest-overlap-hours",
+    "24",
+    "--audit-phase-d",
+]
 
 
 class TestCollectorEntrypoint(unittest.TestCase):
@@ -176,6 +196,7 @@ class TestCollectorEntrypoint(unittest.TestCase):
                 PHASE_D_APPROVAL,
                 PHASE_D_SPOT_APPROVAL,
                 PHASE_D_VNDIRECT_APPROVAL,
+                PHASE_D_METRICS_APPROVAL,
                 *STAGED_TAIL_COMMANDS,
             ]:
                 env.pop(name, None)
@@ -306,6 +327,19 @@ class TestCollectorEntrypoint(unittest.TestCase):
         self.assertEqual(rejected_start.returncode, 64)
 
         wrong_phase_approval = self.run_entrypoint(*PHASE_D_VNDIRECT_COMMAND, environment={PHASE_D_SPOT_APPROVAL: "approved"})
+        self.assertEqual(wrong_phase_approval.returncode, 64)
+
+    def test_phase_d_metrics_approval_accepts_only_its_exact_history_command(self) -> None:
+        permitted = self.run_entrypoint(*PHASE_D_METRICS_COMMAND, environment={PHASE_D_METRICS_APPROVAL: "approved"})
+        self.assertEqual(permitted.returncode, 0)
+        self.assertEqual(permitted.stdout, f"fake-python:{' '.join(PHASE_D_METRICS_COMMAND[1:])}\n")
+
+        changed_workers = list(PHASE_D_METRICS_COMMAND)
+        changed_workers[10] = "8"
+        rejected_workers = self.run_entrypoint(*changed_workers, environment={PHASE_D_METRICS_APPROVAL: "approved"})
+        self.assertEqual(rejected_workers.returncode, 64)
+
+        wrong_phase_approval = self.run_entrypoint(*PHASE_D_METRICS_COMMAND, environment={PHASE_D_VNDIRECT_APPROVAL: "approved"})
         self.assertEqual(wrong_phase_approval.returncode, 64)
 
 

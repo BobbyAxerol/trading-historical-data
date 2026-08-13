@@ -6,7 +6,7 @@ phase_d_approval:
   status: approved
   approved_by: BobbyAxerol
   approved_at: "2026-08-13T16:18:00+00:00"
-  scope: "Sequential clean new-VPS BTCUSDT Binance USD-M perpetual and Binance spot 1m rebuilds plus the VNDIRECT VN30F1M daily continuous-alias source rebuild only. No old-VPS import, default-universe expansion, derived matrix, consumer cutover, destructive operation, or Deribit request."
+  scope: "Sequential clean new-VPS BTCUSDT Binance USD-M perpetual, spot 1m, futures metrics 5m, and VNDIRECT VN30F1M daily continuous-alias rebuilds only. No old-VPS import, default-universe expansion, derived matrix, consumer cutover, destructive operation, or Deribit request."
   runtime_profile:
     max_concurrent_historical_jobs: 1
     cpus: 1.0
@@ -36,6 +36,13 @@ phase_d_approval:
       sources:
         - vndirect_dchart_continuous_alias_daily
       validation: per-year append/deduplicate and streaming schema/OHLC/negative/duplicate/source-provenance audit; strict trading-calendar continuity is asserted from 2024 where the project holiday calendar is complete
+    phase-d-binance-futures-metrics-5m:
+      dataset_id: crypto_binance_futures_metrics_5m
+      command: ["python", "-m", "collectors.binance_futures_metrics_5m", "--mode", "once", "--symbols", "BTCUSDT", "--start-date", "2020-01-01", "--max-workers", "2", "--no-legacy", "--rest-tail-days", "7", "--rest-overlap-hours", "24", "--audit-phase-d"]
+      sources:
+        - binance_vision_usdm_daily_metrics
+        - binance_futures_data_rest_tail
+      validation: streaming per-month schema/5-minute-bucket/numeric/negative/duplicate/continuity/partial-day/source-provenance audit; fail closed on a non-passing durable Phase D report
 
 deribit:
   status: disabled_by_owner
