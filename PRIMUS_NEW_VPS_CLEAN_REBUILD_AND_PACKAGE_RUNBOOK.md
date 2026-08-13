@@ -231,6 +231,11 @@ record the wheel filename, SHA256, lock hashes, image digest, commit, and build
 UTC in the draft release manifest. A manifest becomes `pass` only after all B0
 exit criteria and the sample-data parity checks in Phase C have passed.
 
+For the B0 build gate, a manifest in `draft` is valid only when its build
+evidence is complete and locally verifiable (including the declared wheel hash).
+`status=pass` is deliberately reserved for Phase C reader acceptance after a
+bounded new-VPS sample has established data/package parity.
+
 ### B0.4. Production Compose And Runtime Ownership Gate
 
 Create a production Compose layer or equivalent deployment configuration. It

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import grp
+import hashlib
 import json
 import os
 import sys
@@ -18,7 +19,7 @@ from typing import Any
 
 import yaml
 
-from collectors.common.storage_manifest import StorageManifestError, validate_accepted_release_manifest
+from collectors.common.storage_manifest import StorageManifestError, validate_release_manifest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -71,7 +72,67 @@ def _runtime_paths(policy: dict[str, Any]) -> dict[str, Path]:
 
 
 def _contains_required(value: Any) -> bool:
-    return isinstance(value, str) and value.strip() and not value.startswith("REQUIRED:")
+    return isinstance(value, str) and value.strip() and not value.startswith("REQUIRED")
+
+
+def _artifact_value(payload: dict[str, Any], key: str) -> str | None:
+    value = payload.get(key)
+    if not _contains_required(value) or str(value).startswith("PENDING_"):
+        return None
+    return str(value)
+
+
+def _reproducible_release_evidence_errors(release: dict[str, Any] | None, releases_root: Path) -> list[str]:
+    """Validate B0 build evidence without accepting unread canonical storage.
+
+    The storage manifest intentionally remains ``draft`` until Phase C has
+    collected a bounded sample and proven package/data parity. B0 requires a
+    complete, verifiable build record; it must not conflate that with the later
+    reader-acceptance status.
+    """
+
+    if release is None:
+        return ["release manifest is missing or invalid JSON"]
+    try:
+        validate_release_manifest(release)
+    except StorageManifestError as exc:
+        return [str(exc)]
+
+    errors: list[str] = []
+    if release.get("status") not in {"draft", "pass"}:
+        errors.append(f"release manifest status must be draft or pass, got {release.get('status')!r}")
+    if _artifact_value(release.get("git", {}), "commit") is None:
+        errors.append("release manifest git.commit is unresolved")
+
+    build = release.get("build", {})
+    for key in ("collector_image", "python_base_image", "docker_engine", "docker_compose", "python", "duckdb", "pyarrow"):
+        if _artifact_value(build, key) is None:
+            errors.append(f"release manifest build.{key} is unresolved")
+
+    artifacts = release.get("artifacts", {})
+    required_artifacts = ("collector_lock_sha256", "reader_lock_sha256", "wheel_filename", "wheel_sha256", "clean_rebuild_verified_at")
+    resolved = {key: _artifact_value(artifacts, key) for key in required_artifacts}
+    for key, value in resolved.items():
+        if value is None:
+            errors.append(f"release manifest artifacts.{key} is unresolved")
+
+    wheel_filename = resolved["wheel_filename"]
+    wheel_sha256 = resolved["wheel_sha256"]
+    if wheel_filename is not None and wheel_sha256 is not None:
+        wheel_path = releases_root / wheel_filename
+        if wheel_path.parent != releases_root or not wheel_path.is_file():
+            errors.append(f"declared wheel artifact is missing: {wheel_filename!r}")
+        else:
+            observed_hash = hashlib.sha256(wheel_path.read_bytes()).hexdigest()
+            if observed_hash != wheel_sha256:
+                errors.append(f"declared wheel SHA256 does not match {wheel_filename!r}")
+
+    configuration_hashes = release.get("configuration_sha256")
+    if not isinstance(configuration_hashes, dict) or not configuration_hashes:
+        errors.append("release manifest configuration_sha256 is missing")
+    elif not all(_artifact_value(configuration_hashes, key) is not None for key in configuration_hashes):
+        errors.append("release manifest configuration_sha256 contains unresolved values")
+    return errors
 
 
 def _check(name: str, ok: bool, detail: str, **evidence: Any) -> dict[str, Any]:
@@ -337,22 +398,15 @@ def _status(policy: dict[str, Any]) -> dict[str, Any]:
 
     release_path = paths["metadata"] / "release_manifest.json"
     release = _read_json(release_path)
-    release_error = None
-    try:
-        if release is None:
-            raise StorageManifestError("release manifest is missing or invalid JSON")
-        validate_accepted_release_manifest(release)
-        release_required = True
-    except StorageManifestError as exc:
-        release_required = False
-        release_error = str(exc)
+    release_errors = _reproducible_release_evidence_errors(release, paths["releases"])
+    release_required = not release_errors
     checks.append(
         _check(
             "reproducible_release_and_storage_manifest",
             release_required,
-            "Release/storage manifest requires resolved hashes, image digest, build evidence, and compatibility contract.",
+            "B0 accepts complete draft build evidence; Phase C alone accepts the storage manifest for reader queries.",
             path=str(release_path),
-            validation_error=release_error,
+            validation_errors=release_errors,
         )
     )
 

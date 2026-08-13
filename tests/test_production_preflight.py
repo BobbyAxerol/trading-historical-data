@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import grp
+import hashlib
 import os
 import tempfile
 import unittest
@@ -87,18 +88,31 @@ class TestProductionPreflight(unittest.TestCase):
         inventory_path.write_text(json.dumps(inventory))
         release_path = paths["metadata"] / "release_manifest.json"
         release = json.loads(release_path.read_text())
+        wheel_filename = "test-reader.whl"
+        wheel_payload = b"test-wheel"
+        (paths["releases"] / wheel_filename).write_bytes(wheel_payload)
         release.update(
             {
-                "status": "pass",
+                "status": "draft",
                 "source_inventory_reference": "state/bootstrap/source_inventory.json",
                 "git": {"commit": "test-commit", "tag": "test-tag"},
                 "build": {
                     "collector_image": "test-image@sha256:test",
                     "python_base_image": "python@sha256:test",
+                    "docker_engine": "test-engine",
+                    "docker_compose": "test-compose",
                     "python": "3.12.13",
                     "duckdb": "1.5.5",
                     "pyarrow": "20.0.0",
                 },
+                "artifacts": {
+                    "collector_lock_sha256": "collector-lock",
+                    "reader_lock_sha256": "reader-lock",
+                    "wheel_filename": wheel_filename,
+                    "wheel_sha256": hashlib.sha256(wheel_payload).hexdigest(),
+                    "clean_rebuild_verified_at": "2026-08-13T00:00:00+00:00",
+                },
+                "configuration_sha256": {"test_policy": "test-config-hash"},
                 "datasets": [
                     {
                         "dataset_id": "test-dataset",
@@ -122,6 +136,7 @@ class TestProductionPreflight(unittest.TestCase):
         names = {check["name"]: check["status"] for check in payload["checks"]}
         self.assertEqual(names["capacity_and_concurrency"], "pass")
         self.assertEqual(names["source_inventory"], "pass")
+        self.assertEqual(names["reproducible_release_and_storage_manifest"], "pass")
         self.assertEqual(payload["status"], "pass")
 
 

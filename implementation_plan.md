@@ -94,26 +94,26 @@ Completed evidence:
   evidence. Its new-VPS baseline passes disk and inode thresholds but correctly
   blocks absent heartbeat and alert evidence; no scheduled writer was started
   merely to make the check green.
-- B0.3 reader packaging is now source-tested: `pyproject.toml` defines the
-  code-only `primus-historical-market-data` wheel; the stable
-  `primus.historical_market_data` namespace re-exports the legacy
-  `data_loader` implementations without changing `check_val=True`. The
-  hash-pinned build lock SHA-256 is
-  `fba8185537cb6167f08dea0293d6716e4f1e4c8dd16caf430d93aa1b0944210c`.
-  A candidate built in the digest-pinned Python 3.12 builder contained only
-  `data_loader`, `loaders`, and `primus` code (no collector, storage, state,
-  logs, tests, or secrets) and clean-installed with `requirements-reader.lock`
-  from outside the source checkout. The candidate wheel is not a release
-  artifact: the committed-source rebuild, manifest evidence, and sample-data
-  parity/ACL acceptance remain pending.
+- B0.3 reproducible reader packaging is implemented and evidenced. The
+  code-only `primus-historical-market-data` wheel exposes stable
+  `primus.historical_market_data` objects that are the same implementations as
+  legacy `data_loader`, including `check_val=True`. The wheel contains only the
+  loader/namespace code, never collector runtime, storage, state, logs, tests,
+  or secrets. `requirements-build.lock` is hash-pinned at
+  `fba8185537cb6167f08dea0293d6716e4f1e4c8dd16caf430d93aa1b0944210c`;
+  `SOURCE_DATE_EPOCH` is derived from the commit and two independent clean
+  builds are byte-identical. The release wheel clean-installs with the reader
+  lock in a Python 3.12 environment with no source checkout on `PYTHONPATH`.
+  The runtime manifest is intentionally `draft`: B0 validates complete build
+  evidence, while Phase C alone promotes it after bounded sample-data parity.
 
 Current B0 blockers (not bypassed): capacity/concurrency requires bounded-seed
-measurements plus approval; release/storage manifest is not accepted until a
-committed wheel build, package tag, sample-data parity/ACL acceptance, and the
-compatibility contract are complete; off-host backup and restore drill are
-deferred by the owner but remain required by the current runbook exit criteria;
+measurements plus approval; off-host backup and restore drill are deferred by
+the owner but remain required by the current runbook exit criteria;
 monitoring/alert activation is pending; and no approved release/data root
-exists yet from which to designate a single-root consumer rollback path.
+exists yet from which to designate a single-root consumer rollback path. The
+strict preflight currently passes 7 of 11 checks; Phase C package tag and
+sample-data parity begin only after these B0 blocks are resolved.
 
 Safety result: no collector, source ingestion, `discover`, `sync-once`, pilot,
 or historical backfill was started during this work.
