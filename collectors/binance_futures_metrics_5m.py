@@ -559,10 +559,11 @@ def _fetch_rest_metric(endpoint: str, *, symbol: str, start: pd.Timestamp, end: 
             "endTime": end_ms,
             "limit": 500,
         }
-        if endpoint == "openInterestHist":
-            params["symbol"] = symbol
-        else:
-            params["pair"] = symbol
+        # These are USD-M endpoints.  Unlike their COIN-M counterparts, every
+        # endpoint here expects the concrete USD-M ``symbol`` parameter.
+        # Sending ``pair`` yields HTTP 400 / -1121 and silently drops the four
+        # long/short ratio series while open interest still succeeds.
+        params["symbol"] = symbol
         batch = _request_futures_data(endpoint, params=params)
         if not batch:
             break

@@ -54,6 +54,11 @@ Status: in progress; collector and backfill remain blocked.
   while it waits for the next cycle. An existing `error` heartbeat is never
   overwritten by the normal-wait status; only a later successful cycle can
   clear it.
+- Runtime observation found the USD-M futures metrics ratio endpoints were
+  incorrectly sent a COIN-M-style `pair` parameter, which returned HTTP 400
+  / `-1121`. The collector now sends the required concrete `symbol` for all
+  five USD-M metrics endpoints; the degraded service is stopped pending its
+  one-image fix deployment and a bounded REST-tail recheck.
 
 Completed evidence:
 

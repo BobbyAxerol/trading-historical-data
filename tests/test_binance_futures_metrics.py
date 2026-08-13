@@ -1,6 +1,7 @@
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent.resolve()))
 
@@ -8,6 +9,7 @@ import pandas as pd
 
 from collectors.binance_futures_metrics_5m import (
     _date_from_key,
+    _fetch_rest_metric,
     effective_start_day,
     missing_coverage_key_days,
     normalize_metrics_frame,
@@ -15,6 +17,26 @@ from collectors.binance_futures_metrics_5m import (
 
 
 class TestBinanceFuturesMetrics(unittest.TestCase):
+    def test_usdm_rest_metric_endpoints_use_symbol_not_pair(self):
+        start = pd.Timestamp("2026-08-13T00:00:00Z")
+        end = pd.Timestamp("2026-08-13T00:05:00Z")
+        endpoints = (
+            "openInterestHist",
+            "topLongShortAccountRatio",
+            "topLongShortPositionRatio",
+            "globalLongShortAccountRatio",
+            "takerlongshortRatio",
+        )
+
+        for endpoint in endpoints:
+            with self.subTest(endpoint=endpoint):
+                with patch("collectors.binance_futures_metrics_5m._request_futures_data", return_value=[]) as request:
+                    _fetch_rest_metric(endpoint, symbol="BTCUSDT", start=start, end=end)
+
+                params = request.call_args.kwargs["params"]
+                self.assertEqual(params["symbol"], "BTCUSDT")
+                self.assertNotIn("pair", params)
+
     def test_normalize_metrics_frame(self):
         raw = pd.DataFrame(
             {
