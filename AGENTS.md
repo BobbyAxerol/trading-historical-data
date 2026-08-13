@@ -27,6 +27,7 @@ Before edits, record `git status --short --branch` and verify the checkout. Do n
 
 ## Git workflow and repository identity
 
+- Maintain one local tracking branch for each `origin/*` branch. At this checkpoint the mirrored set is `main`, `dev`, `feat/option-ingestion`, and `feat/vn-daily-universe-upgrade`.
 - Work on the local tracking branch `feat/option-ingestion`, whose upstream is `origin/feat/option-ingestion`. Do not develop on a detached tag, `main`, or an unrelated branch.
 - Keep `primus-historical-market-data-bootstrap-v0.1.0rc1` as the immutable bootstrap reference; verify it resolves to `bdda4b28b302424a6c682893a9cc966cad59a17a` before migration-sensitive work.
 - Use this repository-local Git identity only:
