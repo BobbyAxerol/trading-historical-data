@@ -52,15 +52,17 @@ Completed evidence:
   with entrypoint gate, user `1000:1000`, and exactly the storage/state/logs
   runtime binds; it and its temporary network were removed afterward.
 - Added `primus-market-data-readers` ACLs for storage read/traverse and default
-  future-file access only. No user has been added to that group, so the
-  read/write-denial acceptance test is deliberately still pending.
+  future-file access only. `thanhvuong` is the designated reader member;
+  acceptance checks confirm canonical-manifest read succeeds while storage
+  write and reads of `state`, `logs`, and `secrets` are denied. Bobby remains
+  the runtime owner and root retains normal host-administrator authority.
 
 Current B0 blockers (not bypassed): capacity/concurrency requires source- and
 bounded-seed measurements plus approval; every enabled source inventory probe
 is pending; release/storage manifest is not accepted until a tagged release;
-reader ACL needs a designated consumer test; backup destination/retention and
-restore drill are undefined; monitoring/alert activation is pending; and the
-single-root consumer rollback release/root have not yet been designated.
+backup destination/retention and restore drill are undefined; monitoring/alert
+activation is pending; and the single-root consumer rollback release/root have
+not yet been designated.
 
 Safety result: no collector, source ingestion, `discover`, `sync-once`, pilot,
 or historical backfill was started during this work.
