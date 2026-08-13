@@ -1,0 +1,79 @@
+# Historical Market Data — Locked Session Rules
+
+## Scope boundary
+
+- This session is dedicated **only** to `/srv/primus/src/historical-market-data`.
+- Do not edit, reconfigure, restart, or inspect application-private files for any other project under `/srv/primus/src`, `/home/bobby`, or elsewhere on the host.
+- The only permitted non-repository write location for this project is its dedicated runtime root: `/srv/primus/historical-market-data`.
+- Read-only host checks that are necessary to prove a Phase B0 gate are allowed. Any write outside the repository or the dedicated runtime root requires explicit user authorization.
+- Do not change Bobby's shell, SSH, sudo, Docker-wide, ACL-wide, firewall, or global system configuration while working on this repository.
+
+## Required context and release checkpoint
+
+Read these documents before making a technical or operational change:
+
+1. `PRIMUS_NEW_VPS_CLEAN_REBUILD_AND_PACKAGE_RUNBOOK.md`
+2. `implementation_plan.md`
+3. `DERIBIT_BTC_OPTIONS_HISTORICAL_DATA_V1_OFFICIAL_PLAN.md`
+
+The bootstrap checkpoint is:
+
+```text
+tag:    primus-historical-market-data-bootstrap-v0.1.0rc1
+commit: bdda4b28b302424a6c682893a9cc966cad59a17a
+```
+
+Before edits, record `git status --short --branch` and verify the checkout. Do not reset, clean, checkout another revision, merge, retag, push, or alter remotes unless the user explicitly asks.
+
+## Git workflow and repository identity
+
+- Work on the local tracking branch `feat/option-ingestion`, whose upstream is `origin/feat/option-ingestion`. Do not develop on a detached tag, `main`, or an unrelated branch.
+- Keep `primus-historical-market-data-bootstrap-v0.1.0rc1` as the immutable bootstrap reference; verify it resolves to `bdda4b28b302424a6c682893a9cc966cad59a17a` before migration-sensitive work.
+- Use this repository-local Git identity only:
+
+```text
+user.name  = BobbyAxerol
+user.email = vugioan11022002@gmail.com
+```
+
+- Before any future push, inspect the branch/upstream, working-tree diff, staged diff, and commit range. Push only `HEAD` to `origin/feat/option-ingestion`, never force-push, and never push generated runtime artifacts or secrets.
+- Keep scope-guard, B0, and later implementation commits focused and independently reviewable. Do not mix unrelated host/project changes into this branch.
+
+## New-VPS data isolation
+
+- Transfer and use Git-tracked source, configuration templates, tests, and documentation only.
+- Never copy, rsync, Git-LFS migrate, or otherwise import `storage/`, `state/`, or `logs/` from the old VPS.
+- Treat the old VPS as read-only audit/rollback reference; never use its Deribit checkpoint, staging files, or partial canonical data to skip new-VPS gates.
+- Runtime data must never be written inside the Git checkout. Use only:
+
+```text
+/srv/primus/historical-market-data/storage
+/srv/primus/historical-market-data/state
+/srv/primus/historical-market-data/logs
+/srv/primus/historical-market-data/releases
+```
+
+- Never commit runtime data, generated Parquet, SQLite databases, logs, caches, Docker runtime files, `.env`, credentials, or private keys.
+
+## Current gate: Phase B0 only
+
+- The active work phase is **B0: Production Preflight and Release Controls**.
+- Do **not** start a collector, `backfill`, `sync-once`, `discover`, Docker collector service, scheduled writer, or any broad/history-writing command until every B0 exit criterion is explicitly recorded as passed.
+- A bounded source/API probe is allowed only when it is a stated B0 sub-gate, is non-destructive, has a defined rate/resource limit, and its evidence is recorded. It must not be treated as permission to start ingestion.
+- Do not run Deribit Phase 6 or any other broad historical backfill merely because an old-VPS pilot passed; new-VPS probe/pilot/state gates must pass independently.
+- B0 must provide evidence for: capacity/concurrency, reproducible build artifacts, production Compose/runtime ownership, source inventory, storage compatibility manifest, backup/restore drill, monitoring/resource policy, clock/environment identity, and rollback.
+
+## Operational and data-safety invariants
+
+- Keep runtime mounts rooted at `PRIMUS_HMD_RUNTIME_ROOT=/srv/primus/historical-market-data`; no writable checkout mounts and no source-code bind mount for runtime services.
+- Keep internal-only services bound to loopback or Unix sockets unless the user explicitly approves another exposure.
+- Preserve reader-only access boundaries: consumers may read canonical storage only; never grant them write access to storage or access to `state`, `logs`, secrets, or host administration.
+- For Deribit, preserve disk-before-checkpoint, bounded queues, atomic writes, coverage-ledger validation, and cleanup-only-after-validation. Never equate API failure with confirmed empty data.
+- Never delete canonical data, staging evidence, or runtime directories as part of a diagnostic or cleanup action without a validated project procedure and explicit confirmation where required.
+- Do not read, print, commit, or move secrets, SSH private keys, API keys, or `.env` values.
+
+## Evidence and handoff
+
+- Keep changes narrowly scoped, explain the B0 gate they address, and verify them proportionately.
+- Update the project implementation log only with factual commands, results, metrics, decisions, and blockers.
+- Before handing off, report the exact B0 status and the next allowed gate. If a gate is not provably passed, mark it blocked rather than bypassing it.
