@@ -1,6 +1,7 @@
 import io
 import logging
 import sys
+import tempfile
 import zipfile
 from pathlib import Path
 from unittest.mock import patch
@@ -14,6 +15,7 @@ import pandas as pd
 from collectors.binance_usdm_quarterly_1m import (
     NUMERIC_COLUMNS,
     _archive_symbol_in_scope,
+    _date_complete,
     _delivery_from_symbol,
     audit_symbol,
     normalize_kline_frame,
@@ -163,6 +165,27 @@ class TestBinanceUsdmQuarterly(unittest.TestCase):
             )
 
         self.assertEqual(fetch.call_args.args[1], pd.Timestamp("2026-08-12T00:00:00Z"))
+
+    def test_date_complete_requires_every_minute_of_the_utc_day(self):
+        class Store:
+            def __init__(self, root):
+                self.root = root
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            partition = root / "symbol=BTCUSDT_260925" / "year=2026" / "month=08"
+            partition.mkdir(parents=True)
+            (partition / "part.parquet").touch()
+            store = Store(root)
+            partial = pd.DataFrame({"time": ["2026-08-12 10:24:00"]})
+            complete = pd.DataFrame(
+                {"time": pd.date_range("2026-08-12T00:00:00", periods=1440, freq="min")}
+            )
+
+            with patch("collectors.binance_usdm_quarterly_1m.read_partition_file", return_value=partial):
+                self.assertFalse(_date_complete(store, "BTCUSDT_260925", "2026-08-12"))
+            with patch("collectors.binance_usdm_quarterly_1m.read_partition_file", return_value=complete):
+                self.assertTrue(_date_complete(store, "BTCUSDT_260925", "2026-08-12"))
 
 
 if __name__ == "__main__":

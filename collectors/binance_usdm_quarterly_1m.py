@@ -318,7 +318,13 @@ def _month_partition_exists(store: PartitionedCsvGzStore, symbol: str, month: st
     return (partition_dir / "part.parquet").exists() or (partition_dir / "part.csv.gz").exists()
 
 
-def _date_exists(store: PartitionedCsvGzStore, symbol: str, date_text: str) -> bool:
+def _date_complete(store: PartitionedCsvGzStore, symbol: str, date_text: str) -> bool:
+    """Return true only when a complete 1,440-minute UTC day is canonical.
+
+    A staged tail may already hold a few minutes of the date.  Treating that
+    as a completed Vision daily archive would preserve the missing prefix.
+    """
+
     date = pd.Timestamp(date_text)
     partition_dir = store.root / f"symbol={symbol}" / f"year={date.year:04d}" / f"month={date.month:02d}"
     path = partition_dir / "part.parquet"
@@ -331,7 +337,8 @@ def _date_exists(store: PartitionedCsvGzStore, symbol: str, date_text: str) -> b
     except Exception:
         return False
     times = pd.to_datetime(df["time"], errors="coerce")
-    return bool((times.dt.normalize() == date.normalize()).any())
+    day_times = times.loc[times.dt.normalize() == date.normalize()].dropna().drop_duplicates()
+    return len(day_times) == 1440
 
 
 def small_gap_repair_dates(store: PartitionedCsvGzStore, symbol: str, *, max_gap_minutes: int) -> list[str]:
@@ -719,6 +726,7 @@ def sync_symbol(
     latest_time = None
     monthly_keys: list[str] = []
     daily_keys: list[str] = []
+    complete_daily_dates: list[pd.Timestamp] = []
     unavailable_vision_keys: list[str] = []
     if include_monthly:
         monthly_keys = vision_monthly_keys(symbol, interval=interval, start_month=start_month, s3_base_url=s3_base_url)
@@ -746,8 +754,9 @@ def sync_symbol(
         daily_keys = vision_daily_keys(symbol, interval=interval, s3_base_url=s3_base_url)
         for key in daily_keys:
             date_text = _date_from_key(key)
-            if date_text and not refresh_archive and _date_exists(store, symbol, date_text):
+            if date_text and not refresh_archive and _date_complete(store, symbol, date_text):
                 logger.debug("%s skip existing daily date %s", symbol, date_text)
+                complete_daily_dates.append(pd.Timestamp(date_text, tz="UTC"))
                 continue
             result = sync_vision_file(
                 key=key,
@@ -762,16 +771,18 @@ def sync_symbol(
             latest_time = result.get("latest_time") or latest_time
             if result.get("outcome") in {"missing", "empty"}:
                 unavailable_vision_keys.append(key)
+            elif date_text and _date_complete(store, symbol, date_text):
+                complete_daily_dates.append(pd.Timestamp(date_text, tz="UTC"))
             time.sleep(0.05)
 
     if include_rest and symbol in active_symbols:
         tail_rest_start = rest_start
-        if tail_rest_start is None and daily_keys:
-            daily_dates = [pd.Timestamp(date, tz="UTC") for key in daily_keys if (date := _date_from_key(key))]
-            if daily_dates:
-                latest_daily_end = max(daily_dates) + pd.Timedelta(days=1)
-                bounded_lower = _closed_until() - pd.Timedelta(days=int(rest_bridge_days))
-                tail_rest_start = max(latest_daily_end, bounded_lower).strftime("%Y-%m-%dT%H:%M:%SZ")
+        if tail_rest_start is None:
+            bounded_lower = _closed_until() - pd.Timedelta(days=int(rest_bridge_days))
+            if complete_daily_dates:
+                latest_daily_end = max(complete_daily_dates) + pd.Timedelta(days=1)
+                bounded_lower = max(latest_daily_end, bounded_lower)
+            tail_rest_start = bounded_lower.strftime("%Y-%m-%dT%H:%M:%SZ")
         result = sync_rest_tail(
             symbol=symbol,
             meta=meta,
