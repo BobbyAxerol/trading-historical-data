@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 
 import data_loader
+from collectors.common.calendar_vn import is_trading_day
 from collectors.providers.vndirect_dchart_derivatives import DChartFetchResult, VndirectDChartProvider
 from collectors.vn_daily_matrix import build_matrix
 from collectors.vn_derivatives.vndirect import (
@@ -314,6 +315,11 @@ class TestVndirectClosedDailyBoundary(unittest.TestCase):
 
         self.assertEqual(last_closed_vn_daily(before_close), pd.Timestamp("2026-08-12"))
         self.assertEqual(last_closed_vn_daily(after_close), pd.Timestamp("2026-08-13"))
+
+    def test_verified_exchange_bridge_holidays_are_not_expected_trading_days(self):
+        for date in ("2024-04-29", "2024-09-03", "2025-05-02", "2026-01-02"):
+            with self.subTest(date=date):
+                self.assertFalse(is_trading_day(datetime.fromisoformat(date)))
 
 
 def _restore_env(name: str, value: str | None) -> None:

@@ -15,9 +15,12 @@ VN_HOLIDAYS = {
     "2024-02-13",
     "2024-02-14",
     "2024-04-18",
+    # HNX adjusted the 30/4--1/5 exchange closure to include the Monday.
+    "2024-04-29",
     "2024-04-30",
     "2024-05-01",
     "2024-09-02",
+    "2024-09-03",
     "2025-01-01",
     "2025-01-27",
     "2025-01-28",
@@ -27,9 +30,11 @@ VN_HOLIDAYS = {
     "2025-04-07",
     "2025-04-30",
     "2025-05-01",
+    "2025-05-02",
     "2025-09-01",
     "2025-09-02",
     "2026-01-01",
+    "2026-01-02",
     "2026-02-16",
     "2026-02-17",
     "2026-02-18",
@@ -101,5 +106,4 @@ def filter_trading_hours(df: pd.DataFrame, *, derivative: bool) -> pd.DataFrame:
         is_trading_hour = ((hhmm >= 900) & (hhmm <= 1130)) | ((hhmm >= 1300) & (hhmm <= 1445))
 
     return df[is_trading_day_mask & is_trading_hour].copy()
-
 
