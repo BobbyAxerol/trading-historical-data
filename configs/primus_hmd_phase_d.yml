@@ -1,0 +1,28 @@
+# Owner-approved Phase D source-rebuild policy.  This permits one exact,
+# one-shot historical job at a time; it does not relax the B0 tail contracts.
+schema_version: 1
+
+phase_d_approval:
+  status: approved
+  approved_by: BobbyAxerol
+  approved_at: "2026-08-13T16:08:00+00:00"
+  scope: "Initial clean new-VPS Binance USD-M BTCUSDT perpetual 1m rebuild only. No old-VPS import, default-universe expansion, derived matrix, consumer cutover, destructive operation, or Deribit request."
+  runtime_profile:
+    max_concurrent_historical_jobs: 1
+    cpus: 1.0
+    memory_mib: 1536
+    pids: 256
+    restart: "no"
+  services:
+    phase-d-binance-usdm-perpetual-1m:
+      dataset_id: crypto_binance_futures_1m
+      command: ["python", "-m", "collectors.binance_usdm_perpetual_1m", "--mode", "once", "--symbols", "BTCUSDT", "--start-month", "2020-01", "--daily-bridge-days", "35", "--rest-bridge-days", "35", "--rest-window-minutes", "10080"]
+      sources:
+        - binance_vision_usdm_monthly
+        - binance_vision_usdm_daily_bridge
+        - binance_usdm_rest_bounded_bridge
+      validation: per-partition streaming schema/OHLC/negative/duplicate/continuity/tail audit
+
+deribit:
+  status: disabled_by_owner
+  reason: "Explicitly deferred for this session."

@@ -1,0 +1,11 @@
+# Phase D defaults.  Production Compose still supplies the exact explicitly
+# reviewed BTCUSDT command; this file is not a default-universe expansion.
+symbols:
+  - BTCUSDT
+interval: "1m"
+start_month: "2020-01"
+daily_bridge_days: 35
+rest_bridge_days: 35
+rest_window_minutes: 10080
+vision_base_url: "https://data.binance.vision"
+s3_base_url: "https://s3-ap-northeast-1.amazonaws.com/data.binance.vision"

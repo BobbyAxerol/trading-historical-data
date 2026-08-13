@@ -56,13 +56,29 @@ user.email = vugioan11022002@gmail.com
 
 - Never commit runtime data, generated Parquet, SQLite databases, logs, caches, Docker runtime files, `.env`, credentials, or private keys.
 
-## Current gate: Phase B0 only
+## Current gate: Phase D controlled source rebuild
 
-- The active work phase is **B0: Production Preflight and Release Controls**.
-- Do **not** start a collector, `backfill`, `sync-once`, `discover`, Docker collector service, scheduled writer, or any broad/history-writing command until every B0 exit criterion is explicitly recorded as passed.
-- A bounded source/API probe is allowed only when it is a stated B0 sub-gate, is non-destructive, has a defined rate/resource limit, and its evidence is recorded. It must not be treated as permission to start ingestion.
-- Do not run Deribit Phase 6 or any other broad historical backfill merely because an old-VPS pilot passed; new-VPS probe/pilot/state gates must pass independently.
-- B0 must provide evidence for: capacity/concurrency, reproducible build artifacts, production Compose/runtime ownership, source inventory, storage compatibility manifest, backup/restore drill, monitoring/resource policy, clock/environment identity, and rollback.
+- Phase B0 is recorded as `pass_with_accepted_waivers`; the approved bounded
+  seed, non-Deribit live tails, reader package acceptance, and Discord monitor
+  are complete. The waiver is not a consumer-cutover or destructive-operation
+  permission.
+- The active work phase is **D: Clean Source Rebuild On The New VPS**. Start
+  only a named, reviewed Docker service with an exact entrypoint command. A
+  bare `docker compose up`, a direct collector invocation, a changed argument,
+  or a generic approval environment variable is never a Phase D authorization.
+- At most one heavy historical service may run at a time. B0 live tails may
+  remain running, but any shared canonical dataset must use the same
+  partition/manifest locking discipline and Phase D must validate its result.
+- The first owner-approved Phase D job is exactly
+  `phase-d-binance-usdm-perpetual-1m`, defined in
+  `configs/primus_hmd_phase_d.yml` and launched only with
+  `tools/run_phase_d_binance_usdm_perpetual_1m.sh`. It rebuilds BTCUSDT USD-M
+  perpetual 1m data from new upstream sources, one archive or bounded REST
+  window at a time.
+- Do not start a default-universe expansion, derived matrix, VN historical
+  batch, metrics/spot/quarterly historical batch, repair sweep, consumer
+  cutover, old-writer retirement, destructive data operation, or **any
+  Deribit command** under this approval. Each needs its own recorded gate.
 
 ### Owner-approved B0 exception for this session
 

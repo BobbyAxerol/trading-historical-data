@@ -1,0 +1,120 @@
+from __future__ import annotations
+
+import io
+import os
+import tempfile
+import unittest
+import zipfile
+from pathlib import Path
+from unittest.mock import patch
+
+import pandas as pd
+
+from collectors import binance_usdm_perpetual_1m as perpetual
+from collectors.common.manifest import Manifest
+from collectors.common.storage import PartitionedParquetStore
+
+
+def _zip_csv(text: str) -> bytes:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, mode="w") as archive:
+        archive.writestr("BTCUSDT-1m-test.csv", text)
+    return buffer.getvalue()
+
+
+def _frame(times: list[str], symbol: str = "BTCUSDT") -> pd.DataFrame:
+    values = pd.to_datetime(times)
+    return pd.DataFrame(
+        {
+            "time": values,
+            "symbol": [symbol] * len(values),
+            "open": [100.0] * len(values),
+            "high": [101.0] * len(values),
+            "low": [99.0] * len(values),
+            "close": [100.5] * len(values),
+            "volume": [1.0] * len(values),
+            "close_time": values + pd.Timedelta(seconds=59),
+            "quote_volume": [100.0] * len(values),
+            "number_of_trades": [1] * len(values),
+            "taker_buy_base_volume": [0.5] * len(values),
+            "taker_buy_quote_volume": [50.0] * len(values),
+            "source": ["test"] * len(values),
+            "ingested_at": ["2026-08-13T00:00:00+00:00"] * len(values),
+        }
+    )
+
+
+class TestBinanceUsdmPerpetual(unittest.TestCase):
+    def test_read_vision_zip_keeps_headerless_first_row(self) -> None:
+        content = _zip_csv(
+            "1577836800000,7200,7210,7190,7205,1,1577836859999,7205,5,0.5,3602.5,0\n"
+            "1577836860000,7205,7215,7200,7210,2,1577836919999,14420,6,1,7210,0\n"
+        )
+        frame = perpetual.read_vision_zip(content, symbol="BTCUSDT", source="test")
+        self.assertEqual(len(frame), 2)
+        self.assertEqual(str(frame.loc[0, "time"]), "2020-01-01 00:00:00")
+        self.assertEqual(frame.loc[0, "number_of_trades"], 5)
+
+    def test_read_vision_zip_drops_header_before_positional_normalization(self) -> None:
+        content = _zip_csv(
+            "open_time,open,high,low,close,volume,close_time,quote_volume,count,taker_buy_volume,taker_buy_quote_volume,ignore\n"
+            "1577836800000,7200,7210,7190,7205,1,1577836859999,7205,5,0.5,3602.5,0\n"
+        )
+        frame = perpetual.read_vision_zip(content, symbol="BTCUSDT", source="test")
+        self.assertEqual(len(frame), 1)
+        self.assertEqual(str(frame.loc[0, "time"]), "2020-01-01 00:00:00")
+        self.assertEqual(frame.loc[0, "number_of_trades"], 5)
+
+    def test_discover_active_perpetuals_filters_to_requested_usdm_contract(self) -> None:
+        payload = {
+            "symbols": [
+                {"symbol": "BTCUSDT", "contractType": "PERPETUAL", "quoteAsset": "USDT", "marginAsset": "USDT", "status": "TRADING", "pair": "BTCUSDT", "onboardDate": 1569398400000},
+                {"symbol": "BTCUSD_PERP", "contractType": "PERPETUAL", "quoteAsset": "USD", "marginAsset": "BTC", "status": "TRADING", "pair": "BTCUSD"},
+                {"symbol": "ETHUSDT", "contractType": "PERPETUAL", "quoteAsset": "USDT", "marginAsset": "USDT", "status": "BREAK", "pair": "ETHUSDT"},
+            ]
+        }
+        with patch.object(perpetual, "_request_json", return_value=payload):
+            active = perpetual.discover_active_perpetuals(["BTCUSDT"])
+        self.assertEqual(set(active), {"BTCUSDT"})
+        self.assertEqual(active["BTCUSDT"]["contract_type"], "PERPETUAL")
+
+    def test_validation_detects_a_gap_without_loading_multiple_partitions_together(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch.dict(os.environ, {"DATA_ROOT": str(root / "storage"), "STATE_ROOT": str(root / "state")}, clear=False):
+                store = PartitionedParquetStore(perpetual.STORE_PARTS, partition="month")
+                perpetual._append(store, _frame(["2020-01-01 00:00:00", "2020-01-01 00:02:00"]), "BTCUSDT")
+                with patch.object(perpetual, "_closed_until", return_value=pd.Timestamp("2020-01-01 00:02:00", tz="UTC")):
+                    audit = perpetual.validate_symbol(store=store, symbol="BTCUSDT", expected_start="2020-01-01")
+        self.assertEqual(audit["status"], "requires_repair")
+        self.assertEqual(audit["gap_count"], 1)
+        self.assertEqual(audit["max_gap_minutes"], 1)
+
+    def test_rest_bridge_bounds_each_fetch_window_and_appends_immediately(self) -> None:
+        calls: list[tuple[pd.Timestamp, pd.Timestamp]] = []
+
+        def fake_fetch(symbol: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
+            calls.append((start, end))
+            return _frame([start.tz_convert(None).strftime("%Y-%m-%d %H:%M:%S")], symbol)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch.dict(os.environ, {"DATA_ROOT": str(root / "storage"), "STATE_ROOT": str(root / "state")}, clear=False):
+                store = PartitionedParquetStore(perpetual.STORE_PARTS, partition="month")
+                manifest = Manifest(perpetual.DATASET)
+                with patch.object(perpetual, "_closed_until", return_value=pd.Timestamp("2020-01-02 00:00:00", tz="UTC")), patch.object(perpetual, "fetch_1m", side_effect=fake_fetch):
+                    result = perpetual.sync_rest_bridge(
+                        symbol="BTCUSDT",
+                        days=1,
+                        window_minutes=1000,
+                        store=store,
+                        manifest=manifest,
+                        logger=__import__("logging").getLogger("test"),
+                    )
+        self.assertEqual(result["windows"], 2)
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(all((end - start) <= pd.Timedelta(minutes=999) for start, end in calls))
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -155,6 +155,34 @@ sample-data parity begin only after these B0 blocks are resolved.
 Safety result: no collector, source ingestion, `discover`, `sync-once`, pilot,
 or historical backfill was started during this work.
 
+### 2026-08-13 UTC — B0 Closure And Phase C Reader Package Acceptance
+
+- B0 final operational state is `pass_with_accepted_waivers`. The explicitly
+  deferred controls remain waived and do not permit consumer cutover or
+  destructive action. The seven non-Deribit B0 live tails and read-only
+  Discord monitor have fresh successful cycles.
+- Phase C package acceptance passed for the bounded new-VPS sample. The
+  namespaced wheel and legacy loader returned identical schema, dtypes, order,
+  and values; `check_val=True` remained the default. A reader-group container
+  could read canonical data but could not create, overwrite, or delete a
+  Parquet file. The runtime release manifest records that bounded-sample
+  acceptance; no consumer cutover is implied.
+
+### 2026-08-13 UTC — Phase D Initial Controlled Rebuild Authorized
+
+- Owner approved the initial Phase D source-rebuild scope: BTCUSDT Binance
+  USD-M perpetual 1m only, clean new-VPS upstream data only, no Deribit.
+- The reviewed one-shot service
+  `phase-d-binance-usdm-perpetual-1m` is exact-command gated and runs detached
+  with one CPU, 1536 MiB, and 256 PIDs. It uses completed monthly Vision
+  archives, a bounded daily bridge, and REST windows capped at 10,080 minutes;
+  each chunk is appended/deduplicated atomically before memory is released.
+- The job writes an isolated host-visible log plus durable Phase D state and a
+  streaming per-partition quality report. It must report zero duplicate/OHLC/
+  negative errors, no unexplained continuity gaps, and a current tail before
+  this dataset moves to Phase E acceptance. Other historical source families,
+  matrix work, and Deribit remain out of scope until separately gated.
+
 ## Active Job: VN30F1M VNDIRECT DChart Single-Source Upgrade
 
 Source guide: `VN30_FUTURES_FREE_DATA_UPGRADE_PLAN_V2.md`

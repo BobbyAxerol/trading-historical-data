@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .env import state_root
+from .locks import FileLock
 
 
 def utc_now_iso() -> str:
@@ -52,13 +53,18 @@ class Manifest:
         return self.read().setdefault("symbols", {}).get(symbol, {})
 
     def update_symbol(self, symbol: str, **values: Any) -> None:
-        payload = self.read()
-        payload.setdefault("symbols", {})
-        current = dict(payload["symbols"].get(symbol, {}))
-        current.update(values)
-        current["updated_at"] = utc_now_iso()
-        payload["symbols"][symbol] = current
-        self.state.write(payload)
+        # Live tails and an approved one-shot rebuild can share a dataset.
+        # Serialize read-modify-write so either writer cannot discard the
+        # other's evidence while partition writes are already independently
+        # protected by their dataset/symbol lock.
+        with FileLock(f"manifest/{self.dataset}"):
+            payload = self.read()
+            payload.setdefault("symbols", {})
+            current = dict(payload["symbols"].get(symbol, {}))
+            current.update(values)
+            current["updated_at"] = utc_now_iso()
+            payload["symbols"][symbol] = current
+            self.state.write(payload)
 
 
 class Heartbeat:

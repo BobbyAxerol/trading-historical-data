@@ -109,6 +109,24 @@ STAGED_TAIL_COMMANDS = {
     ],
 }
 STAGED_CRYPTO_COMMAND = STAGED_TAIL_COMMANDS["PRIMUS_HMD_STAGED_CRYPTO_1M_APPROVED"]
+PHASE_D_APPROVAL = "PRIMUS_HMD_PHASE_D_BINANCE_USDM_PERPETUAL_1M_APPROVED"
+PHASE_D_COMMAND = [
+    "python",
+    "-m",
+    "collectors.binance_usdm_perpetual_1m",
+    "--mode",
+    "once",
+    "--symbols",
+    "BTCUSDT",
+    "--start-month",
+    "2020-01",
+    "--daily-bridge-days",
+    "35",
+    "--rest-bridge-days",
+    "35",
+    "--rest-window-minutes",
+    "10080",
+]
 
 
 class TestCollectorEntrypoint(unittest.TestCase):
@@ -123,6 +141,7 @@ class TestCollectorEntrypoint(unittest.TestCase):
                 "PRIMUS_HMD_B0_APPROVED",
                 "PRIMUS_HMD_B0_SEED_APPROVED",
                 "PRIMUS_HMD_B0_SEED_RUNNER",
+                PHASE_D_APPROVAL,
                 *STAGED_TAIL_COMMANDS,
             ]:
                 env.pop(name, None)
@@ -212,6 +231,22 @@ class TestCollectorEntrypoint(unittest.TestCase):
             environment=approved,
         )
         self.assertEqual(altered.returncode, 64)
+
+    def test_phase_d_approval_accepts_only_its_exact_archive_command(self) -> None:
+        permitted = self.run_entrypoint(*PHASE_D_COMMAND, environment={PHASE_D_APPROVAL: "approved"})
+        self.assertEqual(permitted.returncode, 0)
+        self.assertEqual(permitted.stdout, f"fake-python:{' '.join(PHASE_D_COMMAND[1:])}\n")
+
+        changed_symbol = list(PHASE_D_COMMAND)
+        changed_symbol[6] = "ETHUSDT"
+        rejected_symbol = self.run_entrypoint(*changed_symbol, environment={PHASE_D_APPROVAL: "approved"})
+        self.assertEqual(rejected_symbol.returncode, 64)
+
+        rejected_extra = self.run_entrypoint(*PHASE_D_COMMAND, "--no-validate", environment={PHASE_D_APPROVAL: "approved"})
+        self.assertEqual(rejected_extra.returncode, 64)
+
+        staged_only = self.run_entrypoint(*PHASE_D_COMMAND, environment={"PRIMUS_HMD_STAGED_CRYPTO_1M_APPROVED": "approved"})
+        self.assertEqual(staged_only.returncode, 64)
 
 
 if __name__ == "__main__":

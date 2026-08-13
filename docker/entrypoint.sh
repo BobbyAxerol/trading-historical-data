@@ -126,6 +126,30 @@ if [ "${PRIMUS_HMD_STAGED_VN30F1M_VNDIRECT_APPROVED:-}" = "approved" ] \
   exec "$@"
 fi
 
+# Phase D preserves the B0 default-deny model: an owner-approved one-shot
+# archive rebuild has a dedicated service variable and literal command.  It
+# cannot turn a generic backfill, another symbol, a repair sweep, or Deribit
+# invocation into an approved writer.
+if [ "${PRIMUS_HMD_PHASE_D_BINANCE_USDM_PERPETUAL_1M_APPROVED:-}" = "approved" ] \
+  && [ "${1:-}" = "python" ] \
+  && [ "${2:-}" = "-m" ] \
+  && [ "${3:-}" = "collectors.binance_usdm_perpetual_1m" ] \
+  && [ "${4:-}" = "--mode" ] \
+  && [ "${5:-}" = "once" ] \
+  && [ "${6:-}" = "--symbols" ] \
+  && [ "${7:-}" = "BTCUSDT" ] \
+  && [ "${8:-}" = "--start-month" ] \
+  && [ "${9:-}" = "2020-01" ] \
+  && [ "${10:-}" = "--daily-bridge-days" ] \
+  && [ "${11:-}" = "35" ] \
+  && [ "${12:-}" = "--rest-bridge-days" ] \
+  && [ "${13:-}" = "35" ] \
+  && [ "${14:-}" = "--rest-window-minutes" ] \
+  && [ "${15:-}" = "10080" ] \
+  && [ "$#" -eq 15 ]; then
+  exec "$@"
+fi
+
 # The only pre-B0 writer exception is the owner-approved, one-shot bounded
 # seed.  `tools/run_b0_seed.sh` supplies both values transiently and invokes
 # one fixed runner with no operator-provided collector arguments.  The runner
@@ -139,5 +163,5 @@ if [ "${PRIMUS_HMD_B0_SEED_APPROVED:-}" = "approved" ] \
   exec "$@"
 fi
 
-echo "refusing to start a collector: no service-scoped staged authorization or bounded-seed authorization matched" >&2
+echo "refusing to start a collector: no service-scoped staged authorization, phase-D authorization, or bounded-seed authorization matched" >&2
 exit 64

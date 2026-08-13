@@ -84,6 +84,25 @@ services:
       STATE_ROOT: /app/state
       LOG_ROOT: /app/logs
 
+  phase-d-binance-usdm-perpetual-1m:
+    <<: *get-data-service
+    # A detached, idempotent source-rebuild batch.  It is intentionally in a
+    # separate profile and has one service-scoped approval; it cannot inherit
+    # the B0 tail approval or start from a bare Compose invocation.
+    profiles: ["phase-d"]
+    restart: "no"
+    pids_limit: 256
+    cpus: 1.0
+    mem_limit: 1536m
+    command: ["python", "-m", "collectors.binance_usdm_perpetual_1m", "--mode", "once", "--symbols", "BTCUSDT", "--start-month", "2020-01", "--daily-bridge-days", "35", "--rest-bridge-days", "35", "--rest-window-minutes", "10080"]
+    environment:
+      <<: *collector-gate-environment
+      PRIMUS_HMD_PHASE_D_BINANCE_USDM_PERPETUAL_1M_APPROVED: ${PRIMUS_HMD_PHASE_D_BINANCE_USDM_PERPETUAL_1M_APPROVED:-}
+      TZ: UTC
+      DATA_ROOT: /app/storage
+      STATE_ROOT: /app/state
+      LOG_ROOT: /app/logs
+
   binance-usdm-quarterly-1m:
     <<: *get-data-service
     # Explicit current contract and REST tail only: no archive listing or
