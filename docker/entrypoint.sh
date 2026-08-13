@@ -150,6 +150,23 @@ if [ "${PRIMUS_HMD_PHASE_D_BINANCE_USDM_PERPETUAL_1M_APPROVED:-}" = "approved" ]
   exec "$@"
 fi
 
+if [ "${PRIMUS_HMD_PHASE_D_BINANCE_SPOT_1M_APPROVED:-}" = "approved" ] \
+  && [ "${1:-}" = "python" ] \
+  && [ "${2:-}" = "-m" ] \
+  && [ "${3:-}" = "collectors.binance_spot_1m" ] \
+  && [ "${4:-}" = "--mode" ] \
+  && [ "${5:-}" = "once" ] \
+  && [ "${6:-}" = "--symbols" ] \
+  && [ "${7:-}" = "BTCUSDT" ] \
+  && [ "${8:-}" = "--backfill-start" ] \
+  && [ "${9:-}" = "2018-01-01" ] \
+  && [ "${10:-}" = "--max-workers" ] \
+  && [ "${11:-}" = "1" ] \
+  && [ "${12:-}" = "--repair-gaps" ] \
+  && [ "$#" -eq 12 ]; then
+  exec "$@"
+fi
+
 # The only pre-B0 writer exception is the owner-approved, one-shot bounded
 # seed.  `tools/run_b0_seed.sh` supplies both values transiently and invokes
 # one fixed runner with no operator-provided collector arguments.  The runner

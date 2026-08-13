@@ -26,6 +26,22 @@ COMMAND = [
     "--rest-window-minutes",
     "10080",
 ]
+SPOT_SERVICE = "phase-d-binance-spot-1m"
+SPOT_APPROVAL = "PRIMUS_HMD_PHASE_D_BINANCE_SPOT_1M_APPROVED"
+SPOT_COMMAND = [
+    "python",
+    "-m",
+    "collectors.binance_spot_1m",
+    "--mode",
+    "once",
+    "--symbols",
+    "BTCUSDT",
+    "--backfill-start",
+    "2018-01-01",
+    "--max-workers",
+    "1",
+    "--repair-gaps",
+]
 
 
 class TestPhaseDComposeContract(unittest.TestCase):
@@ -53,7 +69,22 @@ class TestPhaseDComposeContract(unittest.TestCase):
         self.assertEqual(approval["runtime_profile"], {"max_concurrent_historical_jobs": 1, "cpus": 1.0, "memory_mib": 1536, "pids": 256, "restart": "no"})
         self.assertEqual(approval["services"][SERVICE]["dataset_id"], "crypto_binance_futures_1m")
         self.assertEqual(approval["services"][SERVICE]["command"], COMMAND)
+        self.assertEqual(approval["services"][SPOT_SERVICE]["dataset_id"], "crypto_binance_spot_1m")
+        self.assertEqual(approval["services"][SPOT_SERVICE]["command"], SPOT_COMMAND)
         self.assertEqual(policy["deribit"]["status"], "disabled_by_owner")
+
+    def test_phase_d_spot_service_is_one_shot_and_has_its_own_approval(self) -> None:
+        compose = yaml.safe_load((REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
+        service = compose["services"][SPOT_SERVICE]
+        self.assertEqual(service["profiles"], ["phase-d"])
+        self.assertEqual(service["restart"], "no")
+        self.assertEqual(service["command"], SPOT_COMMAND)
+        self.assertEqual(service["pids_limit"], 256)
+        self.assertEqual(service["cpus"], 1.0)
+        self.assertEqual(service["mem_limit"], "1536m")
+        self.assertEqual(service["environment"][SPOT_APPROVAL], f"${{{SPOT_APPROVAL}:-}}")
+        self.assertNotIn(SPOT_APPROVAL, compose["x-collector-gate-environment"])
+        self.assertNotIn(APPROVAL, service["environment"])
 
 
 if __name__ == "__main__":

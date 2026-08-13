@@ -103,6 +103,25 @@ services:
       STATE_ROOT: /app/state
       LOG_ROOT: /app/logs
 
+  phase-d-binance-spot-1m:
+    <<: *get-data-service
+    # The next sequential Phase D raw-source rebuild.  One worker keeps each
+    # Vision archive bounded; streaming audit/repair runs before this one-shot
+    # exits and it never expands beyond the reviewed BTCUSDT scope.
+    profiles: ["phase-d"]
+    restart: "no"
+    pids_limit: 256
+    cpus: 1.0
+    mem_limit: 1536m
+    command: ["python", "-m", "collectors.binance_spot_1m", "--mode", "once", "--symbols", "BTCUSDT", "--backfill-start", "2018-01-01", "--max-workers", "1", "--repair-gaps"]
+    environment:
+      <<: *collector-gate-environment
+      PRIMUS_HMD_PHASE_D_BINANCE_SPOT_1M_APPROVED: ${PRIMUS_HMD_PHASE_D_BINANCE_SPOT_1M_APPROVED:-}
+      TZ: UTC
+      DATA_ROOT: /app/storage
+      STATE_ROOT: /app/state
+      LOG_ROOT: /app/logs
+
   binance-usdm-quarterly-1m:
     <<: *get-data-service
     # Explicit current contract and REST tail only: no archive listing or

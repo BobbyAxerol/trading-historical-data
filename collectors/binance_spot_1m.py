@@ -20,7 +20,7 @@ from collectors.common.logging import setup_logging
 from collectors.common.manifest import Heartbeat, JsonState, Manifest, sleep_with_heartbeat, utc_now_iso
 from collectors.common.retry import retry_sync
 from collectors.common.storage import PartitionedParquetStore as PartitionedCsvGzStore
-from collectors.common.storage import read_partition_file, write_partition_file
+from collectors.common.storage import read_partition_file, release_unused_memory, write_partition_file
 
 DATASET = "crypto_binance_spot_1m"
 STORE_PARTS = ["crypto", "binance_spot", "1m"]
@@ -367,6 +367,8 @@ def sync_vision_parallel(
             if df.empty:
                 manifest.update_symbol(symbol, last_empty_vision_key=key, last_error="empty_or_missing_vision_file")
                 logger.warning("%s empty/missing Vision file: %s", symbol, key)
+                del df
+                release_unused_memory()
                 continue
             result = _append(store, df, symbol)
             total_rows += int(result.get("rows_written") or 0)
@@ -381,6 +383,8 @@ def sync_vision_parallel(
                 last_error=None,
             )
             logger.info("%s Vision wrote rows=%s latest=%s key=%s", symbol, result["rows_written"], result["latest_time"], Path(key).name)
+            del df
+            release_unused_memory()
     return {"rows_written": total_rows, "latest_time": latest_time}
 
 
@@ -425,59 +429,102 @@ def sync_rest_tail(
 
 
 def audit_symbol(store: PartitionedCsvGzStore, symbol: str, *, expected_start: str | None = None) -> dict[str, Any]:
-    frames = []
     audit_cols = ["time", "symbol", "open", "high", "low", "close", "volume", "quote_volume"]
-    for path in store.files({"symbol": symbol}):
-        try:
-            frames.append(read_partition_file(path, usecols=audit_cols))
-        except Exception:
-            continue
-    if not frames:
+    paths = sorted(store.files({"symbol": symbol}))
+    if not paths:
         return {"rows": 0, "gaps": [], "duplicate_rows": 0, "ohlc_bad_rows": 0, "negative_rows": 0}
 
-    df = pd.concat(frames, ignore_index=True)
-    df["time"] = pd.to_datetime(df["time"], errors="coerce")
-    df = df.dropna(subset=["time"])
-    df = df.sort_values("time").reset_index(drop=True)
-    dup_rows = int(df.duplicated(subset=["symbol", "time"]).sum())
-    ohlc_bad = int(((df["high"] < df[["open", "low", "close"]].max(axis=1)) | (df["low"] > df[["open", "high", "close"]].min(axis=1))).sum())
-    numeric_cols = ["open", "high", "low", "close", "volume", "quote_volume"]
-    negative_rows = int((df[numeric_cols].apply(pd.to_numeric, errors="coerce") < 0).any(axis=1).sum())
-
-    times = df["time"].drop_duplicates().sort_values().reset_index(drop=True)
+    rows = 0
+    duplicate_rows = 0
+    ohlc_bad_rows = 0
+    negative_rows = 0
     gaps: list[dict[str, str]] = []
-    if len(times) > 1:
+    first_time: pd.Timestamp | None = None
+    latest_time: pd.Timestamp | None = None
+    previous_time: pd.Timestamp | None = None
+    one_minute = pd.Timedelta(1, unit="min")
+
+    for path in paths:
+        try:
+            df = read_partition_file(path, usecols=audit_cols)
+        except Exception:
+            continue
+        if df.empty:
+            del df
+            release_unused_memory()
+            continue
+
+        df["time"] = pd.to_datetime(df["time"], errors="coerce")
+        df = df.dropna(subset=["time"]).sort_values("time").reset_index(drop=True)
+        if df.empty:
+            del df
+            release_unused_memory()
+            continue
+        rows += len(df)
+        duplicate_rows += int(df.duplicated(subset=["symbol", "time"]).sum())
+        prices = df[["open", "high", "low", "close"]].apply(pd.to_numeric, errors="coerce")
+        ohlc_bad_rows += int(
+            ((prices["high"] < prices[["open", "low", "close"]].max(axis=1)) | (prices["low"] > prices[["open", "high", "close"]].min(axis=1))).sum()
+        )
+        numeric = df[["open", "high", "low", "close", "volume", "quote_volume"]].apply(pd.to_numeric, errors="coerce")
+        negative_rows += int((numeric < 0).any(axis=1).sum())
+
+        times = df["time"].drop_duplicates().sort_values().reset_index(drop=True)
+        if times.empty:
+            del df, times
+            release_unused_memory()
+            continue
+        if first_time is None:
+            first_time = times.iloc[0]
+        if previous_time is not None:
+            gap = times.iloc[0] - previous_time
+            if gap > one_minute:
+                gaps.append(
+                    {
+                        "start": str(previous_time + one_minute),
+                        "end": str(times.iloc[0] - one_minute),
+                        "minutes": str(int(gap.total_seconds() // 60) - 1),
+                    }
+                )
+            elif gap <= pd.Timedelta(0):
+                duplicate_rows += 1
+
         diffs = times.diff()
-        one_minute = pd.Timedelta(1, unit="min")
-        gap_mask = diffs > one_minute
-        for idx in gap_mask[gap_mask].index:
+        for index in diffs[diffs > one_minute].index:
+            gap = diffs.loc[index]
             gaps.append(
                 {
-                    "start": str(times.iloc[idx - 1] + one_minute),
-                    "end": str(times.iloc[idx] - one_minute),
-                    "minutes": str(int((times.iloc[idx] - times.iloc[idx - 1]).total_seconds() // 60) - 1),
+                    "start": str(times.iloc[index - 1] + one_minute),
+                    "end": str(times.iloc[index] - one_minute),
+                    "minutes": str(int(gap.total_seconds() // 60) - 1),
                 }
             )
+        previous_time = times.iloc[-1]
+        latest_time = previous_time
+        del df, times
+        release_unused_memory()
 
-    if expected_start and not times.empty:
+    if first_time is None or latest_time is None:
+        return {"rows": 0, "gaps": [], "duplicate_rows": 0, "ohlc_bad_rows": 0, "negative_rows": 0}
+    if expected_start:
         start_ts = pd.Timestamp(expected_start)
-        if times.iloc[0] > start_ts:
+        if first_time > start_ts:
             gaps.insert(
                 0,
                 {
                     "start": str(start_ts),
-                    "end": str(times.iloc[0] - pd.Timedelta(1, unit="min")),
-                    "minutes": str(int((times.iloc[0] - start_ts).total_seconds() // 60)),
+                    "end": str(first_time - one_minute),
+                    "minutes": str(int((first_time - start_ts).total_seconds() // 60)),
                 },
             )
 
     return {
-        "rows": int(len(df)),
-        "min_time": str(times.min()) if not times.empty else None,
-        "max_time": str(times.max()) if not times.empty else None,
+        "rows": rows,
+        "min_time": str(first_time),
+        "max_time": str(latest_time),
         "gaps": gaps,
-        "duplicate_rows": dup_rows,
-        "ohlc_bad_rows": ohlc_bad,
+        "duplicate_rows": duplicate_rows,
+        "ohlc_bad_rows": ohlc_bad_rows,
         "negative_rows": negative_rows,
     }
 

@@ -69,15 +69,16 @@ user.email = vugioan11022002@gmail.com
 - At most one heavy historical service may run at a time. B0 live tails may
   remain running, but any shared canonical dataset must use the same
   partition/manifest locking discipline and Phase D must validate its result.
-- The first owner-approved Phase D job is exactly
-  `phase-d-binance-usdm-perpetual-1m`, defined in
+- The initial USD-M perpetual job completed cleanly on 2026-08-13 with a
+  durable passing audit. The next owner-approved, sequential Phase D job is
+  exactly `phase-d-binance-spot-1m`, defined in
   `configs/primus_hmd_phase_d.yml` and launched only with
-  `tools/run_phase_d_binance_usdm_perpetual_1m.sh`. It rebuilds BTCUSDT USD-M
-  perpetual 1m data from new upstream sources, one archive or bounded REST
-  window at a time.
+  `tools/run_phase_d_binance_spot_1m.sh`. It rebuilds BTCUSDT spot 1m data
+  from new upstream sources with one Vision worker and a streaming audit.
 - Do not start a default-universe expansion, derived matrix, VN historical
-  batch, metrics/spot/quarterly historical batch, repair sweep, consumer
-  cutover, old-writer retirement, destructive data operation, or **any
+  batch, metrics/quarterly historical batch, repair sweep outside the literal
+  spot command, consumer cutover, old-writer retirement, destructive data
+  operation, or **any
   Deribit command** under this approval. Each needs its own recorded gate.
 
 ### Owner-approved B0 exception for this session

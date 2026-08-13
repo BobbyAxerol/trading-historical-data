@@ -183,6 +183,30 @@ or historical backfill was started during this work.
   this dataset moves to Phase E acceptance. Other historical source families,
   matrix work, and Deribit remain out of scope until separately gated.
 
+#### Phase D execution — BTCUSDT USD-M perpetual 1m
+
+- Commit `4e5946e` introduced the exact-command service; follow-up commit
+  `bae778e` added the durable standalone audit record. Both focused test runs
+  passed (20 then 21 tests).
+- The initial detached run exited `0` at `2026-08-13T16:15:04Z`: 79 monthly
+  Vision archives wrote 3,461,760 input rows, 12 daily bridge files wrote
+  17,280, and six bounded REST windows processed 50,401. The follow-up
+  idempotent run skipped all 79 archives and all 35 complete bridge days,
+  then refreshed only the bounded REST overlap.
+- Final durable audit at
+  `state/audits/crypto_binance_futures_1m_BTCUSDT_phase_d.json`: 3,480,016
+  canonical rows, 80 partitions, `2020-01-01T00:00:00Z` through
+  `2026-08-13T16:15:00Z`, zero duplicate/OHLC/negative rows, zero continuity
+  gaps, and one-minute closed-candle tail lag. Status: `pass`.
+
+#### Next sequential Phase D source — BTCUSDT spot 1m
+
+- After perpetual acceptance, owner-approved scope now includes one exact
+  BTCUSDT spot service. It uses a single Vision worker and changed the spot
+  quality audit to stream one partition at a time before any full-history
+  source call. It remains raw-source-only; daily matrix work does not begin
+  until the spot result is inspected.
+
 ## Active Job: VN30F1M VNDIRECT DChart Single-Source Upgrade
 
 Source guide: `VN30_FUTURES_FREE_DATA_UPGRADE_PLAN_V2.md`

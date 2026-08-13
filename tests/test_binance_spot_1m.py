@@ -2,6 +2,7 @@ import io
 import sys
 import zipfile
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent.resolve()))
 
@@ -9,7 +10,7 @@ import unittest
 
 import pandas as pd
 
-from collectors.binance_spot_1m import normalize_kline_frame, read_vision_zip
+from collectors.binance_spot_1m import audit_symbol, normalize_kline_frame, read_vision_zip
 from data_loader import CryptoBinanceSpot1m
 
 
@@ -92,6 +93,41 @@ class TestBinanceSpot1m(unittest.TestCase):
         )
         df = CryptoBinanceSpot1m()._normalize(raw)
         self.assertAlmostEqual(df.loc[0, "volume"], 2.345678)
+
+    def test_audit_checks_partition_boundaries_without_concatenating_history(self):
+        class Store:
+            def files(self, attrs):
+                if attrs != {"symbol": "BTCUSDT"}:
+                    raise AssertionError(attrs)
+                return [Path("2020-01.parquet"), Path("2020-02.parquet")]
+
+        def frame(times):
+            return pd.DataFrame(
+                {
+                    "time": times,
+                    "symbol": ["BTCUSDT"] * len(times),
+                    "open": [1.0] * len(times),
+                    "high": [2.0] * len(times),
+                    "low": [1.0] * len(times),
+                    "close": [1.5] * len(times),
+                    "volume": [1.0] * len(times),
+                    "quote_volume": [1.0] * len(times),
+                }
+            )
+
+        with patch(
+            "collectors.binance_spot_1m.read_partition_file",
+            side_effect=[
+                frame(["2020-01-31 23:58:00", "2020-01-31 23:59:00"]),
+                frame(["2020-02-01 00:00:00", "2020-02-01 00:01:00"]),
+            ],
+        ) as reader:
+            audit = audit_symbol(Store(), "BTCUSDT", expected_start="2020-01-31 23:58:00")
+
+        self.assertEqual(reader.call_count, 2)
+        self.assertEqual(audit["rows"], 4)
+        self.assertEqual(audit["gaps"], [])
+        self.assertEqual(audit["duplicate_rows"], 0)
 
 
 if __name__ == "__main__":

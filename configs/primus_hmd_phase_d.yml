@@ -5,8 +5,8 @@ schema_version: 1
 phase_d_approval:
   status: approved
   approved_by: BobbyAxerol
-  approved_at: "2026-08-13T16:08:00+00:00"
-  scope: "Initial clean new-VPS Binance USD-M BTCUSDT perpetual 1m rebuild only. No old-VPS import, default-universe expansion, derived matrix, consumer cutover, destructive operation, or Deribit request."
+  approved_at: "2026-08-13T16:18:00+00:00"
+  scope: "Sequential clean new-VPS BTCUSDT Binance USD-M perpetual and Binance spot 1m rebuilds only. No old-VPS import, default-universe expansion, derived matrix, consumer cutover, destructive operation, or Deribit request."
   runtime_profile:
     max_concurrent_historical_jobs: 1
     cpus: 1.0
@@ -22,6 +22,14 @@ phase_d_approval:
         - binance_vision_usdm_daily_bridge
         - binance_usdm_rest_bounded_bridge
       validation: per-partition streaming schema/OHLC/negative/duplicate/continuity/tail audit
+    phase-d-binance-spot-1m:
+      dataset_id: crypto_binance_spot_1m
+      command: ["python", "-m", "collectors.binance_spot_1m", "--mode", "once", "--symbols", "BTCUSDT", "--backfill-start", "2018-01-01", "--max-workers", "1", "--repair-gaps"]
+      sources:
+        - binance_vision_spot_monthly
+        - binance_vision_spot_daily
+        - binance_spot_rest_tail_and_bounded_gap_repair
+      validation: streaming per-partition schema/OHLC/negative/duplicate/continuity audit; known upstream gaps stay explicit rather than synthetic
 
 deribit:
   status: disabled_by_owner

@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Launch exactly the reviewed, detached Phase D BTCUSDT perpetual rebuild.
-# No arguments or arbitrary image/collector command are accepted.
+# Launch exactly the reviewed, detached Phase D BTCUSDT spot 1m rebuild.
 set -euo pipefail
 
 if [[ "$#" -ne 0 ]]; then
@@ -11,7 +10,7 @@ fi
 hmd_script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 hmd_repo_root="$(cd -- "${hmd_script_dir}/.." && pwd)"
 hmd_deploy_env="/srv/primus/historical-market-data/deploy/compose.env"
-hmd_service="phase-d-binance-usdm-perpetual-1m"
+hmd_service="phase-d-binance-spot-1m"
 hmd_container="primus-historical-market-data-${hmd_service}-1"
 hmd_image_ref="$(sudo -n docker inspect --format '{{.Config.Image}}' "$hmd_container" 2>/dev/null || true)"
 if [[ -z "$hmd_image_ref" ]]; then
@@ -31,7 +30,7 @@ fi
 
 exec sudo -n env \
   PRIMUS_HMD_IMAGE_REF="$hmd_image_ref" \
-  PRIMUS_HMD_PHASE_D_BINANCE_USDM_PERPETUAL_1M_APPROVED=approved \
+  PRIMUS_HMD_PHASE_D_BINANCE_SPOT_1M_APPROVED=approved \
   docker compose \
   --project-directory "$hmd_repo_root" \
   --env-file "$hmd_deploy_env" \

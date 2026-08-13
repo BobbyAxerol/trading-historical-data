@@ -127,6 +127,21 @@ PHASE_D_COMMAND = [
     "--rest-window-minutes",
     "10080",
 ]
+PHASE_D_SPOT_APPROVAL = "PRIMUS_HMD_PHASE_D_BINANCE_SPOT_1M_APPROVED"
+PHASE_D_SPOT_COMMAND = [
+    "python",
+    "-m",
+    "collectors.binance_spot_1m",
+    "--mode",
+    "once",
+    "--symbols",
+    "BTCUSDT",
+    "--backfill-start",
+    "2018-01-01",
+    "--max-workers",
+    "1",
+    "--repair-gaps",
+]
 
 
 class TestCollectorEntrypoint(unittest.TestCase):
@@ -142,6 +157,7 @@ class TestCollectorEntrypoint(unittest.TestCase):
                 "PRIMUS_HMD_B0_SEED_APPROVED",
                 "PRIMUS_HMD_B0_SEED_RUNNER",
                 PHASE_D_APPROVAL,
+                PHASE_D_SPOT_APPROVAL,
                 *STAGED_TAIL_COMMANDS,
             ]:
                 env.pop(name, None)
@@ -247,6 +263,19 @@ class TestCollectorEntrypoint(unittest.TestCase):
 
         staged_only = self.run_entrypoint(*PHASE_D_COMMAND, environment={"PRIMUS_HMD_STAGED_CRYPTO_1M_APPROVED": "approved"})
         self.assertEqual(staged_only.returncode, 64)
+
+    def test_phase_d_spot_approval_accepts_only_its_exact_archive_command(self) -> None:
+        permitted = self.run_entrypoint(*PHASE_D_SPOT_COMMAND, environment={PHASE_D_SPOT_APPROVAL: "approved"})
+        self.assertEqual(permitted.returncode, 0)
+        self.assertEqual(permitted.stdout, f"fake-python:{' '.join(PHASE_D_SPOT_COMMAND[1:])}\n")
+
+        changed_start = list(PHASE_D_SPOT_COMMAND)
+        changed_start[8] = "2019-01-01"
+        rejected_start = self.run_entrypoint(*changed_start, environment={PHASE_D_SPOT_APPROVAL: "approved"})
+        self.assertEqual(rejected_start.returncode, 64)
+
+        wrong_phase_approval = self.run_entrypoint(*PHASE_D_SPOT_COMMAND, environment={PHASE_D_APPROVAL: "approved"})
+        self.assertEqual(wrong_phase_approval.returncode, 64)
 
 
 if __name__ == "__main__":
