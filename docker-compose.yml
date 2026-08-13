@@ -30,6 +30,8 @@ x-get-data-service: &get-data-service
     - ${PRIMUS_HMD_RUNTIME_ROOT:?PRIMUS_HMD_RUNTIME_ROOT is required}/storage:/app/storage
     - ${PRIMUS_HMD_RUNTIME_ROOT:?PRIMUS_HMD_RUNTIME_ROOT is required}/state:/app/state
     - ${PRIMUS_HMD_RUNTIME_ROOT:?PRIMUS_HMD_RUNTIME_ROOT is required}/logs:/app/logs
+    # Build evidence is readable by collectors but never writable from one.
+    - ${PRIMUS_HMD_RUNTIME_ROOT:?PRIMUS_HMD_RUNTIME_ROOT is required}/releases:/app/releases:ro
 
 services:
   b0-discord-monitor:

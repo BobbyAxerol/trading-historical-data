@@ -40,6 +40,10 @@ runtime:
   collector_uid: 1000
   collector_gid: 1000
   reader_group: primus-market-data-readers
+  # Numeric host evidence is intentional: the slim collector image does not
+  # carry the host's group database, so B0 validates the recorded ACL GID
+  # instead of treating a missing in-container group name as a false failure.
+  reader_group_gid: 996
   required_directories:
     - storage
     - state

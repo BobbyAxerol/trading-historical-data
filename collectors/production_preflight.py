@@ -8,7 +8,6 @@ directory skeleton and validates B0 evidence written by the operator.
 from __future__ import annotations
 
 import argparse
-import grp
 import hashlib
 import json
 import os
@@ -55,6 +54,12 @@ def _load_policy(path: Path = POLICY_PATH) -> dict[str, Any]:
     runtime = policy.get("runtime") or {}
     if not runtime.get("root"):
         raise ValueError("B0 policy requires runtime.root")
+    try:
+        reader_group_gid = int(runtime["reader_group_gid"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("B0 policy requires runtime.reader_group_gid") from exc
+    if reader_group_gid < 0:
+        raise ValueError("B0 policy runtime.reader_group_gid must be non-negative")
     return policy
 
 
@@ -339,6 +344,7 @@ def initialize_runtime(policy: dict[str, Any], *, overwrite_drafts: bool = False
                 "schema_version": SCHEMA_VERSION,
                 "status": "draft",
                 "reader_group": policy["runtime"]["reader_group"],
+                "reader_group_gid": int(policy["runtime"]["reader_group_gid"]),
                 "collector_identity": {
                     "uid": policy["runtime"]["collector_uid"],
                     "gid": policy["runtime"]["collector_gid"],
@@ -361,7 +367,12 @@ def initialize_runtime(policy: dict[str, Any], *, overwrite_drafts: bool = False
                 "compose_config_evidence": "REQUIRED: docker compose --env-file <protected file> config",
                 "container_mount_evidence": "REQUIRED: inspect a bounded non-collector container before service start",
                 "runtime_root": str(paths["root"]),
-                "required_mounts": {"storage": "/app/storage", "state": "/app/state", "logs": "/app/logs"},
+                "required_mounts": {
+                    "storage": "/app/storage",
+                    "state": "/app/state",
+                    "logs": "/app/logs",
+                    "releases": "/app/releases:ro",
+                },
                 "no_writable_checkout_mount": "REQUIRED",
                 "no_source_code_bind_mount": "REQUIRED",
             },
@@ -502,20 +513,23 @@ def _status(policy: dict[str, Any]) -> dict[str, Any]:
     )
 
     reader_group = str(policy["runtime"]["reader_group"])
-    try:
-        group = grp.getgrnam(reader_group)
-    except KeyError:
-        group = None
+    reader_group_gid = int(policy["runtime"]["reader_group_gid"])
     access_path = paths["bootstrap"] / "access_control.json"
     access = _read_json(access_path)
-    access_ok = bool(group and access and access.get("status") == "pass")
+    access_ok = bool(
+        access
+        and access.get("status") == "pass"
+        and access.get("reader_group") == reader_group
+        and access.get("reader_group_gid") == reader_group_gid
+    )
     checks.append(
         _check(
             "reader_group_and_acl",
             access_ok,
             "Reader group and read-only ACL evidence must protect storage while denying state, logs, and secrets.",
             reader_group=reader_group,
-            group_gid=None if group is None else group.gr_gid,
+            reader_group_gid=reader_group_gid,
+            evidence_reader_group_gid=None if access is None else access.get("reader_group_gid"),
             path=str(access_path),
         )
     )

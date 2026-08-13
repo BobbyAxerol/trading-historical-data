@@ -29,6 +29,7 @@ class TestProductionPreflight(unittest.TestCase):
         policy["runtime"]["collector_uid"] = os.getuid()
         policy["runtime"]["collector_gid"] = os.getgid()
         policy["runtime"]["reader_group"] = grp.getgrgid(os.getgid()).gr_name
+        policy["runtime"]["reader_group_gid"] = os.getgid()
         policy["environment"]["id"] = "test-new-vps"
         policy["environment"]["rollback"] = {
             "previous_approved_release": "primus-historical-market-data-v0.0.9",
@@ -159,6 +160,19 @@ class TestProductionPreflight(unittest.TestCase):
         self.assertEqual(names["source_inventory"], "pass")
         self.assertEqual(names["reproducible_release_and_storage_manifest"], "pass")
         self.assertEqual(payload["status"], "pass")
+
+    def test_status_rejects_acl_evidence_for_a_different_reader_group_gid(self) -> None:
+        policy = self._policy()
+        production_preflight.initialize_runtime(policy)
+        paths = production_preflight._runtime_paths(policy)
+        access_path = paths["bootstrap"] / "access_control.json"
+        access = json.loads(access_path.read_text())
+        access.update({"status": "pass", "reader_group_gid": os.getgid() + 1})
+        access_path.write_text(json.dumps(access))
+
+        payload = production_preflight._status(policy)
+        acl_check = next(check for check in payload["checks"] if check["name"] == "reader_group_and_acl")
+        self.assertEqual(acl_check["status"], "blocked")
 
 
 if __name__ == "__main__":
