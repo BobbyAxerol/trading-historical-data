@@ -89,6 +89,11 @@ Completed evidence:
   `36e3beb9916c6e90c378c86f183d372a3dd8fe44dc5ccf1c19fa8f424af5142b`.
   It remains draft because the other three enabled dataset families have no
   bounded-seed measurements and no owner approval exists.
+- B0.7 now has a read-only, strict operator status command for disk/inodes,
+  planned heartbeat freshness, and exit/retry/validation/RSS/backup alert
+  evidence. Its new-VPS baseline passes disk and inode thresholds but correctly
+  blocks absent heartbeat and alert evidence; no scheduled writer was started
+  merely to make the check green.
 
 Current B0 blockers (not bypassed): capacity/concurrency requires bounded-seed
 measurements plus approval; release/storage manifest is not accepted until a

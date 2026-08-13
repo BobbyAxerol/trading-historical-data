@@ -88,6 +88,16 @@ data. The module and its tests are delivered in B0. Public loader calls will
 use the assertion as a Phase C package-acceptance change, as required by the
 runbook.
 
+## Operator-visible monitoring status
+
+Run `python -m collectors.b0_operational_status --strict --json` against the
+dedicated runtime root. It is read-only: it never starts a service or modifies
+state. It checks disk and inode low-water marks, expected heartbeat freshness,
+and recorded operator-visible evidence for collector exits, retry/rate limits,
+validation/repair, RSS, and backup failures. Missing evidence deliberately
+returns `blocked`; after an approved scheduled cycle, record only factual alert
+and heartbeat evidence before changing `monitoring.json` to `pass`.
+
 Before using a production Compose command, inspect the resolved configuration:
 
 ```bash

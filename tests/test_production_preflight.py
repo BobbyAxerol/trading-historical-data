@@ -51,6 +51,9 @@ class TestProductionPreflight(unittest.TestCase):
             self.assertTrue((runtime / name).is_dir())
         self.assertTrue((runtime / "state/bootstrap/source_inventory.json").exists())
         self.assertTrue((runtime / "storage/_primus_metadata/release_manifest.json").exists())
+        monitoring = json.loads((runtime / "state/bootstrap/monitoring.json").read_text())
+        self.assertIn("rss_alert", monitoring)
+        self.assertEqual(monitoring["expected_heartbeat_datasets"], policy["monitoring"]["expected_heartbeat_datasets"])
         self.assertFalse(any((runtime / "storage").rglob("*.parquet")))
         self.assertFalse(any((runtime / "state").rglob("*.sqlite")))
 

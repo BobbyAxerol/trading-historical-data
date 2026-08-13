@@ -76,5 +76,13 @@ monitoring:
   heartbeat_max_age_minutes: 20
   free_disk_low_water_gib: 30
   inode_low_water_pct: 10
-  operator_status_command: python -m collectors.production_preflight status --strict --json
+  expected_heartbeat_datasets:
+    - crypto_binance_futures_1m
+    - crypto_binance_usdm_quarterly_1m
+    - crypto_binance_spot_1m
+    - crypto_binance_futures_metrics_5m
+    - crypto_binance_orderbook_snapshot_1h
+    - vn_equity_1d
+    - vn30f1m_vndirect
+  operator_status_command: python -m collectors.b0_operational_status --strict --json
   resource_policy: single-heavy-job-until-bounded-seed-evidence
