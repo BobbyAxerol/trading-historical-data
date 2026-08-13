@@ -17,6 +17,23 @@ class TestB0ComposeContract(unittest.TestCase):
         self.assertEqual(environment["XDG_CACHE_HOME"], f"{expected_home}/.cache")
         self.assertEqual(environment["MPLCONFIGDIR"], f"{expected_home}/.config/matplotlib")
 
+    def test_staged_crypto_approval_is_not_a_global_writer_flag(self) -> None:
+        compose = yaml.safe_load((REPO_ROOT / "docker-compose.yml").read_text())
+        common_environment = compose["x-collector-gate-environment"]
+        self.assertNotIn("PRIMUS_HMD_B0_APPROVED", common_environment)
+        self.assertNotIn("PRIMUS_HMD_STAGED_CRYPTO_1M_APPROVED", common_environment)
+
+        services = compose["services"]
+        crypto_environment = services["crypto-1m-live"]["environment"]
+        self.assertEqual(
+            crypto_environment["PRIMUS_HMD_STAGED_CRYPTO_1M_APPROVED"],
+            "${PRIMUS_HMD_STAGED_CRYPTO_1M_APPROVED:-}",
+        )
+        for service_name, service in services.items():
+            if service_name == "crypto-1m-live":
+                continue
+            self.assertNotIn("PRIMUS_HMD_STAGED_CRYPTO_1M_APPROVED", service.get("environment", {}), service_name)
+
 
 if __name__ == "__main__":
     unittest.main()
