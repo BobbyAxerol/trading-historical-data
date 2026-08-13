@@ -226,6 +226,28 @@ or historical backfill was started during this work.
   The next Phase D source must receive its own exact-command gate and focused
   validation first.
 
+#### Phase D execution — VNDIRECT `VN30F1M` daily continuous alias
+
+- Commit `05ebef5` introduced the exact one-shot service. It fetches the raw
+  VNDIRECT DChart daily continuous alias in one-year provider windows from
+  `2017-08-10`, keeps matrix and contract-derived outputs disabled, and
+  streams the audit across persisted partitions. A current-day daily bar is
+  rejected until after the VN market-close buffer.
+- The first source run wrote the complete provider result but correctly failed
+  its strict 2024+ calendar assertion. The only four apparent holes were
+  verified HNX exchange closures: `2024-04-29`, `2024-09-03`, `2025-05-02`,
+  and `2026-01-02`. Commit `879fe81` records those exchange holidays and
+  `3336bf2` ensures a retry selects the current reviewed image rather than an
+  exited prior one-shot image. The focused 27-test VNDIRECT/gate/Compose/
+  manifest suite passed.
+- The corrected detached job exited `0` at `2026-08-13T16:56:16Z`. Durable
+  audit `state/audits/vn30f1m_vndirect_dchart_1d_phase_d.json` reports 2,250
+  canonical rows in 10 partitions from `2017-08-10T00:00:00` through
+  `2026-08-13T00:00:00`, with zero duplicate, invalid-time/numeric, OHLC,
+  negative, weekend, source-provenance, or symbol-provenance errors, and zero
+  missing trading days from the supported 2024 calendar onward. Status:
+  `pass`.
+
 ## Active Job: VN30F1M VNDIRECT DChart Single-Source Upgrade
 
 Source guide: `VN30_FUTURES_FREE_DATA_UPGRADE_PLAN_V2.md`
