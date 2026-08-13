@@ -2,6 +2,16 @@
 
 This file is the consolidated implementation tracker for `_get_data` jobs. Detailed job guides may live in separate markdown files, but the executable phase plan and implementation logs should be summarized here to avoid fragmented state.
 
+## Active Cross-Cutting Operation: Primus New VPS Clean Rebuild
+
+Detailed runbook: `PRIMUS_NEW_VPS_CLEAN_REBUILD_AND_PACKAGE_RUNBOOK.md`
+
+Decision: migrate Git-tracked code/config/docs only; rebuild `storage/`,
+`state/`, and `logs/` from upstream sources on the new VPS. The old VPS remains
+an audit/reference archive. Package the reader as
+`primus-historical-market-data` before broad new-VPS historical backfills, then
+resume the remaining Deribit option roadmap from fresh new-VPS gates/state.
+
 ## Active Job: VN30F1M VNDIRECT DChart Single-Source Upgrade
 
 Source guide: `VN30_FUTURES_FREE_DATA_UPGRADE_PLAN_V2.md`
