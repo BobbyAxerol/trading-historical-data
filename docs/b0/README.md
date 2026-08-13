@@ -49,6 +49,30 @@ executing a command unless the protected host deployment file supplies
 `PRIMUS_HMD_B0_APPROVED=approved`. Do not set that value while any B0 check is
 blocked. This guard is defense-in-depth, not evidence that B0 has passed.
 
+## Bounded source probes
+
+`collectors.b0_source_probe` exists solely for B0. Its Binance probe makes
+exactly eight sequential public GET requests; its VNStock probe makes one VCI
+daily-history request. They do not call a collector, backfill, discovery, or
+publish path, and record only redacted metadata beneath
+`state/bootstrap/source_probes/`. Run them in a constrained container with only
+the runtime `state/` mount; do not mount canonical storage.
+
+VNDIRECT and Deribit use their existing explicitly non-publishing probe CLIs.
+Their B0 invocation must likewise mount only `state/`, with low CPU/memory
+limits and a fixed request/rate budget. A blocked probe is evidence to keep the
+dataset blocked, never permission to fall back to old-VPS data.
+
+When a constrained probe invokes a provider library that creates user caches,
+set `HOME`, `XDG_CONFIG_HOME`, `XDG_CACHE_HOME`, and `MPLCONFIGDIR` beneath the
+container's tmpfs `/tmp`. Do not relax the read-only root filesystem or mount
+canonical storage just to accommodate a cache.
+
+The Deribit probe selects only a bounded candidate that has at least three
+unique `trade_seq` values. A contract with fewer sequences establishes endpoint
+availability but cannot establish sorting or inclusive sequence-boundary
+semantics, so it is skipped rather than producing a misleading pass.
+
 Before using a production Compose command, inspect the resolved configuration:
 
 ```bash

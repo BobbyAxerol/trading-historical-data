@@ -27,6 +27,7 @@ REQUIRED_TRADE_FIELDS = (
     "mark_price",
 )
 OPTION_REQUIRED_FIELDS = ("iv",)
+MIN_SEQUENCE_PROBE_ROWS = 3
 
 
 @dataclass(frozen=True)
@@ -135,22 +136,51 @@ class DeribitApiProbeRunner:
         active_items = _result_list(active)
         expired_items = _result_list(expired)
         all_items = active_items + expired_items
-        probe_instrument = self._find_trade_instrument(all_items)
+        probe_instrument, candidate_selection = self._find_trade_instrument(all_items)
         return {
             "active": _instrument_summary(active, active_items),
             "expired": _instrument_summary(expired, expired_items),
             "total_seen": len({item.get("instrument_name") for item in all_items if isinstance(item, dict)}),
             "probe_instrument": probe_instrument,
+            "candidate_selection": candidate_selection,
             "expired_instrument_coverage": _expired_coverage(expired_items),
         }
 
-    def _find_trade_instrument(self, instruments: list[dict[str, Any]]) -> str | None:
+    def _find_trade_instrument(self, instruments: list[dict[str, Any]]) -> tuple[str | None, dict[str, Any]]:
+        """Choose a bounded candidate that can actually exercise sequence semantics.
+
+        A candidate with one or two trades proves endpoint availability, but it
+        cannot prove ordering or inclusive/exclusive sequence boundaries. Keep
+        scanning only within ``sample_instruments`` rather than failing B0 on
+        the first thinly traded contract.
+        """
+
         names = _candidate_instrument_names(instruments, max(1, int(self.options.sample_instruments)))
+        attempts: list[dict[str, Any]] = []
         for name in names:
             result = self.client.get_last_trades_by_instrument(str(name), count=10, sorting="desc")
-            if result.ok and result.trades:
-                return str(name)
-        return None
+            sequences = {int(row["trade_seq"]) for row in result.trades if _is_int_like(row.get("trade_seq"))}
+            attempts.append(
+                {
+                    "instrument_name": str(name),
+                    "status": "success" if result.ok else "blocked",
+                    "trade_rows": len(result.trades),
+                    "unique_trade_sequences": len(sequences),
+                    "http_status": result.status_code,
+                }
+            )
+            if result.ok and len(sequences) >= MIN_SEQUENCE_PROBE_ROWS:
+                return str(name), {
+                    "minimum_unique_trade_sequences": MIN_SEQUENCE_PROBE_ROWS,
+                    "attempts": attempts,
+                    "status": "selected",
+                }
+        return None, {
+            "minimum_unique_trade_sequences": MIN_SEQUENCE_PROBE_ROWS,
+            "attempts": attempts,
+            "status": "blocked",
+            "reason": "no_bounded_candidate_with_enough_trade_sequences",
+        }
 
     def _probe_counts(self, instrument_name: str) -> dict[str, Any]:
         attempts: list[dict[str, Any]] = []

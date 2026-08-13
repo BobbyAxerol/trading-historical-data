@@ -56,13 +56,30 @@ Completed evidence:
   acceptance checks confirm canonical-manifest read succeeds while storage
   write and reads of `state`, `logs`, and `secrets` are denied. Bobby remains
   the runtime owner and root retains normal host-administrator authority.
+- B0.5 bounded source probes are complete in the new environment. Binance made
+  exactly eight sequential public checks and passed REST plus archive-listing
+  coverage (spot archive from `2017-08`, USD-M archive from `2020-01`, and
+  metrics/book-depth listings). VNStock returned eight FPT daily rows; the
+  VNDIRECT hard gate passed with daily coverage from `2017-08-10` and recent
+  1m coverage, while the sampled 2018 1m window was explicitly `no_data`.
+- The Deribit API probe initially selected a thin two-sequence contract. The
+  probe was corrected and regression-tested to skip candidates with fewer than
+  three unique sequences. Its final bounded run selected
+  `BTC-16AUG26-69000-C`, verified asc/desc ordering and inclusive sequence
+  boundaries with zero out-of-range rows, and observed a clean 1--2 rps ramp.
+  This is source evidence only: no canonical data was written and no backfill
+  was started.
+- Compose contract and clock evidence now pass. The created-but-never-started
+  inspection container had only the three runtime binds and user `1000:1000`;
+  host NTP reports synchronized with `Etc/UTC` and `LocalRTC=no`.
 
-Current B0 blockers (not bypassed): capacity/concurrency requires source- and
-bounded-seed measurements plus approval; every enabled source inventory probe
-is pending; release/storage manifest is not accepted until a tagged release;
-backup destination/retention and restore drill are undefined; monitoring/alert
-activation is pending; and the single-root consumer rollback release/root have
-not yet been designated.
+Current B0 blockers (not bypassed): capacity/concurrency requires bounded-seed
+measurements plus approval; release/storage manifest is not accepted until a
+tagged package release and compatibility contract are complete; off-host backup
+and restore drill are deferred by the owner but remain required by the current
+runbook exit criteria; monitoring/alert activation is pending; and no approved
+release/data root exists yet from which to designate a single-root consumer
+rollback path.
 
 Safety result: no collector, source ingestion, `discover`, `sync-once`, pilot,
 or historical backfill was started during this work.

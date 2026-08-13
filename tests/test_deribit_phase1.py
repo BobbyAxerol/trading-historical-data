@@ -161,6 +161,31 @@ class TestDeribitClientPhase1(EnvCase):
 
 
 class TestDeribitProbePhase1(EnvCase):
+    def test_probe_skips_thin_candidate_for_sequence_capable_candidate(self):
+        class CandidateClient(FakeProbeClient):
+            def __init__(self):
+                super().__init__()
+                self.thin = "BTC-16AUG26-71000-C"
+                self.rich = "BTC-27MAR26-100000-C"
+                self.trades = [trade(1, self.thin), trade(2, self.thin)] + [trade(seq, self.rich) for seq in range(100, 104)]
+
+            def get_instruments(self, *, expired: bool):
+                rows = [] if expired else [{"instrument_name": self.rich}, {"instrument_name": self.thin}]
+                return DeribitApiResult("get_instruments", {"expired": expired}, True, 200, result=rows, latency_ms=1.0, response_bytes=100)
+
+        runner = DeribitApiProbeRunner(
+            load_deribit_config(),
+            client=CandidateClient(),
+            options=ProbeOptions(sample_instruments=2),
+        )
+        selected, evidence = runner._find_trade_instrument(
+            [{"instrument_name": "BTC-27MAR26-100000-C"}, {"instrument_name": "BTC-16AUG26-71000-C"}]
+        )
+        self.assertEqual(selected, "BTC-27MAR26-100000-C")
+        self.assertEqual(evidence["status"], "selected")
+        self.assertEqual(evidence["attempts"][0]["unique_trade_sequences"], 2)
+        self.assertEqual(evidence["attempts"][1]["unique_trade_sequences"], 4)
+
     def test_probe_runner_writes_report_with_mandatory_fields(self):
         config = load_deribit_config()
         runner = DeribitApiProbeRunner(
