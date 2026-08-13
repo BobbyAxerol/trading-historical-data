@@ -12,8 +12,7 @@ import pandas as pd
 from collectors.common.calendar_vn import vn_now
 from collectors.common.env import state_root
 from collectors.common.logging import setup_logging
-from collectors.common.manifest import utc_now_iso
-from collectors.common.manifest import Heartbeat, JsonState
+from collectors.common.manifest import Heartbeat, JsonState, sleep_with_heartbeat, utc_now_iso
 from collectors.common.storage import PartitionedParquetStore, release_unused_memory
 from collectors.providers.vndirect_dchart_derivatives import DChartFetchResult, VndirectDChartProvider
 
@@ -323,4 +322,10 @@ def live_vndirect_daily(*, schedule: str = "16:30", version: str = "v1", overlap
             except Exception as exc:
                 logger.exception("vndirect_dchart_daily_sync_failed")
                 heartbeat.beat(status="error", error=str(exc))
-        time.sleep(300)
+        sleep_with_heartbeat(
+            heartbeat,
+            300,
+            schedule=schedule,
+            last_run_date=last_run_date,
+            source=VNDIRECT_SOURCE,
+        )

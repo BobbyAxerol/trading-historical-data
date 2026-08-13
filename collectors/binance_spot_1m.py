@@ -17,7 +17,7 @@ import requests
 from collectors.common.config import load_yaml
 from collectors.common.env import load_environment
 from collectors.common.logging import setup_logging
-from collectors.common.manifest import Heartbeat, JsonState, Manifest, utc_now_iso
+from collectors.common.manifest import Heartbeat, JsonState, Manifest, sleep_with_heartbeat, utc_now_iso
 from collectors.common.retry import retry_sync
 from collectors.common.storage import PartitionedParquetStore as PartitionedCsvGzStore
 from collectors.common.storage import read_partition_file, write_partition_file
@@ -964,6 +964,7 @@ def main() -> None:
     sleep_seconds = args.sleep or int(config.get("sleep_seconds", 70))
     audit_interval = int(args.audit_interval_seconds or config.get("audit_interval_seconds", 21600))
     logger = setup_logging(DATASET)
+    heartbeat = Heartbeat(DATASET)
     symbols = _selected_symbols(args)
     audit_fresh = args.mode == "live" and not args.no_validate and _audits_are_fresh(symbols, audit_interval)
     last_audit_at = time.time() if audit_fresh else 0.0
@@ -979,7 +980,7 @@ def main() -> None:
         first_loop = False
         if args.mode != "live":
             break
-        time.sleep(sleep_seconds)
+        sleep_with_heartbeat(heartbeat, sleep_seconds)
 
 
 if __name__ == "__main__":

@@ -50,6 +50,10 @@ Status: in progress; collector and backfill remain blocked.
   and 128 PIDs each. `b0_seed_evidence --activate-staged-tails` records that
   profile only after the fixed B0 seed evidence passes; it does not start a
   writer and retains the prohibition on every heavy historical job.
+- Every approved live tail emits a `sleeping` heartbeat every five minutes
+  while it waits for the next cycle. An existing `error` heartbeat is never
+  overwritten by the normal-wait status; only a later successful cycle can
+  clear it.
 
 Completed evidence:
 

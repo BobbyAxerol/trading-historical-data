@@ -12,7 +12,7 @@ from collectors.common.config import load_yaml
 from collectors.common.discovery import latest_time_from_files, max_timestamp
 from collectors.common.env import GET_DATA_ROOT, load_environment
 from collectors.common.logging import setup_logging
-from collectors.common.manifest import Heartbeat, Manifest, utc_now_iso
+from collectors.common.manifest import Heartbeat, Manifest, sleep_with_heartbeat, utc_now_iso
 from collectors.common.retry import retry_sync
 from collectors.common.storage import PartitionedParquetStore
 
@@ -220,7 +220,7 @@ def main() -> None:
                 heartbeat.beat(status="error", symbol=symbol, error=str(exc))
         if args.mode != "live":
             break
-        time.sleep(args.sleep)
+        sleep_with_heartbeat(heartbeat, args.sleep)
 
 
 if __name__ == "__main__":

@@ -16,7 +16,7 @@ import requests
 from collectors.common.config import load_yaml
 from collectors.common.env import load_environment
 from collectors.common.logging import setup_logging
-from collectors.common.manifest import Heartbeat, JsonState, Manifest, utc_now_iso
+from collectors.common.manifest import Heartbeat, JsonState, Manifest, sleep_with_heartbeat, utc_now_iso
 from collectors.common.retry import retry_sync
 from collectors.common.storage import PartitionedParquetStore as PartitionedCsvGzStore
 from collectors.common.storage import read_partition_file, write_partition_file
@@ -629,12 +629,13 @@ def main() -> None:
     config = load_yaml("symbols.binance_orderbook_snapshot.yml")
     sleep_seconds = int(args.sleep or config.get("sleep_seconds", 3600))
     logger = setup_logging(DATASET)
+    heartbeat = Heartbeat(DATASET)
     while True:
         result = sync_all(args, logger, run_audit=not args.no_validate)
         logger.info("Binance orderbook snapshot 1h sync finished: %s", result)
         if args.mode != "live":
             break
-        time.sleep(sleep_seconds)
+        sleep_with_heartbeat(heartbeat, sleep_seconds)
 
 
 if __name__ == "__main__":

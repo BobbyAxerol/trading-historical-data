@@ -144,6 +144,11 @@ validation/repair, RSS, and backup failures. Missing evidence deliberately
 returns `blocked`; after an approved scheduled cycle, record only factual alert
 and heartbeat evidence before changing `monitoring.json` to `pass`.
 
+Approved live tails refresh a `sleeping` heartbeat at most every five minutes
+while waiting between polls or daily schedules. An `error` heartbeat is never
+replaced by that idle signal; only a later successful collector cycle may clear
+the alert.
+
 Before using a production Compose command, inspect the resolved configuration:
 
 ```bash

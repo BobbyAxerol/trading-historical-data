@@ -10,7 +10,7 @@ from collectors.common.config import load_yaml
 from collectors.common.discovery import latest_time_from_files, max_timestamp
 from collectors.common.env import GET_DATA_ROOT, load_environment
 from collectors.common.logging import setup_logging
-from collectors.common.manifest import Heartbeat, JsonState, Manifest, utc_now_iso
+from collectors.common.manifest import Heartbeat, JsonState, Manifest, sleep_with_heartbeat, utc_now_iso
 from collectors.common.retry import SlidingWindowRateLimiter, retry_sync
 from collectors.common.storage import PartitionedParquetStore
 from collectors.vn_daily_matrix import build_matrix
@@ -194,7 +194,12 @@ def main() -> None:
             })
         if args.mode != "live":
             break
-        time.sleep(300)
+        sleep_with_heartbeat(
+            heartbeat,
+            300,
+            schedule=args.schedule,
+            last_run_date=last_run_date,
+        )
 
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import resource
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -80,3 +81,35 @@ class Heartbeat:
             **values,
         }
         self.state.write(payload)
+
+
+def sleep_with_heartbeat(
+    heartbeat: Heartbeat,
+    seconds: float,
+    *,
+    heartbeat_interval_seconds: float = 300,
+    **values: Any,
+) -> None:
+    """Sleep a live collector while keeping its healthy heartbeat fresh.
+
+    Long tail intervals must not look like stopped services to the B0 monitor.
+    Conversely, a collector error remains visible until a later successful
+    cycle writes a healthy heartbeat; this helper never overwrites ``error``
+    with ``sleeping``.
+    """
+
+    remaining = float(seconds)
+    interval = float(heartbeat_interval_seconds)
+    if remaining <= 0:
+        return
+    if interval <= 0:
+        raise ValueError("heartbeat_interval_seconds must be positive")
+
+    while remaining > 0:
+        chunk = min(interval, remaining)
+        time.sleep(chunk)
+        remaining -= chunk
+        current = heartbeat.state.read()
+        if str(current.get("status", "")).lower() == "error":
+            continue
+        heartbeat.beat(status="sleeping", **values)
