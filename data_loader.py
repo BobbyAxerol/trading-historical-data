@@ -716,7 +716,7 @@ class VnStock1m(MarketDataLoaderBase):
     TZ_INFO = "Asia/Ho_Chi_Minh"
     DEFAULT_COLUMNS = OHLCV_COLUMNS
     RESAMPLE_SUPPORTED = True
-    RELEASE_DATASET_ID = "vn_daily_derivatives"
+    RELEASE_DATASET_ID = "vn_stock_1m"
 
 
 class VnStockDaily(MarketDataLoaderBase):
@@ -726,7 +726,7 @@ class VnStockDaily(MarketDataLoaderBase):
     NEW_PATH_PARTS = ("vn", "equity", "1d")
     TZ_INFO = "Asia/Ho_Chi_Minh"
     DEFAULT_COLUMNS = OHLCV_COLUMNS
-    RELEASE_DATASET_ID = "vn_daily_derivatives"
+    RELEASE_DATASET_ID = "vn_stock_daily"
 
 
 class VnFutures1m(MarketDataLoaderBase):
@@ -737,7 +737,7 @@ class VnFutures1m(MarketDataLoaderBase):
     TZ_INFO = "Asia/Ho_Chi_Minh"
     DEFAULT_COLUMNS = OHLCV_COLUMNS
     RESAMPLE_SUPPORTED = True
-    RELEASE_DATASET_ID = "vn_daily_derivatives"
+    RELEASE_DATASET_ID = "vn_futures_1m"
 
 
 class VnDerivativesContracts1m(MarketDataLoaderBase):
@@ -748,7 +748,7 @@ class VnDerivativesContracts1m(MarketDataLoaderBase):
     TZ_INFO = "Asia/Ho_Chi_Minh"
     DEFAULT_COLUMNS = OHLCV_COLUMNS
     RESAMPLE_SUPPORTED = True
-    RELEASE_DATASET_ID = "vn_daily_derivatives"
+    RELEASE_DATASET_ID = "vn_derivatives_contracts_1m"
 
 
 class VnDerivativesContractsDaily(MarketDataLoaderBase):
@@ -758,7 +758,7 @@ class VnDerivativesContractsDaily(MarketDataLoaderBase):
     NEW_PATH_PARTS = ("vn", "futures", "contracts", "1d")
     TZ_INFO = "Asia/Ho_Chi_Minh"
     DEFAULT_COLUMNS = OHLCV_COLUMNS
-    RELEASE_DATASET_ID = "vn_daily_derivatives"
+    RELEASE_DATASET_ID = "vn_derivatives_contracts_1d"
 
 
 class VnDerivativesContinuousBase(MarketDataLoaderBase):
@@ -767,7 +767,7 @@ class VnDerivativesContinuousBase(MarketDataLoaderBase):
     VERSION = "v1"
     TZ_INFO = "Asia/Ho_Chi_Minh"
     DEFAULT_COLUMNS = OHLCV_COLUMNS
-    RELEASE_DATASET_ID = "vn_daily_derivatives"
+    RELEASE_DATASET_ID = "vn_derivatives_continuous"
 
     def _discover_symbols(self) -> list[str]:
         root = self._get_new_path()

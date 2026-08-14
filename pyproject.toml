@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "primus-historical-market-data"
-version = "0.1.0rc2"
+version = "0.1.0rc3"
 description = "Read-only loaders for Primus historical market data"
 requires-python = ">=3.12,<3.14"
 dependencies = [
