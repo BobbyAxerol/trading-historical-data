@@ -61,6 +61,12 @@ class TestPhaseEComposeContract(unittest.TestCase):
         self.assertEqual(command[lookback_index + 1], "2500")
         self.assertIn("--no-vision", command)
 
+    def test_b0_orderbook_tail_cannot_prune_the_shared_phase_e_storage(self) -> None:
+        command = self.compose["services"]["binance-orderbook-snapshot-1h"]["command"]
+        lookback_index = command.index("--lookback-days")
+        self.assertEqual(command[lookback_index + 1], "2500")
+        self.assertIn("--no-vision", command)
+
     def test_phase_e_keeps_contract_publish_and_deribit_out_of_scope(self) -> None:
         services = self.policy["phase_e_approval"]["services"]
         self.assertIn("phase-e-vn30-contract-source-probe", services)

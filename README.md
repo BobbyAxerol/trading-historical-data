@@ -208,7 +208,7 @@ Các service chạy bằng `docker compose` và có `restart: unless-stopped`.
 | `binance-spot-1m` | `collectors.binance_spot_1m` | Sync BTCUSDT spot historical/current |
 | `binance-daily-matrix` | `collectors.binance_daily_matrix` | Daily matrix lúc `00:05 UTC` |
 | `binance-futures-metrics-5m` | `collectors.binance_futures_metrics_5m` | Metrics 5m theo lịch |
-| `binance-orderbook-snapshot-1h` | `collectors.binance_orderbook_snapshot_1h` | Snapshot order book mỗi giờ |
+| `binance-orderbook-snapshot-1h` | `collectors.binance_orderbook_snapshot_1h` | BTC-only B0 REST snapshot mỗi giờ; preserves the shared 2,500-day orderbook retention horizon |
 | `options-binance-5m` | `collectors.options_binance_5m` | Options snapshot mỗi 5 phút |
 | `vn-daily` | `collectors.vn_daily` | VN daily raw lúc `16:30 Asia/Ho_Chi_Minh`; sau mỗi lượt update sẽ build universe report và rebuild daily matrix |
 | `vn-intraday-stocks` | `collectors.vn_intraday_vnstock` | VN stock 1m lúc `16:30 Asia/Ho_Chi_Minh` |

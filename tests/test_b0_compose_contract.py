@@ -26,7 +26,7 @@ STAGED_TAILS = {
     "binance-orderbook-snapshot-1h": {
         "approval": "PRIMUS_HMD_STAGED_BINANCE_ORDERBOOK_SNAPSHOT_1H_APPROVED",
         "dataset_id": "crypto_binance_orderbook_snapshot_1h",
-        "command": ["python", "-m", "collectors.binance_orderbook_snapshot_1h", "--mode", "live", "--symbols", "BTCUSDT", "--no-vision", "--no-validate", "--sleep", "3600"],
+        "command": ["python", "-m", "collectors.binance_orderbook_snapshot_1h", "--mode", "live", "--symbols", "BTCUSDT", "--lookback-days", "2500", "--no-vision", "--no-validate", "--sleep", "3600"],
     },
     "binance-futures-metrics-5m": {
         "approval": "PRIMUS_HMD_STAGED_BINANCE_FUTURES_METRICS_5M_APPROVED",

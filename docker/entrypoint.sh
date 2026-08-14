@@ -65,11 +65,13 @@ if [ "${PRIMUS_HMD_STAGED_BINANCE_ORDERBOOK_SNAPSHOT_1H_APPROVED:-}" = "approved
   && [ "${5:-}" = "live" ] \
   && [ "${6:-}" = "--symbols" ] \
   && [ "${7:-}" = "BTCUSDT" ] \
-  && [ "${8:-}" = "--no-vision" ] \
-  && [ "${9:-}" = "--no-validate" ] \
-  && [ "${10:-}" = "--sleep" ] \
-  && [ "${11:-}" = "3600" ] \
-  && [ "$#" -eq 11 ]; then
+  && [ "${8:-}" = "--lookback-days" ] \
+  && [ "${9:-}" = "2500" ] \
+  && [ "${10:-}" = "--no-vision" ] \
+  && [ "${11:-}" = "--no-validate" ] \
+  && [ "${12:-}" = "--sleep" ] \
+  && [ "${13:-}" = "3600" ] \
+  && [ "$#" -eq 13 ]; then
   exec "$@"
 fi
 

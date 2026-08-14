@@ -58,6 +58,8 @@ STAGED_TAIL_COMMANDS = {
         "live",
         "--symbols",
         "BTCUSDT",
+        "--lookback-days",
+        "2500",
         "--no-vision",
         "--no-validate",
         "--sleep",
