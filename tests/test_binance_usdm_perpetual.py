@@ -117,6 +117,39 @@ class TestBinanceUsdmPerpetual(unittest.TestCase):
         self.assertEqual(len(calls), 2)
         self.assertTrue(all((end - start) <= pd.Timedelta(minutes=999) for start, end in calls))
 
+    def test_audited_gap_repair_uses_only_exact_daily_vision_files(self) -> None:
+        audit = {
+            "gap_examples": [
+                {"start": "2022-02-26T00:00:00+00:00", "end": "2022-02-28T23:59:00+00:00"},
+                {"start": "2022-04-01T00:00:00+00:00", "end": "2022-04-02T23:59:00+00:00"},
+            ]
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch.dict(os.environ, {"DATA_ROOT": str(root / "storage"), "STATE_ROOT": str(root / "state")}, clear=False):
+                store = PartitionedParquetStore(perpetual.STORE_PARTS, partition="month")
+                manifest = Manifest(perpetual.DATASET)
+                with patch.object(perpetual, "_day_complete", side_effect=[False, True] * 5), patch.object(
+                    perpetual, "sync_vision_file", return_value={"rows_written": 1440, "missing": False}
+                ) as sync_file:
+                    result = perpetual.repair_audited_vision_gaps(
+                        symbol="SOLUSDT",
+                        interval="1m",
+                        audit=audit,
+                        store=store,
+                        manifest=manifest,
+                        vision_base_url="https://vision.example",
+                        logger=__import__("logging").getLogger("test"),
+                    )
+
+        self.assertEqual(result["status"], "pass")
+        self.assertEqual(result["rows_written"], 7200)
+        self.assertEqual(
+            [Path(call.kwargs["key"]).stem.rsplit("-1m-", 1)[-1] for call in sync_file.call_args_list],
+            ["2022-02-26", "2022-02-27", "2022-02-28", "2022-04-01", "2022-04-02"],
+        )
+        self.assertTrue(all(call.kwargs["source"] == "binance_vision_futures_um_daily_repair" for call in sync_file.call_args_list))
+
     def test_run_writes_a_durable_per_symbol_audit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -146,6 +179,39 @@ class TestBinanceUsdmPerpetual(unittest.TestCase):
         self.assertEqual(result["status"], "pass")
         self.assertEqual(stored["status"], "pass")
         self.assertEqual(stored["service"], perpetual.SERVICE)
+
+    def test_run_repairs_audited_gaps_then_revalidates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            args = argparse.Namespace(
+                symbols="BTCUSDT",
+                start_month="2020-01",
+                daily_bridge_days=1,
+                rest_bridge_days=1,
+                rest_window_minutes=60,
+                no_validate=False,
+                phase_label="e",
+                allow_later_start=True,
+            )
+            requires_repair = {"status": "requires_repair", "gap_count": 1, "gap_examples": [{"start": "2020-01-02T00:00:00+00:00", "end": "2020-01-02T23:59:00+00:00"}]}
+            passed = {"status": "pass", "gap_count": 0, "gap_examples": []}
+            repair = {"status": "pass", "requested_days": ["2020-01-02"], "rows_written": 1440, "missing_days": [], "unrepaired_days": []}
+            with patch.dict(
+                os.environ,
+                {"DATA_ROOT": str(root / "storage"), "STATE_ROOT": str(root / "state"), "LOG_ROOT": str(root / "logs")},
+                clear=False,
+            ), patch.object(perpetual, "load_yaml", return_value={"symbols": ["BTCUSDT"], "interval": "1m"}), patch.object(
+                perpetual, "discover_active_perpetuals", return_value={"BTCUSDT": {"symbol": "BTCUSDT"}}
+            ), patch.object(perpetual, "sync_symbol", return_value={"monthly": {}, "daily": {}, "rest": {}}), patch.object(
+                perpetual, "validate_symbol", side_effect=[requires_repair, passed]
+            ), patch.object(perpetual, "repair_audited_vision_gaps", return_value=repair) as repair_gaps:
+                result = perpetual.run(args)
+                stored = json.loads((root / "state" / "audits" / "crypto_binance_futures_1m_BTCUSDT_phase_e.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(result["status"], "pass")
+        self.assertEqual(result["results"]["BTCUSDT"]["repair"], repair)
+        self.assertEqual(stored["repair"], repair)
+        repair_gaps.assert_called_once()
 
 
 if __name__ == "__main__":

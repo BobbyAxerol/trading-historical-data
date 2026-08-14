@@ -42,6 +42,7 @@ DATASET = "crypto_binance_futures_1m"
 SERVICE = "phase_d_binance_usdm_perpetual_1m"
 STORE_PARTS = ["crypto", "binance_futures", "1m"]
 ONE_MINUTE = pd.Timedelta(minutes=1)
+MAX_DAILY_VISION_REPAIR_DAYS = 31
 
 
 def read_vision_zip(content: bytes, *, symbol: str, source: str) -> pd.DataFrame:
@@ -245,6 +246,11 @@ def _daily_bridge_days(days: int) -> list[pd.Timestamp]:
     return list(pd.date_range(start, yesterday, freq="D"))
 
 
+def _daily_vision_key(symbol: str, interval: str, day: pd.Timestamp) -> str:
+    date_text = pd.Timestamp(day).tz_localize(None).strftime("%Y-%m-%d")
+    return f"data/futures/um/daily/klines/{symbol}/{interval}/{symbol}-{interval}-{date_text}.zip"
+
+
 def sync_daily_bridge(
     *,
     symbol: str,
@@ -264,8 +270,7 @@ def sync_daily_bridge(
         if _day_complete(store, symbol, day):
             skipped += 1
             continue
-        date_text = day.strftime("%Y-%m-%d")
-        key = f"data/futures/um/daily/klines/{symbol}/{interval}/{symbol}-{interval}-{date_text}.zip"
+        key = _daily_vision_key(symbol, interval, day)
         result = sync_vision_file(
             key=key,
             symbol=symbol,
@@ -286,6 +291,90 @@ def sync_daily_bridge(
         "daily_files_requested": downloaded,
         "skipped_complete_days": skipped,
         "missing_daily_files": missing,
+    }
+
+
+def _utc_day(value: object) -> pd.Timestamp:
+    timestamp = pd.Timestamp(value)
+    if timestamp.tzinfo is not None:
+        timestamp = timestamp.tz_convert("UTC").tz_localize(None)
+    return timestamp.normalize()
+
+
+def _audited_gap_days(audit: dict[str, object]) -> list[pd.Timestamp]:
+    """Expand persisted gap examples to exact UTC dates, without guessing bars."""
+    days: set[pd.Timestamp] = set()
+    for example in audit.get("gap_examples", []):
+        if not isinstance(example, dict) or not example.get("start") or not example.get("end"):
+            continue
+        start = _utc_day(example["start"])
+        end = _utc_day(example["end"])
+        if end < start:
+            continue
+        days.update(pd.date_range(start, end, freq="D"))
+    return sorted(days)
+
+
+def repair_audited_vision_gaps(
+    *,
+    symbol: str,
+    interval: str,
+    audit: dict[str, object],
+    store: PartitionedParquetStore,
+    manifest: Manifest,
+    vision_base_url: str,
+    logger,
+    max_repair_days: int = MAX_DAILY_VISION_REPAIR_DAYS,
+) -> dict[str, object]:
+    """Repair only explicitly audited historical gaps from official daily Vision files."""
+    if max_repair_days <= 0:
+        raise ValueError("max_repair_days must be positive")
+    days = _audited_gap_days(audit)
+    if not days:
+        return {"status": "not_required", "requested_days": [], "rows_written": 0, "missing_days": [], "unrepaired_days": []}
+    if len(days) > max_repair_days:
+        return {
+            "status": "bounded_refusal",
+            "requested_days": [day.date().isoformat() for day in days],
+            "rows_written": 0,
+            "missing_days": [],
+            "unrepaired_days": [day.date().isoformat() for day in days],
+            "max_repair_days": max_repair_days,
+        }
+
+    total_rows = 0
+    skipped_days: list[str] = []
+    missing_days: list[str] = []
+    unrepaired_days: list[str] = []
+    for day in days:
+        day_text = day.date().isoformat()
+        if _day_complete(store, symbol, day):
+            skipped_days.append(day_text)
+            continue
+        result = sync_vision_file(
+            key=_daily_vision_key(symbol, interval, day),
+            symbol=symbol,
+            store=store,
+            manifest=manifest,
+            vision_base_url=vision_base_url,
+            source="binance_vision_futures_um_daily_repair",
+            logger=logger,
+        )
+        total_rows += int(result.get("rows_written") or 0)
+        if result["missing"]:
+            missing_days.append(day_text)
+        elif not _day_complete(store, symbol, day):
+            unrepaired_days.append(day_text)
+        time.sleep(0.05)
+
+    return {
+        "status": "pass" if not missing_days and not unrepaired_days else "source_unavailable",
+        "requested_days": [day.date().isoformat() for day in days],
+        "skipped_complete_days": skipped_days,
+        "rows_written": total_rows,
+        "missing_days": missing_days,
+        "unrepaired_days": unrepaired_days,
+        "source": "binance_vision_futures_um_daily_repair",
     }
 
 
@@ -548,7 +637,23 @@ def run(args: argparse.Namespace) -> dict[str, object]:
                 symbol=symbol,
                 expected_start=None if getattr(args, "allow_later_start", False) else f"{start_month}-01",
             )
-            results[symbol] = {**result, "validation": audit}
+            repair = {"status": "not_required", "requested_days": [], "rows_written": 0, "missing_days": [], "unrepaired_days": []}
+            if audit["status"] != "pass" and int(audit.get("gap_count") or 0) > 0:
+                repair = repair_audited_vision_gaps(
+                    symbol=symbol,
+                    interval=interval,
+                    audit=audit,
+                    store=store,
+                    manifest=manifest,
+                    vision_base_url=str(config.get("vision_base_url", VISION_BASE_URL)),
+                    logger=logger,
+                )
+                audit = validate_symbol(
+                    store=store,
+                    symbol=symbol,
+                    expected_start=None if getattr(args, "allow_later_start", False) else f"{start_month}-01",
+                )
+            results[symbol] = {**result, "repair": repair, "validation": audit}
             JsonState(f"audits/{DATASET}_{symbol}_phase_{phase_label}.json").write(
                 {
                     "dataset": DATASET,
@@ -556,6 +661,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
                     "service": service,
                     "symbol": symbol,
                     "expected_start_policy": "source_listing_allowed" if getattr(args, "allow_later_start", False) else "exact_configured_start",
+                    "repair": repair,
                     **audit,
                 }
             )
