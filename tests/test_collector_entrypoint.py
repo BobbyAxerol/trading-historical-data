@@ -233,7 +233,7 @@ PHASE_E_TAIL_COMMANDS = {
     ],
     "PRIMUS_HMD_STAGED_BINANCE_ORDERBOOK_EXPANDED_1H_APPROVED": [
         "python", "-m", "collectors.binance_orderbook_snapshot_1h", "--mode", "live", "--symbols", "BTCUSDT,BTCUSDT_260925,BTCUSDT_261225",
-        "--no-vision", "--no-validate", "--sleep", "3600",
+        "--lookback-days", "2500", "--no-vision", "--no-validate", "--sleep", "3600",
     ],
     "PRIMUS_HMD_STAGED_VN30F1M_VNDIRECT_1M_APPROVED": [
         "python", "-m", "collectors.vn_derivatives", "sync-vndirect", "--resolution", "1m", "--mode", "live",

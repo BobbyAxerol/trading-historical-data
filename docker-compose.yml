@@ -326,7 +326,10 @@ services:
     pids_limit: 128
     cpus: 0.50
     mem_limit: 512m
-    command: ["python", "-m", "collectors.binance_orderbook_snapshot_1h", "--mode", "live", "--symbols", "BTCUSDT,BTCUSDT_260925,BTCUSDT_261225", "--no-vision", "--no-validate", "--sleep", "3600"]
+    # Preserve the same approved 2,500-day historical horizon as the one-shot.
+    # This tail uses REST only, so it must never fall back to the generic 30-day
+    # retention default and prune Phase E archive evidence.
+    command: ["python", "-m", "collectors.binance_orderbook_snapshot_1h", "--mode", "live", "--symbols", "BTCUSDT,BTCUSDT_260925,BTCUSDT_261225", "--lookback-days", "2500", "--no-vision", "--no-validate", "--sleep", "3600"]
     environment:
       <<: *collector-gate-environment
       PRIMUS_HMD_STAGED_BINANCE_ORDERBOOK_EXPANDED_1H_APPROVED: ${PRIMUS_HMD_STAGED_BINANCE_ORDERBOOK_EXPANDED_1H_APPROVED:-}

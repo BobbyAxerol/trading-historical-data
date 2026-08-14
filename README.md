@@ -221,7 +221,7 @@ Các service chạy bằng `docker compose` và có `restart: unless-stopped`.
 | `phase-e-binance-usdm-core-perpetual-1m` | `collectors.binance_usdm_perpetual_1m` | One-shot ETH/SOL/BNB/DOGE USD-M archive rebuild with source-listing-aware audit |
 | `phase-e-binance-orderbook-history-1h` | `collectors.binance_orderbook_snapshot_1h` | One-shot retained-horizon Vision + REST history for BTC perpetual/current/next quarterlies |
 | `phase-e-vn30-contract-source-probe` | `collectors.vn_derivatives` | Non-publishing KBS/DNSE representative proof; it is not a contract backfill approval |
-| `crypto-1m-core-live`, `binance-usdm-quarterly-next-1m`, `binance-orderbook-expanded-1h` | scoped collectors | Phase E tails, each independently approved and never a default-universe expansion |
+| `crypto-1m-core-live`, `binance-usdm-quarterly-next-1m`, `binance-orderbook-expanded-1h` | scoped collectors | Phase E tails, each independently approved and never a default-universe expansion; the expanded orderbook tail retains the approved 2,500-day archive horizon while using REST only |
 | `vn-derivatives-probe` | `collectors.vn_derivatives` | Probe KBS/DNSE individual VN30 futures contracts; bootstrap/profile only |
 | `vn-derivatives-source-probe` | `collectors.vn_derivatives` | Historical V2 multi-source proof; superseded for VN30F1M by VNDIRECT DChart |
 | `vn-derivatives-bootstrap` | `collectors.vn_derivatives` | Backfill individual VN30 futures contracts; bootstrap/profile only |

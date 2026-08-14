@@ -267,7 +267,7 @@ if [ "${PRIMUS_HMD_STAGED_BINANCE_USDM_QUARTERLY_NEXT_1M_APPROVED:-}" = "approve
 fi
 
 if [ "${PRIMUS_HMD_STAGED_BINANCE_ORDERBOOK_EXPANDED_1H_APPROVED:-}" = "approved" ] \
-  && [ "$*" = "python -m collectors.binance_orderbook_snapshot_1h --mode live --symbols BTCUSDT,BTCUSDT_260925,BTCUSDT_261225 --no-vision --no-validate --sleep 3600" ]; then
+  && [ "$*" = "python -m collectors.binance_orderbook_snapshot_1h --mode live --symbols BTCUSDT,BTCUSDT_260925,BTCUSDT_261225 --lookback-days 2500 --no-vision --no-validate --sleep 3600" ]; then
   exec "$@"
 fi
 

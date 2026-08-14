@@ -55,6 +55,12 @@ class TestPhaseEComposeContract(unittest.TestCase):
                 self.assertEqual(service["cpus"], 0.5)
                 self.assertEqual(service["mem_limit"], "512m")
 
+    def test_expanded_orderbook_tail_preserves_the_phase_e_history_horizon(self) -> None:
+        command = self.compose["services"]["binance-orderbook-expanded-1h"]["command"]
+        lookback_index = command.index("--lookback-days")
+        self.assertEqual(command[lookback_index + 1], "2500")
+        self.assertIn("--no-vision", command)
+
     def test_phase_e_keeps_contract_publish_and_deribit_out_of_scope(self) -> None:
         services = self.policy["phase_e_approval"]["services"]
         self.assertIn("phase-e-vn30-contract-source-probe", services)

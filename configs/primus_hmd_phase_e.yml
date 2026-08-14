@@ -60,7 +60,7 @@ phase_e_approval:
       command: ["python", "-m", "collectors.binance_usdm_quarterly_1m", "--mode", "live", "--pairs", "BTCUSDT", "--symbols", "BTCUSDT_261225", "--no-archive-discovery", "--no-monthly", "--no-daily", "--sleep", "21600"]
     binance-orderbook-expanded-1h:
       dataset_id: crypto_binance_orderbook_snapshot_1h
-      command: ["python", "-m", "collectors.binance_orderbook_snapshot_1h", "--mode", "live", "--symbols", "BTCUSDT,BTCUSDT_260925,BTCUSDT_261225", "--no-vision", "--no-validate", "--sleep", "3600"]
+      command: ["python", "-m", "collectors.binance_orderbook_snapshot_1h", "--mode", "live", "--symbols", "BTCUSDT,BTCUSDT_260925,BTCUSDT_261225", "--lookback-days", "2500", "--no-vision", "--no-validate", "--sleep", "3600"]
     vn30f1m-vndirect-1m:
       dataset_id: vn30f1m_vndirect_dchart_1m
       command: ["python", "-m", "collectors.vn_derivatives", "sync-vndirect", "--resolution", "1m", "--mode", "live", "--overlap-minutes", "10", "--sleep", "60"]
