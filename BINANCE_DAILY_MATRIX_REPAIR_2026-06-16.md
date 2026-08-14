@@ -1,5 +1,24 @@
 # Binance Daily Matrix Repair 2026-06-16
 
+## New VPS clean rebuild — 2026-08-14
+
+The records below describe earlier implementation/repair history; they are not
+evidence that old-VPS files were copied to this host. The clean new-VPS rebuild
+ran from direct Binance USD-M source under exact-gate commit `d9327fb`.
+
+- Canonical path: `storage/crypto/binance_daily_matrix/{open,high,low,close,volume}.parquet`.
+- Current eligible universe: 380 USD-M `COIN` perpetual USDT contracts at
+  least 365 days old. Non-crypto/TradFi/Alpha/index contracts are excluded.
+- Five matrices contain 2,417 UTC daily rows from `2020-01-01` through closed
+  day `2026-08-13`.
+- Durable audit: `state/audits/binance_daily_matrix_phase_e.json`, status
+  `pass`; zero observed incomplete OHLC, invalid bounds, negative values,
+  continuity gaps, or missing closed-day tails. Zero-volume cells are only
+  pre-listing/missing-OHLC positions, not observed candles.
+- `CryptoDailyMatrix` was added to the accepted non-Deribit consumer manifest
+  only after that audit passed. The first run encountered one Binance 429 for
+  `SYRUPUSDT` and failed closed; its idempotent repair run passed.
+
 ## Problem
 
 `storage/crypto/binance_daily_matrix/{open,high,low,close,volume}.csv.gz` chi co 16 dong:

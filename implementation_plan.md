@@ -394,6 +394,43 @@ request.
   closed. The reader group cannot write canonical storage; Bobby's Alpha
   environment is private.
 
+### 2026-08-14 UTC — Supplemental Binance Daily Matrix Rebuild And Release
+
+Status: complete. Owner approved the clean-VPS Binance USD-M daily matrix as a
+separate non-Deribit scope after raw/source inputs had passed their prior
+controls. The one-shot is exact-command gated by
+`PRIMUS_HMD_PHASE_E_BINANCE_DAILY_MATRIX_APPROVED`; it cannot broaden into an
+arbitrary collector or a Deribit request.
+
+- Commit `d9327fb` adds the service-scoped `phase-e-binance-daily-matrix`
+  command and a durable audit before it can exit successfully. Focused gate,
+  collector, Parquet, audit, loader, and Compose tests passed: 42 tests in
+  2.249 seconds. The one new cached collector image is
+  `primus-historical-market-data:phase-e-binance-daily-matrix-d9327fb`.
+- The first direct-source pass selected 380 eligible USD-M crypto perpetuals
+  (not a hard-coded 400) and wrote all five atomic matrices, but Binance
+  returned HTTP 429 for `SYRUPUSDT`. Its strict audit failed closed and the
+  consumer manifest was not changed. A second idempotent exact run fetched
+  overlap only for complete symbols plus the missing symbol history; it exited
+  `0` at `2026-08-14T09:41:18Z`.
+- Durable audit `state/audits/binance_daily_matrix_phase_e.json` is `pass`:
+  2,417 daily UTC rows x 380 columns in each of open/high/low/close/volume,
+  `2020-01-01` through closed day `2026-08-13`; zero observed incomplete
+  OHLC, invalid bounds, negative values, continuity gaps, or missing tails.
+  The 505,863 zero volume cells are all pre-listing/missing-OHLC matrix cells;
+  zero observed-candle volumes: zero.
+- Local data release tag
+  `primus-historical-market-data-binance-daily-matrix-20260814` identifies the
+  audited code. The canonical manifest was atomically promoted with SHA-256
+  `f6220732763258a08f97d066433945fea0b0680653098ddae110af3e3a54686b`
+  and now declares `binance_daily_matrix` in addition to the prior scoped
+  non-Deribit datasets.
+- `CryptoDailyMatrix().load("close", symbols=["BTCUSDT", "ETHUSDT"],
+  check_val=True)` passed for Bobby over the complete history. The shared
+  reader for `thanhvuong` read the same accepted matrix successfully. Deribit,
+  Binance options, and the remaining unaccepted VN loader families remain
+  fail-closed.
+
 ## Active Job: VN30F1M VNDIRECT DChart Single-Source Upgrade
 
 Source guide: `VN30_FUTURES_FREE_DATA_UPGRADE_PLAN_V2.md`
