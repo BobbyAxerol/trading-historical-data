@@ -33,7 +33,7 @@ phase_e_approval:
       validation: append/dedupe plus durable retained-horizon audit; direct provider gaps are evidence, never synthetic snapshots
     phase-e-vn-daily-universe-1d:
       dataset_id: vn_equity_1d_and_daily_matrix
-      command: ["python", "-m", "collectors.vn_daily", "--mode", "once", "--configured-universe", "--backfill-start", "2016-01-01", "--force-history", "--audit-phase-e", "--fail-on-symbol-error"]
+      command: ["python", "-m", "collectors.vn_daily", "--mode", "once", "--configured-universe", "--backfill-start", "2016-01-01", "--force-history", "--resume-success-after", "2026-08-14T05:25:00+00:00", "--audit-phase-e", "--fail-on-symbol-error"]
       sources:
         - vnstock_vci_daily
         - vndirect_dchart_continuous_alias_daily_existing_canonical_input

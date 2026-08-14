@@ -213,7 +213,8 @@ PHASE_E_COMMANDS = {
     ],
     "PRIMUS_HMD_PHASE_E_VN_DAILY_UNIVERSE_1D_APPROVED": [
         "python", "-m", "collectors.vn_daily", "--mode", "once", "--configured-universe",
-        "--backfill-start", "2016-01-01", "--force-history", "--audit-phase-e", "--fail-on-symbol-error",
+        "--backfill-start", "2016-01-01", "--force-history", "--resume-success-after", "2026-08-14T05:25:00+00:00",
+        "--audit-phase-e", "--fail-on-symbol-error",
     ],
     "PRIMUS_HMD_PHASE_E_VN30F1M_VNDIRECT_1M_APPROVED": [
         "python", "-m", "collectors.vn_derivatives", "sync-vndirect", "--resolution", "1m",

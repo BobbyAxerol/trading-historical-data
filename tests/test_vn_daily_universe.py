@@ -1,5 +1,6 @@
 import os
 import json
+import logging
 import sys
 import tempfile
 import unittest
@@ -8,6 +9,8 @@ from unittest.mock import patch
 
 import pandas as pd
 
+from collectors.common.manifest import Manifest
+from collectors.common.retry import retry_sync
 from collectors.vn_daily_universe import build_universe_report, configured_equity_symbols
 
 
@@ -59,6 +62,66 @@ class EnvCase(unittest.TestCase):
 
 
 class TestVNDailyUniverse(EnvCase):
+    def test_retry_sync_does_not_retry_confirmed_source_no_data(self):
+        class ExplicitNoData(Exception):
+            pass
+
+        calls = 0
+
+        def call():
+            nonlocal calls
+            calls += 1
+            raise ExplicitNoData("no data")
+
+        with self.assertRaises(ExplicitNoData):
+            retry_sync(call, attempts=5, non_retryable=(ExplicitNoData,))
+        self.assertEqual(calls, 1)
+
+    def test_phase_e_audit_accepts_only_documented_source_no_data(self):
+        from collectors.vn_daily import _confirmed_no_data_message, audit_configured_symbols
+
+        Manifest("vn_equity_1d").update_symbol(
+            "CBB",
+            source="vnstock_vci",
+            source_availability="confirmed_no_data",
+            source_no_data_at="2026-08-14T05:40:00+00:00",
+            source_no_data_reason="Không tìm thấy dữ liệu. Vui lòng kiểm tra lại mã chứng khoán hoặc thời gian truy xuất.",
+            last_error=None,
+        )
+
+        audit = audit_configured_symbols(["CBB"])
+
+        self.assertEqual(audit["status"], "pass")
+        self.assertEqual(audit["passing_symbol_count"], 0)
+        self.assertEqual(audit["source_no_data_symbols"], ["CBB"])
+        self.assertEqual(audit["symbols"][0]["status"], "source_no_data")
+        self.assertIsNotNone(_confirmed_no_data_message(ValueError("Không tìm thấy dữ liệu. Vui lòng kiểm tra lại mã chứng khoán.")))
+        self.assertIsNone(_confirmed_no_data_message(ValueError("provider response schema changed")))
+
+    def test_force_history_resume_skips_only_checkpointed_current_symbol(self):
+        from collectors.vn_daily import run_symbol
+
+        self._write_symbol("FPT", ["2026-08-13"], close=100.0)
+        Manifest("vn_equity_1d").update_symbol(
+            "FPT",
+            source="vnstock_vci",
+            latest_time="2026-08-13T00:00:00",
+            last_success_at="2026-08-14T05:25:01+00:00",
+        )
+        with patch("collectors.vn_daily.fetch_symbol") as fetch_symbol:
+            result = run_symbol(
+                "FPT",
+                start_default="2016-01-01",
+                end="2026-08-13",
+                limiter=object(),
+                logger=logging.getLogger("test"),
+                force_history=True,
+                resume_success_after=pd.Timestamp("2026-08-14T05:25:00+00:00"),
+            )
+
+        self.assertEqual(result, "resume_complete")
+        fetch_symbol.assert_not_called()
+
     def test_configured_equity_symbols_merges_candidates_once(self):
         config = {
             "symbols": ["FPT", "VCB", "FPT"],

@@ -16,12 +16,15 @@ def retry_sync(
     base_sleep: float = 2.0,
     max_sleep: float = 300.0,
     retryable: tuple[type[BaseException], ...] = (Exception,),
+    non_retryable: tuple[type[BaseException], ...] = (),
 ) -> T:
     last_error: BaseException | None = None
     for attempt in range(attempts):
         try:
             return fn()
         except retryable as exc:
+            if isinstance(exc, non_retryable):
+                raise
             last_error = exc
             try:
                 from .operational_events import record_retry_exception

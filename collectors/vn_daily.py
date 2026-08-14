@@ -19,6 +19,39 @@ from collectors.vn_daily_matrix import build_matrix
 from collectors.vn_daily_universe import build_universe_report, configured_equity_symbols, configured_external_symbols
 
 DATASET = "vn_equity_1d"
+_CONFIRMED_NO_DATA_MESSAGE = "không tìm thấy dữ liệu"
+
+
+class ConfirmedSourceNoData(Exception):
+    """A provider explicitly confirmed that this symbol/range has no data."""
+
+
+def _confirmed_no_data_message(exc: BaseException) -> str | None:
+    """Accept only the provider's known explicit no-data response.
+
+    Empty frames, HTTP failures, schema changes, and rate limits must remain
+    operational errors.  They are not interchangeable with a source proving
+    that a symbol has no bars.
+    """
+
+    if not isinstance(exc, ValueError):
+        return None
+    message = str(exc).strip()
+    if _CONFIRMED_NO_DATA_MESSAGE in message.casefold():
+        return message
+    return None
+
+
+def _as_utc_timestamp(value: Any) -> pd.Timestamp | None:
+    if value is None:
+        return None
+    parsed = pd.to_datetime(value, errors="coerce")
+    if pd.isna(parsed):
+        return None
+    timestamp = pd.Timestamp(parsed)
+    if timestamp.tzinfo is None:
+        return timestamp.tz_localize("UTC")
+    return timestamp.tz_convert("UTC")
 
 
 def default_symbols() -> list[str]:
@@ -34,14 +67,36 @@ def _effective_end_date() -> str:
     return (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
 
 
-def fetch_symbol(symbol: str, start: str, end: str) -> pd.DataFrame:
+def fetch_symbol(
+    symbol: str,
+    start: str,
+    end: str,
+    *,
+    limiter: SlidingWindowRateLimiter | None = None,
+) -> pd.DataFrame:
     from vnstock.explorer.vci import Quote as VCIQuote
 
     def call() -> pd.DataFrame:
+        # Retry attempts are provider calls too.  Rate-limit them here rather
+        # than once per symbol, otherwise a transient/no-data retry burst can
+        # exceed the guest account allowance.
+        if limiter is not None:
+            limiter.wait()
         quote = VCIQuote(symbol, show_log=False)
-        return quote.history(start=start, end=end, interval="1D", show_log=False)
+        try:
+            return quote.history(start=start, end=end, interval="1D", show_log=False)
+        except ValueError as exc:
+            message = _confirmed_no_data_message(exc)
+            if message is not None:
+                raise ConfirmedSourceNoData(message) from exc
+            raise
 
-    df = retry_sync(call, attempts=5, base_sleep=2)
+    df = retry_sync(
+        call,
+        attempts=5,
+        base_sleep=2,
+        non_retryable=(ConfirmedSourceNoData,),
+    )
     if df is None or df.empty:
         return pd.DataFrame()
     df = df.copy()
@@ -75,7 +130,8 @@ def run_symbol(
     limiter: SlidingWindowRateLimiter,
     logger,
     force_history: bool = False,
-) -> None:
+    resume_success_after: pd.Timestamp | None = None,
+) -> str:
     manifest = Manifest(DATASET)
     state = manifest.symbol_state(symbol)
     store = PartitionedParquetStore(["vn", "equity", "1d"], partition="year")
@@ -88,6 +144,24 @@ def run_symbol(
         ["time"],
     )
     discovered_latest = max_timestamp(state.get("latest_time"), storage_latest, legacy_latest)
+    end_timestamp = pd.Timestamp(end).normalize()
+    last_success_at = _as_utc_timestamp(state.get("last_success_at"))
+    if (
+        force_history
+        and resume_success_after is not None
+        and last_success_at is not None
+        and last_success_at >= resume_success_after
+        and storage_latest is not None
+        and storage_latest.normalize() >= end_timestamp
+    ):
+        logger.info(
+            "%s daily resume checkpoint complete latest=%s success_at=%s",
+            symbol,
+            storage_latest,
+            state.get("last_success_at"),
+        )
+        return "resume_complete"
+
     if force_history:
         # The bounded B0 seed may already have a tail.  An owner-approved
         # historical rebuild must not mistake that tail for complete history.
@@ -107,15 +181,26 @@ def run_symbol(
 
     if start > end:
         logger.info("%s daily already current", symbol)
-        return
+        return "already_current"
 
-    limiter.wait()
     logger.info("Fetching %s daily %s -> %s", symbol, start, end)
-    df = fetch_symbol(symbol, start, end)
+    try:
+        df = fetch_symbol(symbol, start, end, limiter=limiter)
+    except ConfirmedSourceNoData as exc:
+        manifest.update_symbol(
+            symbol,
+            source="vnstock_vci",
+            source_availability="confirmed_no_data",
+            source_no_data_at=utc_now_iso(),
+            source_no_data_reason=str(exc),
+            last_error=None,
+        )
+        logger.info("%s daily source confirmed no data: %s", symbol, exc)
+        return "source_no_data"
     if df.empty:
         manifest.update_symbol(symbol, last_error="empty_response", last_success_at=utc_now_iso())
         logger.warning("%s daily returned no rows", symbol)
-        return
+        return "empty_response"
 
     result = store.append(
         df,
@@ -130,14 +215,37 @@ def run_symbol(
         last_success_at=utc_now_iso(),
         rows_written=result["rows_written"],
         source="vnstock_vci",
+        source_availability="available",
+        source_no_data_at=None,
+        source_no_data_reason=None,
         last_error=None,
     )
     logger.info("%s daily wrote %s rows latest=%s", symbol, result["rows_written"], result["latest_time"])
+    return "written"
 
 
 def _audit_symbol_files(store: PartitionedParquetStore, symbol: str) -> dict[str, Any]:
     required = ["time", "symbol", "open", "high", "low", "close", "volume", "source"]
+    state = Manifest(DATASET).symbol_state(symbol)
     files = store.files({"symbol": symbol})
+    if not files and state.get("source_availability") == "confirmed_no_data":
+        return {
+            "symbol": symbol,
+            "status": "source_no_data",
+            "files": 0,
+            "rows": 0,
+            "first": None,
+            "latest": None,
+            "duplicate_rows": 0,
+            "invalid_time_rows": 0,
+            "invalid_numeric_rows": 0,
+            "ohlc_bad_rows": 0,
+            "negative_rows": 0,
+            "source_mismatch_rows": 0,
+            "file_errors": [],
+            "source_no_data_at": state.get("source_no_data_at"),
+            "source_no_data_reason": state.get("source_no_data_reason"),
+        }
     rows = duplicate_rows = invalid_time_rows = invalid_numeric_rows = 0
     ohlc_bad_rows = negative_rows = source_mismatch_rows = 0
     first: pd.Timestamp | None = None
@@ -201,6 +309,8 @@ def _audit_symbol_files(store: PartitionedParquetStore, symbol: str) -> dict[str
         "negative_rows": negative_rows,
         "source_mismatch_rows": source_mismatch_rows,
         "file_errors": file_errors,
+        "source_no_data_at": None,
+        "source_no_data_reason": None,
     }
 
 
@@ -209,13 +319,18 @@ def audit_configured_symbols(symbols: list[str]) -> dict[str, Any]:
 
     store = PartitionedParquetStore(["vn", "equity", "1d"], partition="year")
     reports = [_audit_symbol_files(store, symbol.strip().upper()) for symbol in symbols if symbol.strip()]
-    failed = [report["symbol"] for report in reports if report["status"] != "pass"]
+    failed = [report["symbol"] for report in reports if report["status"] not in {"pass", "source_no_data"}]
+    source_no_data = [report["symbol"] for report in reports if report["status"] == "source_no_data"]
+    passing = [report["symbol"] for report in reports if report["status"] == "pass"]
     payload: dict[str, Any] = {
         "dataset": DATASET,
         "service": "phase_e_vn_daily_universe_1d",
         "status": "pass" if not failed else "requires_repair",
         "configured_symbol_count": len(reports),
-        "passing_symbol_count": len(reports) - len(failed),
+        "passing_symbol_count": len(passing),
+        "source_no_data_symbol_count": len(source_no_data),
+        "source_no_data_symbols": source_no_data,
+        "resolved_symbol_count": len(reports) - len(failed),
         "failed_symbols": failed,
         "symbols": reports,
         "validated_at": utc_now_iso(),
@@ -253,6 +368,14 @@ def main() -> None:
         help="Fetch from --backfill-start even when the new runtime already has a bounded tail.",
     )
     parser.add_argument(
+        "--resume-success-after",
+        default=None,
+        help=(
+            "Resume an interrupted --force-history run by skipping only symbols "
+            "whose successful full-history checkpoint is at or after this UTC ISO-8601 timestamp."
+        ),
+    )
+    parser.add_argument(
         "--audit-phase-e",
         action="store_true",
         help="Write and enforce durable Phase E raw-equity audit evidence after a one-shot run.",
@@ -281,6 +404,9 @@ def main() -> None:
     if args.max_symbols:
         symbols = symbols[: args.max_symbols]
     start_default = args.backfill_start or config.get("backfill_start", "2016-01-01")
+    resume_success_after = _as_utc_timestamp(args.resume_success_after)
+    if args.resume_success_after and resume_success_after is None:
+        parser.error("--resume-success-after must be a valid ISO-8601 timestamp")
     logger = setup_logging(DATASET)
     heartbeat = Heartbeat(DATASET)
     limiter = SlidingWindowRateLimiter(max_calls=config.get("max_calls_per_minute", 18), period_seconds=60)
@@ -301,6 +427,7 @@ def main() -> None:
                         limiter=limiter,
                         logger=logger,
                         force_history=args.force_history,
+                        resume_success_after=resume_success_after,
                     )
                     heartbeat.beat(symbol=symbol)
                 except Exception as exc:
@@ -332,9 +459,11 @@ def main() -> None:
             if args.audit_phase_e:
                 audit = audit_configured_symbols([symbol.strip().upper() for symbol in symbols])
                 logger.info(
-                    "VN daily Phase E audit status=%s passing=%s/%s",
+                    "VN daily Phase E audit status=%s data_passing=%s source_no_data=%s resolved=%s/%s",
                     audit["status"],
                     audit["passing_symbol_count"],
+                    audit["source_no_data_symbol_count"],
+                    audit["resolved_symbol_count"],
                     audit["configured_symbol_count"],
                 )
                 if audit["status"] != "pass":

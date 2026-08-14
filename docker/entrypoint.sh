@@ -244,7 +244,7 @@ if [ "${PRIMUS_HMD_PHASE_E_BINANCE_ORDERBOOK_HISTORY_1H_APPROVED:-}" = "approved
 fi
 
 if [ "${PRIMUS_HMD_PHASE_E_VN_DAILY_UNIVERSE_1D_APPROVED:-}" = "approved" ] \
-  && [ "$*" = "python -m collectors.vn_daily --mode once --configured-universe --backfill-start 2016-01-01 --force-history --audit-phase-e --fail-on-symbol-error" ]; then
+  && [ "$*" = "python -m collectors.vn_daily --mode once --configured-universe --backfill-start 2016-01-01 --force-history --resume-success-after 2026-08-14T05:25:00+00:00 --audit-phase-e --fail-on-symbol-error" ]; then
   exec "$@"
 fi
 
