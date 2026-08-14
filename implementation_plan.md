@@ -307,7 +307,8 @@ or historical backfill was started during this work.
 
 ### 2026-08-14 UTC — Phase E Controlled Non-Deribit Expansion
 
-Status: in progress; no Phase E source job has started from this entry yet.
+Status: complete for the owner-approved non-Deribit scope at
+`2026-08-14T06:19Z`. Deribit was not called.
 
 - Owner authorization is recorded in `configs/primus_hmd_phase_e.yml` and
   enforced by `docker/entrypoint.sh`, exact Compose services, and the two
@@ -318,27 +319,56 @@ Status: in progress; no Phase E source job has started from this entry yet.
   only, while `CryptoBinanceQuarterly1m` returns `PAIR_YYMMDD` contracts only.
   Explicit `symbols=` remains intentionally pass-through; schema, router
   names, and physical storage layout do not change.
-- Exact Phase E one-shots are: ETH/SOL/BNB/DOGE USD-M perpetual archive
+- Exact Phase E one-shots completed: ETH/SOL/BNB/DOGE USD-M perpetual archive
   rebuild; BTC perpetual/current/next-quarter retained order-book horizon;
   configured VN equity daily universe plus matrix; VNDIRECT `VN30F1M`
   continuous-alias 1m source-proof/backfill; and a non-publishing KBS/DNSE
-  concrete-contract source probe.
+  concrete-contract source probe. A sixth exact, derived-only matrix rebuild
+  was added after finding that a caller-supplied equity list accidentally
+  excluded the configured `VN30F1M` auxiliary column.
 - The VNDIRECT 1m collector uses 31-day reverse windows, splits the first
   unavailable boundary down to seven days, persists source-floor evidence,
   and never fabricates session/source gaps. It is a provider alias, not a
   reconstructed contract series.
+- Execution evidence:
+  - Core USD-M perpetual 1m audits passed for `ETHUSDT` (3,480,755 rows),
+    `SOLUSDT` (3,110,256 after five exact Vision-day repairs), `BNBUSDT`
+    (3,422,675), and `DOGEUSDT` (3,205,177), all with zero duplicate,
+    invalid numeric/OHLC, negative, or unexplained-gap rows.
+  - The retained Binance order-book horizon recovery wrote 33,817 rows. The
+    resulting retained audit totals are `BTCUSDT` 31,442,
+    `BTCUSDT_260925` 3,325, and `BTCUSDT_261225` 1,141 (35,908 stored rows).
+    The shared live tail is explicitly pinned to `--lookback-days 2500`, so it
+    cannot prune that archive again.
+  - VNDIRECT `VN30F1M` continuous 1m passed with 29,283 rows from
+    `2026-02-23T09:00:00` through `2026-08-14T11:01:00`; source/session gaps
+    remain recorded rather than synthesized. Its live tail and the
+    `BTCUSDT_261225` next-quarter tail are active.
+  - VN Daily raw audit passed: 398 configured unique equities, 395 canonical
+    data-bearing symbols, 961,144 rows from `2016-01-04` through
+    `2026-08-13`, and zero duplicate/time/numeric/OHLC/negative/source errors.
+    `CBB`, `KDF`, and `DXR` have explicit VCI no-data evidence; 40 source
+    series end before the current date and remain documented source/staleness
+    facts. The final daily matrix is `2651 x 396` and includes `VN30F1M` as
+    an auxiliary column from `storage/vn/futures/continuous/1d`.
+  - The non-publishing KBS/DNSE proof completed 32 bounded requests. It found
+    current `VN30F2608` KBS coverage (4,236 1m and 18 1d rows) but no usable
+    historical sample coverage; this is evidence only, not a published
+    concrete-contract history.
+- Consumer compatibility remains unchanged apart from safe default discovery:
+  default perpetual and quarterly loaders are now disjoint, while explicit
+  `symbols=` is pass-through. Schema, router names, loader endpoints, and
+  physical storage layout are unchanged.
 - A full VN concrete-contract backfill and any contract-derived continuous or
-  matrix replacement remain blocked. The Phase E probe must first prove
-  positive usable KBS/DNSE coverage and then receive a new exact gate.
-- Deribit remains disabled by owner. Backup/rollback technical debt remains
-  waived and continues to block consumer cutover, not this non-destructive
-  source rebuild.
+  matrix replacement remain blocked until positive usable source coverage and
+  a new exact gate are recorded.
 
 ## Active Job: VN30F1M VNDIRECT DChart Single-Source Upgrade
 
 Source guide: `VN30_FUTURES_FREE_DATA_UPGRADE_PLAN_V2.md`
 
-Status: Phase 1 complete; Phase 2 daily subphase complete; Phase 2 1m pending
+Status: Phase 1 complete; Phase 2 daily and 1m subphases complete through the
+Phase E VNDIRECT continuous-alias acceptance.
 
 Branch: `dev`
 
