@@ -27,7 +27,7 @@ Hiện storage chính dùng **Parquet**. Sau phase cleanup, `storage/` không c�
 | Dataset | Độ phân giải | Universe hiện tại | Historical/warmup | Update | Loader endpoint |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | Binance USD-M Futures perpetual | `1m` | Configured core crypto symbols | Binance Vision + REST tail | Live mỗi phút | `CryptoBinance1m`, `load_data("crypto_1m")` |
-| Binance USD-M Quarterly concrete contracts | `1m` | BTC/ETH quarterly historical + active contracts | Binance Vision monthly/daily + REST active tail | Định kỳ | `CryptoBinanceQuarterly1m`, `load_data("binance_usdm_quarterly_1m")` |
+| Binance USD-M Quarterly concrete contracts | `1m` | Configured BTC/ETH quarterly historical + active contracts | Binance Vision monthly/daily + REST active tail | Định kỳ | `CryptoBinanceQuarterly1m`, `load_data("binance_usdm_quarterly_1m")` |
 | Binance Spot BTCUSDT | `1m` | `BTCUSDT` từ `2018-01-01` | Binance Vision + REST tail; gap được fill bằng USD-M futures proxy khi đã duyệt | Định kỳ/live tail | `CryptoBinanceSpot1m`, `load_data("binance_spot_1m")` |
 | Binance Daily Matrix | `1d` | Top/liquid USD-M perpetual symbols, policy chỉ thêm trong universe hợp lệ | Backfill từ `2020-01-01` | Hằng ngày `00:05 UTC` | `CryptoDailyMatrix`, `load_data("binance_daily_matrix", feature=...)` |
 | Binance Futures Metrics | `5m` | `BTCUSDT`, `ETHUSDT`, relation symbols, active BTC/ETH quarterlies | Binance Vision `daily/metrics`, scan full coverage | Định kỳ cuối ngày/REST tail perpetual | `BinanceFuturesMetrics5m`, `load_data("binance_futures_metrics_5m")` |
@@ -38,8 +38,29 @@ Hiện storage chính dùng **Parquet**. Sau phase cleanup, `storage/` không c�
 | VN Daily Matrix | `1d` | VN equity universe + auxiliary `VN30F1M` benchmark column | Build từ canonical raw Parquet | Chạy builder khi cần sau raw daily update | `VNDailyMatrix`, `load_data("vn_daily_matrix", feature=...)` |
 | VN Equity Intraday | `1m` | VN stock symbols trong config | Provider VN intraday | Hằng ngày `16:30 Asia/Ho_Chi_Minh` | `VnStock1m`, `load_data("vn_stock_1m")` |
 | VN Futures Intraday | `1m` | `VN30F1M` và symbols futures configured | DNSE/VN provider | Hằng ngày `16:30 Asia/Ho_Chi_Minh` | `VnFutures1m`, `load_data("vn_futures_1m")` |
-| VN30 Futures Contracts | `1m`, `1d` | Concrete contracts `VN30FYYMM` | KBS primary + DNSE fallback | Bootstrap + daily tail sync | `VnDerivativesContracts1m`, `VnDerivativesContractsDaily`, `load_data("vn_derivatives_contracts_1m")` |
-| VN30 Futures Continuous | `1m`, `1d` | `VN30F1M`, `VN30F1M_TRADE` | Built from concrete contracts + shared roll table | Daily after contract sync | `VnDerivativesContinuous1m`, `VnDerivativesContinuousDaily`, `load_data("vn_derivatives_continuous_1d")` |
+| VN30 Futures Contracts | `1m`, `1d` | Concrete contracts `VN30FYYMM` | KBS/DNSE source proof first; no canonical Phase E contract publish until that proof is accepted | Not enabled yet | `VnDerivativesContracts1m`, `VnDerivativesContractsDaily`, `load_data("vn_derivatives_contracts_1m")` |
+| VN30 Futures Continuous Alias | `1m`, `1d` | `VN30F1M` | VNDIRECT DChart provider continuous alias; 1m has a separate Phase E source proof/backfill gate | Daily tail + 1m tail after its gate passes | `VnDerivativesContinuous1m`, `VnDerivativesContinuousDaily`, `load_data("vn30f1m_continuous_1m")` |
+
+### Controlled Phase E expansion
+
+Phase E is a non-Deribit, exact-command expansion. Its policy lives in
+[`configs/primus_hmd_phase_e.yml`](configs/primus_hmd_phase_e.yml): configured
+core USD-M perpetuals, the retained Binance order-book archive horizon, the
+configured VN daily universe plus matrix, VNDIRECT `VN30F1M` continuous alias
+at 1m, and a **non-publishing** KBS/DNSE contract source proof.
+
+Historical jobs are never started through a generic collector command. After
+the reviewed image has been built, use the allow-listed runner only:
+
+```bash
+tools/run_phase_e_service.sh phase-e-vn30f1m-vndirect-1m
+```
+
+It accepts only a named service in the policy and refuses concurrent Phase E
+historical jobs. Matching live tails use `tools/run_phase_e_tail.sh`. Concrete
+VN contract backfill and any contract-derived replacement of the alias remain
+blocked until the source-proof artifact has positive usable coverage and a new
+exact gate is recorded. Deribit is not part of Phase E.
 
 ## Storage Layout
 
@@ -159,6 +180,13 @@ Quy ước series:
 - `VN30F1M_TRADE`: liquidity-aware tradable series; chỉ dùng volume của các phiên đã đóng để quyết định roll, không dùng volume cùng ngày.
 - `VN30F1M_PROVIDER`: không phải output canonical mới. Alias DNSE cũ chỉ còn vai trò validation/parity nếu dữ liệu legacy tồn tại.
 
+VNDIRECT `VN30F1M` `1m`/`1d` là continuous alias trực tiếp từ provider,
+được nhận diện bằng `source=vndirect_dchart` và
+`quality_flags=CONTINUOUS_ALIAS`. Nó không mang `active_instrument_id` hoặc
+roll metadata của một series xây lại từ concrete contracts. Consumer cần chọn
+theo mục đích: alias dùng cho benchmark/regime; contract-aware accounting chỉ
+được dùng khi contract source-proof và gate riêng đã pass.
+
 Continuous schema có thêm metadata:
 
 ```text
@@ -186,7 +214,14 @@ Các service chạy bằng `docker compose` và có `restart: unless-stopped`.
 | `vn-intraday-stocks` | `collectors.vn_intraday_vnstock` | VN stock 1m lúc `16:30 Asia/Ho_Chi_Minh` |
 | `vn30f1m-dnse` | `collectors.vn_intraday_dnse` | Legacy alias service; disabled khỏi default compose, chỉ chạy khi bật profile `legacy-vn30f1m-dnse` |
 | `vn30f1m-vndirect-probe` | `collectors.vn_derivatives` | Hard-gated VNDIRECT DChart VN30F1M source proof; bootstrap/profile only, no publish |
-| `vn30f1m-vndirect` | `collectors.vn_derivatives` | VNDIRECT DChart VN30F1M continuous daily sync lúc `16:30 Asia/Ho_Chi_Minh`; 1m chưa bật trong phase này |
+| `vn30f1m-vndirect` | `collectors.vn_derivatives` | VNDIRECT DChart VN30F1M continuous daily sync lúc `16:30 Asia/Ho_Chi_Minh` |
+| `phase-e-vn30f1m-vndirect-1m` | `collectors.vn_derivatives` | One-shot source-proof + bounded VNDIRECT 1m backfill; profile `phase-e`, never starts by default |
+| `vn30f1m-vndirect-1m` | `collectors.vn_derivatives` | Explicit 1m VNDIRECT tail, only after the Phase E one-shot audit passes |
+| `phase-e-vn-daily-universe-1d` | `collectors.vn_daily` | One-shot configured VN raw daily historical rebuild, then universe report + matrix |
+| `phase-e-binance-usdm-core-perpetual-1m` | `collectors.binance_usdm_perpetual_1m` | One-shot ETH/SOL/BNB/DOGE USD-M archive rebuild with source-listing-aware audit |
+| `phase-e-binance-orderbook-history-1h` | `collectors.binance_orderbook_snapshot_1h` | One-shot retained-horizon Vision + REST history for BTC perpetual/current/next quarterlies |
+| `phase-e-vn30-contract-source-probe` | `collectors.vn_derivatives` | Non-publishing KBS/DNSE representative proof; it is not a contract backfill approval |
+| `crypto-1m-core-live`, `binance-usdm-quarterly-next-1m`, `binance-orderbook-expanded-1h` | scoped collectors | Phase E tails, each independently approved and never a default-universe expansion |
 | `vn-derivatives-probe` | `collectors.vn_derivatives` | Probe KBS/DNSE individual VN30 futures contracts; bootstrap/profile only |
 | `vn-derivatives-source-probe` | `collectors.vn_derivatives` | Historical V2 multi-source proof; superseded for VN30F1M by VNDIRECT DChart |
 | `vn-derivatives-bootstrap` | `collectors.vn_derivatives` | Backfill individual VN30 futures contracts; bootstrap/profile only |
@@ -261,8 +296,12 @@ PYTHONPATH=. python -m collectors.vn_derivatives probe --json
 # Command fail nếu recent 1m hoặc daily không có positive rows thật.
 PYTHONPATH=. python -m collectors.vn_derivatives probe-vndirect --json
 
-# VN30F1M VNDIRECT DChart daily sync. Ghi daily continuous alias, chưa gọi 1m.
+# VN30F1M VNDIRECT DChart daily sync. Ghi daily continuous alias.
 PYTHONPATH=. python -m collectors.vn_derivatives sync-vndirect --resolution 1d --mode once --update-matrix --json
+
+# VNDIRECT 1m history must be run through the Phase E exact-service runner,
+# not this low-level module command. It writes source-proof and audit evidence.
+tools/run_phase_e_service.sh phase-e-vn30f1m-vndirect-1m
 
 # Historical multi-source proof, superseded by VNDIRECT DChart for the active VN30F1M task.
 PYTHONPATH=. python -m collectors.vn_derivatives probe-free-sources --json
@@ -397,11 +436,29 @@ from data_loader import (
 
 Tham số chung:
 
-- `symbols`: string, list string, hoặc `None` để load toàn bộ symbols hiện có.
+- `symbols`: string, list string, hoặc `None` để dùng default discovery đúng
+  semantic của từng loader. Riêng shared Binance USD-M 1m xem contract bên dưới.
 - `start_date`, `end_date`: inclusive datetime filter.
 - `limit`: giới hạn số dòng sau khi sort.
 - `check_val`: mặc định `True`; không tự tắt validation trong service downstream.
 - `columns`: với OHLCV loaders, mặc định chỉ đọc `time/symbol/open/high/low/close/volume` để giảm RAM. Truyền `columns="full"` nếu cần toàn bộ schema như `source`, `ingested_at`, `quote_volume`.
+
+### Binance USD-M 1m default-discovery contract
+
+Perpetual và concrete quarterly cùng dùng physical root
+`storage/crypto/binance_futures/1m`. Vì vậy từ compatibility patch này:
+
+- `CryptoBinance1m().load()` hoặc `load_data("crypto_1m")` khi không truyền
+  `symbols` chỉ discover perpetual symbols (không có suffix contract).
+- `CryptoBinanceQuarterly1m().load()` hoặc
+  `load_data("binance_usdm_quarterly_1m")` khi không truyền `symbols` chỉ
+  discover concrete contract symbols có dạng `PAIR_YYMMDD`.
+- `symbols=` explicit vẫn được giữ nguyên pass-through để không làm vỡ các
+  consumer cũ. Tuy vậy service/backtest production nên luôn truyền danh sách
+  symbol cụ thể để kết quả reproducible, đặc biệt khi contract mới được thêm.
+
+Không có schema, router name, storage path, hay user/service endpoint nào đổi
+trong patch này; chỉ default discovery được tách đúng theo semantic loader.
 
 ### Deribit BTC Options V1 Notes
 

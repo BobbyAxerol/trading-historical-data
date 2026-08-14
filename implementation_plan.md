@@ -305,6 +305,35 @@ or historical backfill was started during this work.
   No matrix, universe expansion, consumer cutover, destructive action, or
   Deribit work follows automatically.
 
+### 2026-08-14 UTC — Phase E Controlled Non-Deribit Expansion
+
+Status: in progress; no Phase E source job has started from this entry yet.
+
+- Owner authorization is recorded in `configs/primus_hmd_phase_e.yml` and
+  enforced by `docker/entrypoint.sh`, exact Compose services, and the two
+  allow-listed runners under `tools/`. At most one historical/probe job may
+  run at a time; existing B0 tails remain separate.
+- The first change is a compatibility patch for shared Binance USD-M 1m
+  storage: default discovery for `CryptoBinance1m` now returns perpetuals
+  only, while `CryptoBinanceQuarterly1m` returns `PAIR_YYMMDD` contracts only.
+  Explicit `symbols=` remains intentionally pass-through; schema, router
+  names, and physical storage layout do not change.
+- Exact Phase E one-shots are: ETH/SOL/BNB/DOGE USD-M perpetual archive
+  rebuild; BTC perpetual/current/next-quarter retained order-book horizon;
+  configured VN equity daily universe plus matrix; VNDIRECT `VN30F1M`
+  continuous-alias 1m source-proof/backfill; and a non-publishing KBS/DNSE
+  concrete-contract source probe.
+- The VNDIRECT 1m collector uses 31-day reverse windows, splits the first
+  unavailable boundary down to seven days, persists source-floor evidence,
+  and never fabricates session/source gaps. It is a provider alias, not a
+  reconstructed contract series.
+- A full VN concrete-contract backfill and any contract-derived continuous or
+  matrix replacement remain blocked. The Phase E probe must first prove
+  positive usable KBS/DNSE coverage and then receive a new exact gate.
+- Deribit remains disabled by owner. Backup/rollback technical debt remains
+  waived and continues to block consumer cutover, not this non-destructive
+  source rebuild.
+
 ## Active Job: VN30F1M VNDIRECT DChart Single-Source Upgrade
 
 Source guide: `VN30_FUTURES_FREE_DATA_UPGRADE_PLAN_V2.md`

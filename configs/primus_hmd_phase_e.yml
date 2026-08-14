@@ -1,0 +1,70 @@
+# Owner-approved Phase E data-expansion policy.  Every writer below has a
+# literal Compose command and a service-scoped entrypoint approval.  The
+# policy deliberately keeps Deribit off and does not authorize consumer
+# cutover, destructive cleanup, or an unproven VN contract backfill.
+schema_version: 1
+
+phase_e_approval:
+  status: approved
+  approved_by: BobbyAxerol
+  approved_at: "2026-08-14T00:00:00+00:00"
+  scope: "Compatibility-safe non-Deribit data expansion: configured core USD-M perpetual 1m symbols, retained Binance order-book archive horizon, configured VN equity daily universe plus matrix, VNDIRECT VN30F1M continuous-alias 1m source-proof/backfill, next-quarter/live tails, and a non-publishing VN contract source proof. No old-VPS import, consumer cutover, destructive operation, unproven VN contract backfill, or Deribit call."
+  runtime_profile:
+    max_concurrent_historical_jobs: 1
+    cpus: 1.0
+    memory_mib: 1536
+    pids: 256
+    restart: "no"
+  services:
+    phase-e-binance-usdm-core-perpetual-1m:
+      dataset_id: crypto_binance_futures_1m
+      command: ["python", "-m", "collectors.binance_usdm_perpetual_1m", "--mode", "once", "--symbols", "ETHUSDT,SOLUSDT,BNBUSDT,DOGEUSDT", "--start-month", "2020-01", "--daily-bridge-days", "35", "--rest-bridge-days", "35", "--rest-window-minutes", "10080", "--phase-label", "e", "--allow-later-start"]
+      sources:
+        - binance_vision_usdm_monthly
+        - binance_vision_usdm_daily_bridge
+        - binance_usdm_rest_bounded_bridge
+      validation: strict streaming schema/OHLC/numeric/negative/duplicate/continuity/tail audit from the first source listing bar; a pre-listing interval remains documented source absence
+    phase-e-binance-orderbook-history-1h:
+      dataset_id: crypto_binance_orderbook_snapshot_1h
+      command: ["python", "-m", "collectors.binance_orderbook_snapshot_1h", "--mode", "once", "--symbols", "BTCUSDT,BTCUSDT_260925,BTCUSDT_261225", "--lookback-days", "2500", "--phase-e-audit", "--fail-on-symbol-error"]
+      sources:
+        - binance_vision_usdm_book_depth_daily
+        - binance_usdm_depth_rest_snapshot
+      validation: append/dedupe plus durable retained-horizon audit; direct provider gaps are evidence, never synthetic snapshots
+    phase-e-vn-daily-universe-1d:
+      dataset_id: vn_equity_1d_and_daily_matrix
+      command: ["python", "-m", "collectors.vn_daily", "--mode", "once", "--configured-universe", "--backfill-start", "2016-01-01", "--force-history", "--audit-phase-e", "--fail-on-symbol-error"]
+      sources:
+        - vnstock_vci_daily
+        - vndirect_dchart_continuous_alias_daily_existing_canonical_input
+      validation: per-symbol raw Parquet schema/OHLC/numeric/negative/duplicate/source audit followed by matrix rebuild; listing and exchange-calendar absence remain explicit
+    phase-e-vn30f1m-vndirect-1m:
+      dataset_id: vn30f1m_vndirect_dchart_1m
+      command: ["python", "-m", "collectors.vn_derivatives", "sync-vndirect", "--resolution", "1m", "--mode", "once", "--start", "2017-08-10", "--window-days", "31", "--min-window-days", "7", "--require-source-proof", "--audit-phase-e", "--json"]
+      sources:
+        - vndirect_dchart_continuous_alias_1m
+      validation: persisted source proof, bounded reverse availability scan, atomic month partitions, and streaming source/OHLC/numeric/negative/duplicate audit; session/source gaps remain non-fabricated evidence
+    phase-e-vn30-contract-source-probe:
+      dataset_id: vn30_contract_source_proof_only
+      command: ["python", "-m", "collectors.vn_derivatives", "probe", "--version", "v1", "--contracts", "VN30F1709,VN30F2406,VN30F2508,VN30F2608", "--providers", "kbs,dnse", "--window-days", "30", "--json"]
+      sources:
+        - kbs_derivatives
+        - dnse_derivatives
+      validation: non-publishing representative source proof only; a full contract historical job remains blocked unless results prove usable coverage
+  staged_live_tails:
+    crypto-1m-core-live:
+      dataset_id: crypto_binance_futures_1m
+      command: ["python", "-m", "collectors.crypto_1m", "--mode", "live", "--symbols", "ETHUSDT,SOLUSDT,BNBUSDT,DOGEUSDT"]
+    binance-usdm-quarterly-next-1m:
+      dataset_id: crypto_binance_usdm_quarterly_1m
+      command: ["python", "-m", "collectors.binance_usdm_quarterly_1m", "--mode", "live", "--pairs", "BTCUSDT", "--symbols", "BTCUSDT_261225", "--no-archive-discovery", "--no-monthly", "--no-daily", "--sleep", "21600"]
+    binance-orderbook-expanded-1h:
+      dataset_id: crypto_binance_orderbook_snapshot_1h
+      command: ["python", "-m", "collectors.binance_orderbook_snapshot_1h", "--mode", "live", "--symbols", "BTCUSDT,BTCUSDT_260925,BTCUSDT_261225", "--no-vision", "--no-validate", "--sleep", "3600"]
+    vn30f1m-vndirect-1m:
+      dataset_id: vn30f1m_vndirect_dchart_1m
+      command: ["python", "-m", "collectors.vn_derivatives", "sync-vndirect", "--resolution", "1m", "--mode", "live", "--overlap-minutes", "10", "--sleep", "60"]
+
+deribit:
+  status: disabled_by_owner
+  reason: "Explicitly excluded from this approval."

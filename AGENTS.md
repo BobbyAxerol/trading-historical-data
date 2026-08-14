@@ -95,14 +95,25 @@ user.email = vugioan11022002@gmail.com
   date only after all 1,440 unique UTC minutes are present, so a partial tail
   cannot suppress direct repair.
 - All five exact services in the approved Phase D scope have now completed.
-  There is no next historical source authorization in this session: do not
-  infer one from the completed quarterly service or start a new source without
-  a new named gate.
-- Do not start a default-universe expansion, derived matrix, VN historical
-  batch, metrics/quarterly historical batch, repair sweep, consumer cutover,
-  old-writer retirement, destructive data operation, or **any Deribit
-  command** without its own recorded Phase D gate. Each source gate must name
-  the exact service, command, bounds, validation, and resulting evidence.
+- On 2026-08-14 BobbyAxerol approved the recorded **Phase E non-Deribit
+  expansion** in `configs/primus_hmd_phase_e.yml`. Start only its literal
+  service through `tools/run_phase_e_service.sh`, one historical/probe service
+  at a time, after the reviewed image is built. The only authorized Phase E
+  one-shots are configured-core USD-M perpetual 1m, retained Binance
+  order-book history, configured VN daily universe plus matrix, VNDIRECT
+  continuous-alias VN30F1M 1m, and a non-publishing KBS/DNSE contract source
+  probe. Start each matching tail only after its one-shot passes, through
+  `tools/run_phase_e_tail.sh`.
+- The Phase E contract source probe is not a contract-data publish approval.
+  Do not start a VN concrete-contract backfill, contract-derived continuous
+  rebuild, or contract-derived matrix replacement unless its probe evidence is
+  reviewed and a new named exact gate is added. The VNDIRECT 1m alias is a
+  provider alias, not a reconstructed contract series.
+- Do not start any other default-universe expansion, historical batch, repair
+  sweep, consumer cutover, old-writer retirement, destructive data operation,
+  or **any Deribit command** without its own recorded exact gate. Each source
+  gate must name the service, command, bounds, validation, and resulting
+  evidence.
 
 ### Owner-approved B0 exception for this session
 

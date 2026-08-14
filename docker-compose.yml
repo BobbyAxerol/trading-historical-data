@@ -178,6 +178,99 @@ services:
       STATE_ROOT: /app/state
       LOG_ROOT: /app/logs
 
+  phase-e-binance-usdm-core-perpetual-1m:
+    <<: *get-data-service
+    # Explicit configured-core expansion only.  Each requested symbol is an
+    # active USD-M perpetual; source listing dates are recorded rather than
+    # fabricated back to the shared 2020 policy start.
+    profiles: ["phase-e"]
+    restart: "no"
+    pids_limit: 256
+    cpus: 1.0
+    mem_limit: 1536m
+    command: ["python", "-m", "collectors.binance_usdm_perpetual_1m", "--mode", "once", "--symbols", "ETHUSDT,SOLUSDT,BNBUSDT,DOGEUSDT", "--start-month", "2020-01", "--daily-bridge-days", "35", "--rest-bridge-days", "35", "--rest-window-minutes", "10080", "--phase-label", "e", "--allow-later-start"]
+    environment:
+      <<: *collector-gate-environment
+      PRIMUS_HMD_PHASE_E_BINANCE_USDM_CORE_PERPETUAL_1M_APPROVED: ${PRIMUS_HMD_PHASE_E_BINANCE_USDM_CORE_PERPETUAL_1M_APPROVED:-}
+      TZ: UTC
+      DATA_ROOT: /app/storage
+      STATE_ROOT: /app/state
+      LOG_ROOT: /app/logs
+
+  phase-e-binance-orderbook-history-1h:
+    <<: *get-data-service
+    # Retain the full currently documented 2,500-day Vision horizon for the
+    # perpetual and current/next BTC quarterly contracts.  Provider gaps are
+    # recorded; this service never creates synthetic order-book snapshots.
+    profiles: ["phase-e"]
+    restart: "no"
+    pids_limit: 256
+    cpus: 1.0
+    mem_limit: 1536m
+    command: ["python", "-m", "collectors.binance_orderbook_snapshot_1h", "--mode", "once", "--symbols", "BTCUSDT,BTCUSDT_260925,BTCUSDT_261225", "--lookback-days", "2500", "--phase-e-audit", "--fail-on-symbol-error"]
+    environment:
+      <<: *collector-gate-environment
+      PRIMUS_HMD_PHASE_E_BINANCE_ORDERBOOK_HISTORY_1H_APPROVED: ${PRIMUS_HMD_PHASE_E_BINANCE_ORDERBOOK_HISTORY_1H_APPROVED:-}
+      TZ: UTC
+      DATA_ROOT: /app/storage
+      STATE_ROOT: /app/state
+      LOG_ROOT: /app/logs
+
+  phase-e-vn-daily-universe-1d:
+    <<: *get-data-service
+    # `--configured-universe` is deliberate: this publishes raw daily history
+    # for the reviewed config and only then rebuilds the matrix from canonical
+    # raw Parquet.  The FPT B0 tail is not mistaken for full history.
+    profiles: ["phase-e"]
+    restart: "no"
+    pids_limit: 256
+    cpus: 1.0
+    mem_limit: 1536m
+    command: ["python", "-m", "collectors.vn_daily", "--mode", "once", "--configured-universe", "--backfill-start", "2016-01-01", "--force-history", "--audit-phase-e", "--fail-on-symbol-error"]
+    environment:
+      <<: *collector-gate-environment
+      PRIMUS_HMD_PHASE_E_VN_DAILY_UNIVERSE_1D_APPROVED: ${PRIMUS_HMD_PHASE_E_VN_DAILY_UNIVERSE_1D_APPROVED:-}
+      TZ: Asia/Ho_Chi_Minh
+      DATA_ROOT: /app/storage
+      STATE_ROOT: /app/state
+      LOG_ROOT: /app/logs
+
+  phase-e-vn30f1m-vndirect-1m:
+    <<: *get-data-service
+    # The only historical VNDIRECT 1m writer: it embeds source proof, scans
+    # backwards in bounded windows, and fails on structural audit errors.
+    profiles: ["phase-e"]
+    restart: "no"
+    pids_limit: 128
+    cpus: 0.50
+    mem_limit: 768m
+    command: ["python", "-m", "collectors.vn_derivatives", "sync-vndirect", "--resolution", "1m", "--mode", "once", "--start", "2017-08-10", "--window-days", "31", "--min-window-days", "7", "--require-source-proof", "--audit-phase-e", "--json"]
+    environment:
+      <<: *collector-gate-environment
+      PRIMUS_HMD_PHASE_E_VN30F1M_VNDIRECT_1M_APPROVED: ${PRIMUS_HMD_PHASE_E_VN30F1M_VNDIRECT_1M_APPROVED:-}
+      TZ: Asia/Ho_Chi_Minh
+      DATA_ROOT: /app/storage
+      STATE_ROOT: /app/state
+      LOG_ROOT: /app/logs
+
+  phase-e-vn30-contract-source-probe:
+    <<: *get-data-service
+    # Non-publishing representative proof.  A full KBS/DNSE contract batch
+    # is intentionally absent until this evidence proves source coverage.
+    profiles: ["phase-e"]
+    restart: "no"
+    pids_limit: 128
+    cpus: 0.50
+    mem_limit: 512m
+    command: ["python", "-m", "collectors.vn_derivatives", "probe", "--version", "v1", "--contracts", "VN30F1709,VN30F2406,VN30F2508,VN30F2608", "--providers", "kbs,dnse", "--window-days", "30", "--json"]
+    environment:
+      <<: *collector-gate-environment
+      PRIMUS_HMD_PHASE_E_VN30_CONTRACT_SOURCE_PROBE_APPROVED: ${PRIMUS_HMD_PHASE_E_VN30_CONTRACT_SOURCE_PROBE_APPROVED:-}
+      TZ: Asia/Ho_Chi_Minh
+      DATA_ROOT: /app/storage
+      STATE_ROOT: /app/state
+      LOG_ROOT: /app/logs
+
   binance-usdm-quarterly-1m:
     <<: *get-data-service
     # Explicit current contract and REST tail only: no archive listing or
@@ -190,6 +283,69 @@ services:
       <<: *collector-gate-environment
       PRIMUS_HMD_STAGED_BINANCE_USDM_QUARTERLY_1M_APPROVED: ${PRIMUS_HMD_STAGED_BINANCE_USDM_QUARTERLY_1M_APPROVED:-}
       TZ: UTC
+      DATA_ROOT: /app/storage
+      STATE_ROOT: /app/state
+      LOG_ROOT: /app/logs
+
+  crypto-1m-core-live:
+    <<: *get-data-service
+    # Separate from the BTC B0 tail so an exact Phase E approval cannot widen
+    # its command or start an implicit default universe.
+    pids_limit: 128
+    cpus: 0.50
+    mem_limit: 512m
+    command: ["python", "-m", "collectors.crypto_1m", "--mode", "live", "--symbols", "ETHUSDT,SOLUSDT,BNBUSDT,DOGEUSDT"]
+    environment:
+      <<: *collector-gate-environment
+      PRIMUS_HMD_STAGED_CRYPTO_CORE_1M_APPROVED: ${PRIMUS_HMD_STAGED_CRYPTO_CORE_1M_APPROVED:-}
+      TZ: UTC
+      DATA_ROOT: /app/storage
+      STATE_ROOT: /app/state
+      LOG_ROOT: /app/logs
+
+  binance-usdm-quarterly-next-1m:
+    <<: *get-data-service
+    # The next listed BTC quarterly has archive history already but needs its
+    # own explicit REST tail; it must not change the existing active contract.
+    pids_limit: 128
+    cpus: 0.50
+    mem_limit: 512m
+    command: ["python", "-m", "collectors.binance_usdm_quarterly_1m", "--mode", "live", "--pairs", "BTCUSDT", "--symbols", "BTCUSDT_261225", "--no-archive-discovery", "--no-monthly", "--no-daily", "--sleep", "21600"]
+    environment:
+      <<: *collector-gate-environment
+      PRIMUS_HMD_STAGED_BINANCE_USDM_QUARTERLY_NEXT_1M_APPROVED: ${PRIMUS_HMD_STAGED_BINANCE_USDM_QUARTERLY_NEXT_1M_APPROVED:-}
+      TZ: UTC
+      DATA_ROOT: /app/storage
+      STATE_ROOT: /app/state
+      LOG_ROOT: /app/logs
+
+  binance-orderbook-expanded-1h:
+    <<: *get-data-service
+    # REST tails for the same three symbols held by the Phase E order-book
+    # rebuild; Vision archive sync remains exclusive to the one-shot service.
+    pids_limit: 128
+    cpus: 0.50
+    mem_limit: 512m
+    command: ["python", "-m", "collectors.binance_orderbook_snapshot_1h", "--mode", "live", "--symbols", "BTCUSDT,BTCUSDT_260925,BTCUSDT_261225", "--no-vision", "--no-validate", "--sleep", "3600"]
+    environment:
+      <<: *collector-gate-environment
+      PRIMUS_HMD_STAGED_BINANCE_ORDERBOOK_EXPANDED_1H_APPROVED: ${PRIMUS_HMD_STAGED_BINANCE_ORDERBOOK_EXPANDED_1H_APPROVED:-}
+      TZ: UTC
+      DATA_ROOT: /app/storage
+      STATE_ROOT: /app/state
+      LOG_ROOT: /app/logs
+
+  vn30f1m-vndirect-1m:
+    <<: *get-data-service
+    # Starts only after the Phase E source-proven 1m one-shot has passed.
+    pids_limit: 128
+    cpus: 0.50
+    mem_limit: 512m
+    command: ["python", "-m", "collectors.vn_derivatives", "sync-vndirect", "--resolution", "1m", "--mode", "live", "--overlap-minutes", "10", "--sleep", "60"]
+    environment:
+      <<: *collector-gate-environment
+      PRIMUS_HMD_STAGED_VN30F1M_VNDIRECT_1M_APPROVED: ${PRIMUS_HMD_STAGED_VN30F1M_VNDIRECT_1M_APPROVED:-}
+      TZ: Asia/Ho_Chi_Minh
       DATA_ROOT: /app/storage
       STATE_ROOT: /app/state
       LOG_ROOT: /app/logs

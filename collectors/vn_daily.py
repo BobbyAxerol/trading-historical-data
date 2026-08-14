@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 import time
 from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Any
 
 import pandas as pd
 
@@ -12,7 +14,7 @@ from collectors.common.env import GET_DATA_ROOT, load_environment
 from collectors.common.logging import setup_logging
 from collectors.common.manifest import Heartbeat, JsonState, Manifest, sleep_with_heartbeat, utc_now_iso
 from collectors.common.retry import SlidingWindowRateLimiter, retry_sync
-from collectors.common.storage import PartitionedParquetStore
+from collectors.common.storage import PartitionedParquetStore, read_partition_file, release_unused_memory
 from collectors.vn_daily_matrix import build_matrix
 from collectors.vn_daily_universe import build_universe_report, configured_equity_symbols, configured_external_symbols
 
@@ -65,7 +67,15 @@ def fetch_symbol(symbol: str, start: str, end: str) -> pd.DataFrame:
     return df[["time", "symbol", "open", "high", "low", "close", "volume", "source", "ingested_at"]]
 
 
-def run_symbol(symbol: str, *, start_default: str, end: str, limiter: SlidingWindowRateLimiter, logger) -> None:
+def run_symbol(
+    symbol: str,
+    *,
+    start_default: str,
+    end: str,
+    limiter: SlidingWindowRateLimiter,
+    logger,
+    force_history: bool = False,
+) -> None:
     manifest = Manifest(DATASET)
     state = manifest.symbol_state(symbol)
     store = PartitionedParquetStore(["vn", "equity", "1d"], partition="year")
@@ -78,7 +88,11 @@ def run_symbol(symbol: str, *, start_default: str, end: str, limiter: SlidingWin
         ["time"],
     )
     discovered_latest = max_timestamp(state.get("latest_time"), storage_latest, legacy_latest)
-    if discovered_latest is not None:
+    if force_history:
+        # The bounded B0 seed may already have a tail.  An owner-approved
+        # historical rebuild must not mistake that tail for complete history.
+        start = start_default
+    elif discovered_latest is not None:
         start = (discovered_latest - pd.Timedelta(days=7)).strftime("%Y-%m-%d")
         if not state.get("latest_time") or discovered_latest > pd.Timestamp(state["latest_time"]):
             manifest.update_symbol(
@@ -121,6 +135,97 @@ def run_symbol(symbol: str, *, start_default: str, end: str, limiter: SlidingWin
     logger.info("%s daily wrote %s rows latest=%s", symbol, result["rows_written"], result["latest_time"])
 
 
+def _audit_symbol_files(store: PartitionedParquetStore, symbol: str) -> dict[str, Any]:
+    required = ["time", "symbol", "open", "high", "low", "close", "volume", "source"]
+    files = store.files({"symbol": symbol})
+    rows = duplicate_rows = invalid_time_rows = invalid_numeric_rows = 0
+    ohlc_bad_rows = negative_rows = source_mismatch_rows = 0
+    first: pd.Timestamp | None = None
+    latest: pd.Timestamp | None = None
+    file_errors: list[str] = []
+    seen_times: set[int] = set()
+    for path in files:
+        try:
+            frame = read_partition_file(path, usecols=required)
+        except Exception as exc:
+            file_errors.append(f"{Path(path).name}: {type(exc).__name__}: {exc}")
+            continue
+        rows += int(len(frame))
+        times = pd.to_datetime(frame["time"], errors="coerce").dt.normalize()
+        invalid_time_rows += int(times.isna().sum())
+        numeric = frame[["open", "high", "low", "close", "volume"]].apply(pd.to_numeric, errors="coerce")
+        invalid_numeric_rows += int(numeric.isna().any(axis=1).sum())
+        valid = times.notna() & numeric.notna().all(axis=1)
+        if valid.any():
+            valid_times = times.loc[valid]
+            work_numeric = numeric.loc[valid]
+            ohlc_bad_rows += int(
+                (
+                    (work_numeric["high"] < work_numeric[["open", "close", "low"]].max(axis=1))
+                    | (work_numeric["low"] > work_numeric[["open", "close", "high"]].min(axis=1))
+                ).sum()
+            )
+            negative_rows += int((work_numeric < 0).any(axis=1).sum())
+            for timestamp in valid_times:
+                key = int(timestamp.value)
+                if key in seen_times:
+                    duplicate_rows += 1
+                seen_times.add(key)
+            part_first = valid_times.min()
+            part_latest = valid_times.max()
+            first = part_first if first is None or part_first < first else first
+            latest = part_latest if latest is None or part_latest > latest else latest
+        source_mismatch_rows += int((frame["source"].astype(str) != "vnstock_vci").sum())
+        del frame, times, numeric
+        release_unused_memory()
+    integrity_errors = (
+        len(file_errors)
+        + duplicate_rows
+        + invalid_time_rows
+        + invalid_numeric_rows
+        + ohlc_bad_rows
+        + negative_rows
+        + source_mismatch_rows
+    )
+    return {
+        "symbol": symbol,
+        "status": "pass" if files and rows and integrity_errors == 0 else "requires_repair",
+        "files": len(files),
+        "rows": rows,
+        "first": first.isoformat() if first is not None else None,
+        "latest": latest.isoformat() if latest is not None else None,
+        "duplicate_rows": duplicate_rows,
+        "invalid_time_rows": invalid_time_rows,
+        "invalid_numeric_rows": invalid_numeric_rows,
+        "ohlc_bad_rows": ohlc_bad_rows,
+        "negative_rows": negative_rows,
+        "source_mismatch_rows": source_mismatch_rows,
+        "file_errors": file_errors,
+    }
+
+
+def audit_configured_symbols(symbols: list[str]) -> dict[str, Any]:
+    """Write Phase E raw-VN evidence without assuming every stock shares one listing date."""
+
+    store = PartitionedParquetStore(["vn", "equity", "1d"], partition="year")
+    reports = [_audit_symbol_files(store, symbol.strip().upper()) for symbol in symbols if symbol.strip()]
+    failed = [report["symbol"] for report in reports if report["status"] != "pass"]
+    payload: dict[str, Any] = {
+        "dataset": DATASET,
+        "service": "phase_e_vn_daily_universe_1d",
+        "status": "pass" if not failed else "requires_repair",
+        "configured_symbol_count": len(reports),
+        "passing_symbol_count": len(reports) - len(failed),
+        "failed_symbols": failed,
+        "symbols": reports,
+        "validated_at": utc_now_iso(),
+        "continuity_note": "listing dates, delistings, and the VN exchange calendar are source availability facts; this audit does not fabricate daily bars",
+    }
+    JsonState("audits/vn_equity_1d_phase_e.json").write(payload)
+    release_unused_memory()
+    return payload
+
+
 def should_run(schedule_hhmm: str, last_run_date: str | None) -> bool:
     now = datetime.now()
     if last_run_date == now.strftime("%Y-%m-%d"):
@@ -138,6 +243,26 @@ def main() -> None:
     parser.add_argument("--max-symbols", type=int, default=0)
     parser.add_argument("--backfill-start", default=None)
     parser.add_argument(
+        "--configured-universe",
+        action="store_true",
+        help="Require the repository's configured equity universe rather than an implicit fallback list.",
+    )
+    parser.add_argument(
+        "--force-history",
+        action="store_true",
+        help="Fetch from --backfill-start even when the new runtime already has a bounded tail.",
+    )
+    parser.add_argument(
+        "--audit-phase-e",
+        action="store_true",
+        help="Write and enforce durable Phase E raw-equity audit evidence after a one-shot run.",
+    )
+    parser.add_argument(
+        "--fail-on-symbol-error",
+        action="store_true",
+        help="Return non-zero when any configured symbol fails; required by the Phase E gate.",
+    )
+    parser.add_argument(
         "--skip-derived",
         action="store_true",
         help="Skip universe-report and matrix rebuilds; used by the bounded B0 source seed.",
@@ -145,7 +270,14 @@ def main() -> None:
     args = parser.parse_args()
 
     config = load_yaml("symbols.vn_daily.yml")
-    symbols = args.symbols.split(",") if args.symbols else configured_equity_symbols(config) or default_symbols()
+    if args.symbols:
+        symbols = args.symbols.split(",")
+    elif args.configured_universe:
+        symbols = configured_equity_symbols(config)
+        if not symbols:
+            raise RuntimeError("configured VN daily universe is empty")
+    else:
+        symbols = configured_equity_symbols(config) or default_symbols()
     if args.max_symbols:
         symbols = symbols[: args.max_symbols]
     start_default = args.backfill_start or config.get("backfill_start", "2016-01-01")
@@ -159,14 +291,23 @@ def main() -> None:
     while True:
         if args.mode == "once" or should_run(args.schedule, last_run_date):
             end = _effective_end_date()
+            failures: list[str] = []
             for symbol in symbols:
                 try:
-                    run_symbol(symbol.strip().upper(), start_default=start_default, end=end, limiter=limiter, logger=logger)
+                    run_symbol(
+                        symbol.strip().upper(),
+                        start_default=start_default,
+                        end=end,
+                        limiter=limiter,
+                        logger=logger,
+                        force_history=args.force_history,
+                    )
                     heartbeat.beat(symbol=symbol)
                 except Exception as exc:
                     Manifest(DATASET).update_symbol(symbol, last_error=str(exc), last_failed_at=utc_now_iso())
                     logger.exception("%s daily failed", symbol)
                     heartbeat.beat(status="error", symbol=symbol, error=str(exc))
+                    failures.append(f"{symbol}: {type(exc).__name__}: {exc}")
             if not args.skip_derived:
                 try:
                     report = build_universe_report(
@@ -179,13 +320,27 @@ def main() -> None:
                 except Exception as exc:
                     logger.exception("VN daily universe report failed")
                     heartbeat.beat(status="error", error=f"universe_report_failed: {exc}")
+                    failures.append(f"universe_report: {type(exc).__name__}: {exc}")
                 try:
                     build_matrix(symbols=[s.strip().upper() for s in symbols], logger=logger)
                 except Exception as exc:
                     logger.exception("VN daily matrix build failed")
                     heartbeat.beat(status="error", error=f"matrix_build_failed: {exc}")
+                    failures.append(f"matrix: {type(exc).__name__}: {exc}")
             else:
                 logger.info("VN daily bounded seed skipped derived universe and matrix outputs")
+            if args.audit_phase_e:
+                audit = audit_configured_symbols([symbol.strip().upper() for symbol in symbols])
+                logger.info(
+                    "VN daily Phase E audit status=%s passing=%s/%s",
+                    audit["status"],
+                    audit["passing_symbol_count"],
+                    audit["configured_symbol_count"],
+                )
+                if audit["status"] != "pass":
+                    failures.append(f"phase_e_audit={audit['status']}: {audit['failed_symbols'][:20]}")
+            if args.fail_on_symbol_error and failures:
+                raise RuntimeError("; ".join(failures))
             last_run_date = datetime.now().strftime("%Y-%m-%d")
             schedule_state.write({
                 "last_run_date": last_run_date,

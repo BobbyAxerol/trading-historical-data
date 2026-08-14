@@ -34,6 +34,20 @@ STORAGE_DIR = Path(
 OHLCV_COLUMNS = ("time", "symbol", "open", "high", "low", "close", "volume")
 LOADER_CONTRACT_VERSION = "hmd-loader-v1"
 _TIMEFRAME_RE = re.compile(r"^(?P<count>\d+)\s*(?P<unit>s|sec|secs|second|seconds|min|minute|minutes|h|hour|hours|d|day|days)$")
+_BINANCE_USDM_QUARTERLY_SYMBOL_RE = re.compile(r"^[A-Z0-9]+_\d{6}$")
+
+
+def _is_binance_usdm_quarterly_symbol(symbol: str) -> bool:
+    """Return whether *symbol* is a concrete USD-M quarterly contract.
+
+    Binance names these contracts as ``PAIR_YYMMDD`` (for example
+    ``BTCUSDT_260925``).  Perpetual and quarterly candles deliberately share
+    one physical storage tree, so readers use this only for their default
+    discovery behavior.  Explicit ``symbols=`` queries retain their existing
+    pass-through semantics for compatibility.
+    """
+
+    return bool(_BINANCE_USDM_QUARTERLY_SYMBOL_RE.fullmatch(str(symbol).strip().upper()))
 
 
 def _release_manifest_enforced() -> bool:
@@ -857,11 +871,34 @@ class CryptoBinance1m(MarketDataLoaderBase):
     RESAMPLE_VOLUME_DTYPE = "float64"
     RELEASE_DATASET_ID = "binance_perpetual_spot_quarterly"
 
+    def _discover_futures_symbols(self) -> list[str]:
+        """Discover all symbols in the shared USD-M futures storage tree."""
+
+        return super()._discover_symbols()
+
+    def _discover_symbols(self) -> list[str]:
+        """Discover perpetual symbols only when the consumer omits symbols."""
+
+        return [
+            symbol
+            for symbol in self._discover_futures_symbols()
+            if not _is_binance_usdm_quarterly_symbol(symbol)
+        ]
+
 
 class CryptoBinanceQuarterly1m(CryptoBinance1m):
     """Loads concrete Binance USD-M quarterly contracts from the shared futures 1m storage."""
 
     DATASET_NAME = "crypto_binance_quarterly_1m"
+
+    def _discover_symbols(self) -> list[str]:
+        """Discover concrete quarterly contracts only in the shared tree."""
+
+        return [
+            symbol
+            for symbol in self._discover_futures_symbols()
+            if _is_binance_usdm_quarterly_symbol(symbol)
+        ]
 
 
 class CryptoBinanceSpot1m(MarketDataLoaderBase):

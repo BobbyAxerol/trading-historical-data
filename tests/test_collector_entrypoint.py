@@ -197,6 +197,49 @@ PHASE_D_QUARTERLY_COMMAND = [
     "5",
     "--audit-phase-d",
 ]
+PHASE_E_COMMANDS = {
+    "PRIMUS_HMD_PHASE_E_BINANCE_USDM_CORE_PERPETUAL_1M_APPROVED": [
+        "python", "-m", "collectors.binance_usdm_perpetual_1m", "--mode", "once",
+        "--symbols", "ETHUSDT,SOLUSDT,BNBUSDT,DOGEUSDT", "--start-month", "2020-01",
+        "--daily-bridge-days", "35", "--rest-bridge-days", "35", "--rest-window-minutes",
+        "10080", "--phase-label", "e", "--allow-later-start",
+    ],
+    "PRIMUS_HMD_PHASE_E_BINANCE_ORDERBOOK_HISTORY_1H_APPROVED": [
+        "python", "-m", "collectors.binance_orderbook_snapshot_1h", "--mode", "once",
+        "--symbols", "BTCUSDT,BTCUSDT_260925,BTCUSDT_261225", "--lookback-days", "2500",
+        "--phase-e-audit", "--fail-on-symbol-error",
+    ],
+    "PRIMUS_HMD_PHASE_E_VN_DAILY_UNIVERSE_1D_APPROVED": [
+        "python", "-m", "collectors.vn_daily", "--mode", "once", "--configured-universe",
+        "--backfill-start", "2016-01-01", "--force-history", "--audit-phase-e", "--fail-on-symbol-error",
+    ],
+    "PRIMUS_HMD_PHASE_E_VN30F1M_VNDIRECT_1M_APPROVED": [
+        "python", "-m", "collectors.vn_derivatives", "sync-vndirect", "--resolution", "1m",
+        "--mode", "once", "--start", "2017-08-10", "--window-days", "31",
+        "--min-window-days", "7", "--require-source-proof", "--audit-phase-e", "--json",
+    ],
+    "PRIMUS_HMD_PHASE_E_VN30_CONTRACT_SOURCE_PROBE_APPROVED": [
+        "python", "-m", "collectors.vn_derivatives", "probe", "--version", "v1", "--contracts",
+        "VN30F1709,VN30F2406,VN30F2508,VN30F2608", "--providers", "kbs,dnse", "--window-days", "30", "--json",
+    ],
+}
+PHASE_E_TAIL_COMMANDS = {
+    "PRIMUS_HMD_STAGED_CRYPTO_CORE_1M_APPROVED": [
+        "python", "-m", "collectors.crypto_1m", "--mode", "live", "--symbols", "ETHUSDT,SOLUSDT,BNBUSDT,DOGEUSDT",
+    ],
+    "PRIMUS_HMD_STAGED_BINANCE_USDM_QUARTERLY_NEXT_1M_APPROVED": [
+        "python", "-m", "collectors.binance_usdm_quarterly_1m", "--mode", "live", "--pairs", "BTCUSDT", "--symbols", "BTCUSDT_261225",
+        "--no-archive-discovery", "--no-monthly", "--no-daily", "--sleep", "21600",
+    ],
+    "PRIMUS_HMD_STAGED_BINANCE_ORDERBOOK_EXPANDED_1H_APPROVED": [
+        "python", "-m", "collectors.binance_orderbook_snapshot_1h", "--mode", "live", "--symbols", "BTCUSDT,BTCUSDT_260925,BTCUSDT_261225",
+        "--no-vision", "--no-validate", "--sleep", "3600",
+    ],
+    "PRIMUS_HMD_STAGED_VN30F1M_VNDIRECT_1M_APPROVED": [
+        "python", "-m", "collectors.vn_derivatives", "sync-vndirect", "--resolution", "1m", "--mode", "live",
+        "--overlap-minutes", "10", "--sleep", "60",
+    ],
+}
 
 
 class TestCollectorEntrypoint(unittest.TestCase):
@@ -217,6 +260,8 @@ class TestCollectorEntrypoint(unittest.TestCase):
                 PHASE_D_METRICS_APPROVAL,
                 PHASE_D_QUARTERLY_APPROVAL,
                 *STAGED_TAIL_COMMANDS,
+                *PHASE_E_COMMANDS,
+                *PHASE_E_TAIL_COMMANDS,
             ]:
                 env.pop(name, None)
             env.update(environment or {})
@@ -373,6 +418,31 @@ class TestCollectorEntrypoint(unittest.TestCase):
 
         wrong_phase_approval = self.run_entrypoint(*PHASE_D_QUARTERLY_COMMAND, environment={PHASE_D_METRICS_APPROVAL: "approved"})
         self.assertEqual(wrong_phase_approval.returncode, 64)
+
+    def test_phase_e_approvals_accept_only_the_reviewed_commands(self) -> None:
+        for approval_name, command in PHASE_E_COMMANDS.items():
+            with self.subTest(approval_name=approval_name):
+                permitted = self.run_entrypoint(*command, environment={approval_name: "approved"})
+                self.assertEqual(permitted.returncode, 0)
+                self.assertEqual(permitted.stdout, f"fake-python:{' '.join(command[1:])}\n")
+
+                rejected_extra = self.run_entrypoint(*command, "--unreviewed", environment={approval_name: "approved"})
+                self.assertEqual(rejected_extra.returncode, 64)
+
+                wrong_approval = self.run_entrypoint(*command, environment={PHASE_D_APPROVAL: "approved"})
+                self.assertEqual(wrong_approval.returncode, 64)
+
+    def test_phase_e_tail_approvals_accept_only_the_reviewed_commands(self) -> None:
+        for approval_name, command in PHASE_E_TAIL_COMMANDS.items():
+            with self.subTest(approval_name=approval_name):
+                permitted = self.run_entrypoint(*command, environment={approval_name: "approved"})
+                self.assertEqual(permitted.returncode, 0)
+                self.assertEqual(permitted.stdout, f"fake-python:{' '.join(command[1:])}\n")
+
+                changed = list(command)
+                changed[-1] = "unexpected"
+                rejected = self.run_entrypoint(*changed, environment={approval_name: "approved"})
+                self.assertEqual(rejected.returncode, 64)
 
 
 if __name__ == "__main__":

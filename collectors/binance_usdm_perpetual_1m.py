@@ -339,12 +339,12 @@ def validate_symbol(
     *,
     store: PartitionedParquetStore,
     symbol: str,
-    expected_start: str,
+    expected_start: str | None,
 ) -> dict[str, object]:
     """Validate one partition at a time, including cross-partition continuity."""
 
     paths = store.files({"symbol": symbol})
-    expected = pd.Timestamp(expected_start, tz="UTC")
+    expected = pd.Timestamp(expected_start, tz="UTC") if expected_start else None
     previous: pd.Timestamp | None = None
     first: pd.Timestamp | None = None
     latest: pd.Timestamp | None = None
@@ -380,7 +380,7 @@ def validate_symbol(
 
         if first is None:
             first = times.iloc[0]
-            if first > expected:
+            if expected is not None and first > expected:
                 gap = first - expected
                 gap_count += 1
                 max_gap_minutes = max(max_gap_minutes, int(gap.total_seconds() // 60))
@@ -491,6 +491,10 @@ def _symbols_from_args(args: argparse.Namespace, config: dict[str, Any]) -> list
 
 
 def run(args: argparse.Namespace) -> dict[str, object]:
+    phase_label = str(getattr(args, "phase_label", "d")).strip().lower()
+    if phase_label not in {"d", "e"}:
+        raise ValueError("phase_label must be d or e")
+    service = f"phase_{phase_label}_binance_usdm_perpetual_1m"
     config = load_yaml("symbols.binance_usdm_perpetual.yml")
     symbols = _symbols_from_args(args, config)
     interval = str(config.get("interval", "1m"))
@@ -498,17 +502,19 @@ def run(args: argparse.Namespace) -> dict[str, object]:
     daily_bridge_days = int(args.daily_bridge_days if args.daily_bridge_days is not None else config.get("daily_bridge_days", 35))
     rest_bridge_days = int(args.rest_bridge_days if args.rest_bridge_days is not None else config.get("rest_bridge_days", 35))
     rest_window_minutes = int(args.rest_window_minutes if args.rest_window_minutes is not None else config.get("rest_window_minutes", 10080))
-    logger = setup_logging(SERVICE)
+    logger = setup_logging(service)
     active = discover_active_perpetuals(symbols)
     store = PartitionedParquetStore(STORE_PARTS, partition="month")
     manifest = Manifest(DATASET)
-    heartbeat = Heartbeat(SERVICE)
+    heartbeat = Heartbeat(service)
     results: dict[str, object] = {}
     failures: list[str] = []
 
-    JsonState(f"phase_d/{SERVICE}.json").write(
+    JsonState(f"phase_{phase_label}/{service}.json").write(
         {
             "status": "running",
+            "phase": phase_label,
+            "service": service,
             "dataset": DATASET,
             "symbols": symbols,
             "active_contracts": active,
@@ -535,28 +541,38 @@ def run(args: argparse.Namespace) -> dict[str, object]:
                 s3_base_url=str(config.get("s3_base_url", S3_BASE_URL)),
                 logger=logger,
             )
-            audit = {"status": "skipped"} if args.no_validate else validate_symbol(store=store, symbol=symbol, expected_start=f"{start_month}-01")
+            audit = {
+                "status": "skipped"
+            } if args.no_validate else validate_symbol(
+                store=store,
+                symbol=symbol,
+                expected_start=None if getattr(args, "allow_later_start", False) else f"{start_month}-01",
+            )
             results[symbol] = {**result, "validation": audit}
-            JsonState(f"audits/{DATASET}_{symbol}_phase_d.json").write(
+            JsonState(f"audits/{DATASET}_{symbol}_phase_{phase_label}.json").write(
                 {
                     "dataset": DATASET,
-                    "service": SERVICE,
+                    "phase": phase_label,
+                    "service": service,
                     "symbol": symbol,
+                    "expected_start_policy": "source_listing_allowed" if getattr(args, "allow_later_start", False) else "exact_configured_start",
                     **audit,
                 }
             )
             manifest.update_symbol(
                 symbol,
-                phase_d_validation=audit,
-                phase_d_last_run_at=utc_now_iso(),
-                last_error=None if audit["status"] == "pass" else "phase_d_validation_requires_repair",
+                **{
+                    f"phase_{phase_label}_validation": audit,
+                    f"phase_{phase_label}_last_run_at": utc_now_iso(),
+                    "last_error": None if audit["status"] == "pass" else f"phase_{phase_label}_validation_requires_repair",
+                },
             )
             if audit["status"] != "pass":
                 failures.append(f"{symbol} validation={audit['status']}")
-                heartbeat.beat(status="error", symbol=symbol, error="phase_d_validation_requires_repair", validation=audit)
+                heartbeat.beat(status="error", symbol=symbol, error=f"phase_{phase_label}_validation_requires_repair", validation=audit)
             else:
                 heartbeat.beat(status="ok", symbol=symbol, validation=audit)
-            logger.info("%s Phase D result: %s", symbol, results[symbol])
+            logger.info("%s Phase %s result: %s", symbol, phase_label.upper(), results[symbol])
         except Exception as exc:
             failures.append(f"{symbol}: {exc}")
             manifest.update_symbol(symbol, last_error=str(exc), last_failed_at=utc_now_iso())
@@ -566,13 +582,15 @@ def run(args: argparse.Namespace) -> dict[str, object]:
     status = "pass" if not failures else "requires_repair"
     payload = {
         "status": status,
+        "phase": phase_label,
+        "service": service,
         "dataset": DATASET,
         "symbols": symbols,
         "results": results,
         "failures": failures,
         "completed_at": utc_now_iso(),
     }
-    JsonState(f"phase_d/{SERVICE}.json").write(payload)
+    JsonState(f"phase_{phase_label}/{service}.json").write(payload)
     if failures:
         raise RuntimeError("; ".join(failures))
     return payload
@@ -580,13 +598,19 @@ def run(args: argparse.Namespace) -> dict[str, object]:
 
 def main() -> None:
     load_environment()
-    parser = argparse.ArgumentParser(description="Run an append-only, bounded-memory USD-M perpetual 1m Phase D rebuild.")
+    parser = argparse.ArgumentParser(description="Run an append-only, bounded-memory USD-M perpetual 1m controlled rebuild.")
     parser.add_argument("--mode", choices=["once"], default="once")
     parser.add_argument("--symbols", default=None, help="Comma-separated explicit perpetual symbols; no default-universe expansion.")
     parser.add_argument("--start-month", default=None, help="First UTC month of completed Vision archive history, e.g. 2020-01.")
     parser.add_argument("--daily-bridge-days", type=int, default=None, help="Completed UTC days to bridge from daily Vision archives.")
     parser.add_argument("--rest-bridge-days", type=int, default=None, help="Most recent UTC days to bridge from REST in bounded windows.")
     parser.add_argument("--rest-window-minutes", type=int, default=None, help="Maximum REST rows held before an immediate partition append.")
+    parser.add_argument("--phase-label", default="d", choices=["d", "e"], help="Evidence namespace; Phase D remains the compatibility default.")
+    parser.add_argument(
+        "--allow-later-start",
+        action="store_true",
+        help="Accept a later first bar when Binance listing/archive availability begins after --start-month; still require strict continuity from the first source bar onward.",
+    )
     parser.add_argument("--no-validate", action="store_true", help="Reserved for isolated debugging; not permitted by the Phase D entrypoint.")
     args = parser.parse_args()
     result = run(args)

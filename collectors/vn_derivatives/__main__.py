@@ -19,7 +19,16 @@ from collectors.vn_derivatives.probe import PROBE_CONTRACTS, run_provider_probe
 from collectors.vn_derivatives.provider_registry import options_from_cli as source_probe_options_from_cli
 from collectors.vn_derivatives.provider_registry import run_source_probe
 from collectors.vn_derivatives.validate import validate_storage
-from collectors.vn_derivatives.vndirect import VndirectDailyOptions, VndirectProbeOptions, live_vndirect_daily, run_vndirect_probe, sync_vndirect_daily
+from collectors.vn_derivatives.vndirect import (
+    VndirectDailyOptions,
+    VndirectMinuteOptions,
+    VndirectProbeOptions,
+    live_vndirect_daily,
+    live_vndirect_minute,
+    run_vndirect_probe,
+    sync_vndirect_daily,
+    sync_vndirect_minute,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -55,16 +64,22 @@ def build_parser() -> argparse.ArgumentParser:
     vndirect_probe.add_argument("--no-fail-on-gate", action="store_true")
     vndirect_probe.add_argument("--json", action="store_true")
 
-    vndirect_sync = sub.add_parser("sync-vndirect", help="Sync VNDIRECT DChart VN30F1M continuous data.")
-    vndirect_sync.add_argument("--resolution", choices=["1d"], default="1d", help="Only daily is implemented in this phase; 1m remains intentionally disabled.")
+    vndirect_sync = sub.add_parser("sync-vndirect", help="Sync VNDIRECT DChart VN30F1M continuous-alias data.")
+    vndirect_sync.add_argument("--resolution", choices=["1m", "1d"], default="1d")
     vndirect_sync.add_argument("--mode", choices=["once", "live"], default="once")
     vndirect_sync.add_argument("--version", default="v1")
     vndirect_sync.add_argument("--start", default=None)
     vndirect_sync.add_argument("--end", default=None)
     vndirect_sync.add_argument("--overlap-days", type=int, default=14)
     vndirect_sync.add_argument("--schedule", default="16:30")
+    vndirect_sync.add_argument("--window-days", type=int, default=31, help="Maximum VNDIRECT 1m request window; ignored by daily sync.")
+    vndirect_sync.add_argument("--min-window-days", type=int, default=7, help="Minimum split window used to confirm the VNDIRECT 1m source floor.")
+    vndirect_sync.add_argument("--overlap-minutes", type=int, default=10, help="Overlap used by VNDIRECT 1m live tail.")
+    vndirect_sync.add_argument("--sleep", type=int, default=60, help="VNDIRECT 1m live-tail interval in seconds.")
+    vndirect_sync.add_argument("--require-source-proof", action="store_true", help="Run the persisted VNDIRECT DChart source proof before a historical 1m sync.")
     vndirect_sync.add_argument("--update-matrix", action="store_true")
     vndirect_sync.add_argument("--audit-phase-d", action="store_true", help="Write and enforce the bounded Phase D VNDIRECT daily audit.")
+    vndirect_sync.add_argument("--audit-phase-e", action="store_true", help="Write and enforce the VNDIRECT 1m Phase E audit.")
     vndirect_sync.add_argument("--json", action="store_true")
 
     backfill = sub.add_parser("backfill", help="Backfill individual VN30 futures contracts into canonical contract storage.")
@@ -154,7 +169,7 @@ def main() -> None:
         if payload.get("production_gate") != "PASS" and not args.no_fail_on_gate:
             exit_code = 1
     elif args.command == "sync-vndirect":
-        if args.mode == "live":
+        if args.resolution == "1d" and args.mode == "live":
             live_vndirect_daily(
                 schedule=args.schedule,
                 version=args.version,
@@ -162,16 +177,38 @@ def main() -> None:
                 update_matrix=args.update_matrix,
             )
             return
-        payload = sync_vndirect_daily(
-            VndirectDailyOptions(
-                start=args.start,
-                end=args.end,
-                version=args.version,
-                overlap_days=args.overlap_days,
-                update_matrix=args.update_matrix,
-                audit_phase_d=args.audit_phase_d,
+        if args.resolution == "1m":
+            if args.mode == "live":
+                live_vndirect_minute(
+                    version=args.version,
+                    overlap_minutes=args.overlap_minutes,
+                    sleep_seconds=args.sleep,
+                )
+                return
+            payload = sync_vndirect_minute(
+                VndirectMinuteOptions(
+                    start=args.start,
+                    end=args.end,
+                    version=args.version,
+                    window_days=args.window_days,
+                    min_window_days=args.min_window_days,
+                    overlap_minutes=args.overlap_minutes,
+                    require_source_proof=args.require_source_proof,
+                    audit_phase_e=args.audit_phase_e,
+                ),
+                historical=True,
             )
-        )
+        else:
+            payload = sync_vndirect_daily(
+                VndirectDailyOptions(
+                    start=args.start,
+                    end=args.end,
+                    version=args.version,
+                    overlap_days=args.overlap_days,
+                    update_matrix=args.update_matrix,
+                    audit_phase_d=args.audit_phase_d,
+                )
+            )
     elif args.command == "backfill":
         symbols = [item.strip().upper() for item in args.symbols.split(",") if item.strip()] if args.symbols else None
         resolutions = [item.strip().lower() for item in args.resolutions.split(",") if item.strip()]

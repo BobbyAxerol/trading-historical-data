@@ -31,6 +31,12 @@ class TempCryptoBinance1m(data_loader.CryptoBinance1m):
     NEW_PATH_PARTS = ("crypto", "test", "1m")
 
 
+class TempCryptoBinanceQuarterly1m(data_loader.CryptoBinanceQuarterly1m):
+    """Use the real quarterly reader rules against the temporary fixture."""
+
+    NEW_PATH_PARTS = ("crypto", "test", "1m")
+
+
 class TestDataLoaderParquetFirst(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -182,6 +188,64 @@ class TestOhlcvProjectionAndResample(unittest.TestCase):
         self.assertEqual(float(duck.loc[0, "close"]), 14.25)
         self.assertEqual(float(duck.loc[0, "volume"]), 5.0)
         self.assertEqual(str(duck["volume"].dtype), "int64")
+
+
+class TestCryptoBinanceFuturesDefaultDiscovery(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.old_storage_dir = data_loader.STORAGE_DIR
+        data_loader.STORAGE_DIR = Path(self.tmp.name) / "storage"
+        for symbol in ("BTCUSDT", "BTCUSDT_260925", "BTCUSDT_261225"):
+            part_dir = (
+                data_loader.STORAGE_DIR
+                / "crypto"
+                / "test"
+                / "1m"
+                / f"symbol={symbol}"
+                / "year=2026"
+                / "month=08"
+            )
+            part_dir.mkdir(parents=True, exist_ok=True)
+            pd.DataFrame(
+                {
+                    "time": [pd.Timestamp("2026-08-01 00:00:00")],
+                    "symbol": [symbol],
+                    "open": [1.0],
+                    "high": [1.0],
+                    "low": [1.0],
+                    "close": [1.0],
+                    "volume": [1.0],
+                }
+            ).to_parquet(part_dir / "part.parquet", index=False, engine="pyarrow", compression="zstd")
+
+    def tearDown(self):
+        data_loader.STORAGE_DIR = self.old_storage_dir
+        self.tmp.cleanup()
+
+    def test_default_discovery_keeps_perpetual_and_quarterly_readers_disjoint(self):
+        perpetual = TempCryptoBinance1m()
+        quarterly = TempCryptoBinanceQuarterly1m()
+
+        self.assertEqual(perpetual._discover_symbols(), ["BTCUSDT"])
+        self.assertEqual(quarterly._discover_symbols(), ["BTCUSDT_260925", "BTCUSDT_261225"])
+        self.assertEqual(set(perpetual.load(check_val=False)["symbol"]), {"BTCUSDT"})
+        self.assertEqual(
+            set(quarterly.load(check_val=False)["symbol"]),
+            {"BTCUSDT_260925", "BTCUSDT_261225"},
+        )
+
+    def test_explicit_symbol_queries_remain_compatible(self):
+        quarterly_symbol_via_perpetual = TempCryptoBinance1m().load(
+            symbols="BTCUSDT_260925",
+            check_val=False,
+        )
+        perpetual_symbol_via_quarterly = TempCryptoBinanceQuarterly1m().load(
+            symbols="BTCUSDT",
+            check_val=False,
+        )
+
+        self.assertEqual(set(quarterly_symbol_via_perpetual["symbol"]), {"BTCUSDT_260925"})
+        self.assertEqual(set(perpetual_symbol_via_quarterly["symbol"]), {"BTCUSDT"})
 
 
 class TestDailyPartitionDiscovery(unittest.TestCase):

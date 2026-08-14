@@ -15,13 +15,16 @@ from collectors.providers.vndirect_dchart_derivatives import DChartFetchResult, 
 from collectors.vn_daily_matrix import build_matrix
 from collectors.vn_derivatives.vndirect import (
     VndirectDailyOptions,
+    VndirectMinuteOptions,
     VndirectProbeOptions,
     audit_vndirect_daily,
+    audit_vndirect_minute,
     last_closed_vn_daily,
     run_vndirect_probe,
     sync_vndirect_daily,
+    sync_vndirect_minute,
 )
-from data_loader import VnDerivativesContinuousDaily
+from data_loader import VnDerivativesContinuous1m, VnDerivativesContinuousDaily
 
 
 class FakeResponse:
@@ -305,6 +308,72 @@ class TestVndirectDailySync(EnvCase):
         audit = audit_vndirect_daily(expected_latest=pd.Timestamp("2024-01-03"))
         self.assertEqual(audit["status"], "fail")
         self.assertEqual(audit["calendar_missing_trading_days"], ["2024-01-03"])
+
+
+class TestVndirectMinuteSync(EnvCase):
+    def _minute_result(self) -> DChartFetchResult:
+        frame = pd.DataFrame(
+            {
+                "time": pd.to_datetime(["2024-01-02 09:00", "2024-01-02 09:01"]).tz_localize("Asia/Ho_Chi_Minh"),
+                "open": [1000.0, 1001.0],
+                "high": [1002.0, 1003.0],
+                "low": [999.0, 1000.0],
+                "close": [1001.0, 1002.0],
+                "volume": [10.0, 11.0],
+                "source": ["vndirect_dchart", "vndirect_dchart"],
+                "source_symbol": ["VN30F1M", "VN30F1M"],
+                "quality_flags": ["CONTINUOUS_ALIAS", "CONTINUOUS_ALIAS"],
+                "ingested_at": ["2026-07-30T00:00:00+00:00", "2026-07-30T00:00:00+00:00"],
+            }
+        )
+        return DChartFetchResult(
+            status="success",
+            data=frame,
+            requested_start=pd.Timestamp("2024-01-02"),
+            requested_end=pd.Timestamp("2024-01-02 09:02"),
+            first_bar=frame["time"].min(),
+            last_bar=frame["time"].max(),
+            http_status=200,
+            error=None,
+        )
+
+    def test_minute_sync_writes_source_partition_and_default_loader_reads_alias_only(self):
+        provider = Mock()
+        provider.fetch.return_value = self._minute_result()
+        with patch("collectors.vn_derivatives.vndirect.VndirectDChartProvider", return_value=provider):
+            payload = sync_vndirect_minute(
+                VndirectMinuteOptions(
+                    start="2024-01-02",
+                    end="2024-01-02 09:02",
+                    window_days=7,
+                    min_window_days=7,
+                    audit_phase_e=True,
+                )
+            )
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["rows_written"], 2)
+        self.assertEqual(payload["audit"]["status"], "pass")
+        part = (
+            Path(os.environ["DATA_ROOT"])
+            / "vn"
+            / "futures"
+            / "continuous"
+            / "1m"
+            / "symbol=VN30F1M"
+            / "source=vndirect_dchart"
+            / "version=v1"
+            / "year=2024"
+            / "month=01"
+            / "part.parquet"
+        )
+        self.assertTrue(part.exists())
+        loaded = VnDerivativesContinuous1m().load(symbols="VN30F1M", columns="full", check_val=True)
+        self.assertEqual(len(loaded), 2)
+        self.assertEqual(set(loaded["source"]), {"vndirect_dchart"})
+        audit = audit_vndirect_minute(expected_latest=pd.Timestamp("2024-01-02 09:02"))
+        self.assertEqual(audit["status"], "pass")
+        self.assertEqual(audit["duplicate_rows"], 0)
 
 
 class TestVndirectClosedDailyBoundary(unittest.TestCase):

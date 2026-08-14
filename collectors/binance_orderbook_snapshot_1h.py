@@ -572,6 +572,7 @@ def sync_all(args: argparse.Namespace, logger, *, run_audit: bool = True) -> dic
     heartbeat = Heartbeat(DATASET)
     total_rows = 0
     audits = {}
+    failures: list[str] = []
 
     for symbol, meta in sorted(symbol_meta.items()):
         try:
@@ -609,8 +610,37 @@ def sync_all(args: argparse.Namespace, logger, *, run_audit: bool = True) -> dic
             manifest.update_symbol(symbol, last_error=str(exc), last_failed_at=utc_now_iso())
             logger.exception("%s orderbook snapshot sync failed", symbol)
             heartbeat.beat(status="error", symbol=symbol, error=str(exc))
+            failures.append(f"{symbol}: {type(exc).__name__}: {exc}")
 
-    return {"symbols": sorted(symbol_meta), "rows_written": total_rows, "audits": audits}
+    phase_e_status = None
+    if getattr(args, "phase_e_audit", False):
+        audit_failures = [
+            symbol
+            for symbol, audit in audits.items()
+            if int(audit.get("rows", 0)) == 0 or int(audit.get("duplicate_rows", 0)) != 0
+        ]
+        phase_e_status = "pass" if not failures and not audit_failures else "requires_repair"
+        JsonState(f"audits/{DATASET}_phase_e.json").write(
+            {
+                "dataset": DATASET,
+                "service": "phase_e_binance_orderbook_history_1h",
+                "status": phase_e_status,
+                "symbols": sorted(symbol_meta),
+                "rows_written": total_rows,
+                "audit_failures": audit_failures,
+                "collector_failures": failures,
+                "audits": audits,
+                "continuity_note": "hourly gaps are preserved direct-source availability evidence; they are never filled with synthetic order-book snapshots",
+                "updated_at": utc_now_iso(),
+            }
+        )
+    return {
+        "symbols": sorted(symbol_meta),
+        "rows_written": total_rows,
+        "audits": audits,
+        "failures": failures,
+        "phase_e_status": phase_e_status,
+    }
 
 
 def main() -> None:
@@ -624,6 +654,8 @@ def main() -> None:
     parser.add_argument("--no-vision", action="store_true")
     parser.add_argument("--no-rest", action="store_true")
     parser.add_argument("--no-validate", action="store_true")
+    parser.add_argument("--phase-e-audit", action="store_true", help="Write combined durable Phase E order-book evidence.")
+    parser.add_argument("--fail-on-symbol-error", action="store_true", help="Return non-zero when an exact historical gate has any symbol error.")
     args = parser.parse_args()
 
     config = load_yaml("symbols.binance_orderbook_snapshot.yml")
@@ -633,6 +665,8 @@ def main() -> None:
     while True:
         result = sync_all(args, logger, run_audit=not args.no_validate)
         logger.info("Binance orderbook snapshot 1h sync finished: %s", result)
+        if args.fail_on_symbol_error and (result.get("failures") or result.get("phase_e_status") not in {None, "pass"}):
+            raise RuntimeError("; ".join(result["failures"]) or f"phase_e_audit={result.get('phase_e_status')}")
         if args.mode != "live":
             break
         sleep_with_heartbeat(heartbeat, sleep_seconds)

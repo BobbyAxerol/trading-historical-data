@@ -228,6 +228,54 @@ if [ "${PRIMUS_HMD_PHASE_D_BINANCE_USDM_QUARTERLY_1M_APPROVED:-}" = "approved" ]
   exec "$@"
 fi
 
+# Phase E remains service-scoped.  The string comparisons below intentionally
+# accept only one literal argv vector per approval; no generic Phase E writer
+# flag exists, and Deribit is still absent from every permitted command.
+if [ "${PRIMUS_HMD_PHASE_E_BINANCE_USDM_CORE_PERPETUAL_1M_APPROVED:-}" = "approved" ] \
+  && [ "$*" = "python -m collectors.binance_usdm_perpetual_1m --mode once --symbols ETHUSDT,SOLUSDT,BNBUSDT,DOGEUSDT --start-month 2020-01 --daily-bridge-days 35 --rest-bridge-days 35 --rest-window-minutes 10080 --phase-label e --allow-later-start" ]; then
+  exec "$@"
+fi
+
+if [ "${PRIMUS_HMD_PHASE_E_BINANCE_ORDERBOOK_HISTORY_1H_APPROVED:-}" = "approved" ] \
+  && [ "$*" = "python -m collectors.binance_orderbook_snapshot_1h --mode once --symbols BTCUSDT,BTCUSDT_260925,BTCUSDT_261225 --lookback-days 2500 --phase-e-audit --fail-on-symbol-error" ]; then
+  exec "$@"
+fi
+
+if [ "${PRIMUS_HMD_PHASE_E_VN_DAILY_UNIVERSE_1D_APPROVED:-}" = "approved" ] \
+  && [ "$*" = "python -m collectors.vn_daily --mode once --configured-universe --backfill-start 2016-01-01 --force-history --audit-phase-e --fail-on-symbol-error" ]; then
+  exec "$@"
+fi
+
+if [ "${PRIMUS_HMD_PHASE_E_VN30F1M_VNDIRECT_1M_APPROVED:-}" = "approved" ] \
+  && [ "$*" = "python -m collectors.vn_derivatives sync-vndirect --resolution 1m --mode once --start 2017-08-10 --window-days 31 --min-window-days 7 --require-source-proof --audit-phase-e --json" ]; then
+  exec "$@"
+fi
+
+if [ "${PRIMUS_HMD_PHASE_E_VN30_CONTRACT_SOURCE_PROBE_APPROVED:-}" = "approved" ] \
+  && [ "$*" = "python -m collectors.vn_derivatives probe --version v1 --contracts VN30F1709,VN30F2406,VN30F2508,VN30F2608 --providers kbs,dnse --window-days 30 --json" ]; then
+  exec "$@"
+fi
+
+if [ "${PRIMUS_HMD_STAGED_CRYPTO_CORE_1M_APPROVED:-}" = "approved" ] \
+  && [ "$*" = "python -m collectors.crypto_1m --mode live --symbols ETHUSDT,SOLUSDT,BNBUSDT,DOGEUSDT" ]; then
+  exec "$@"
+fi
+
+if [ "${PRIMUS_HMD_STAGED_BINANCE_USDM_QUARTERLY_NEXT_1M_APPROVED:-}" = "approved" ] \
+  && [ "$*" = "python -m collectors.binance_usdm_quarterly_1m --mode live --pairs BTCUSDT --symbols BTCUSDT_261225 --no-archive-discovery --no-monthly --no-daily --sleep 21600" ]; then
+  exec "$@"
+fi
+
+if [ "${PRIMUS_HMD_STAGED_BINANCE_ORDERBOOK_EXPANDED_1H_APPROVED:-}" = "approved" ] \
+  && [ "$*" = "python -m collectors.binance_orderbook_snapshot_1h --mode live --symbols BTCUSDT,BTCUSDT_260925,BTCUSDT_261225 --no-vision --no-validate --sleep 3600" ]; then
+  exec "$@"
+fi
+
+if [ "${PRIMUS_HMD_STAGED_VN30F1M_VNDIRECT_1M_APPROVED:-}" = "approved" ] \
+  && [ "$*" = "python -m collectors.vn_derivatives sync-vndirect --resolution 1m --mode live --overlap-minutes 10 --sleep 60" ]; then
+  exec "$@"
+fi
+
 # The only pre-B0 writer exception is the owner-approved, one-shot bounded
 # seed.  `tools/run_b0_seed.sh` supplies both values transiently and invokes
 # one fixed runner with no operator-provided collector arguments.  The runner
@@ -241,5 +289,5 @@ if [ "${PRIMUS_HMD_B0_SEED_APPROVED:-}" = "approved" ] \
   exec "$@"
 fi
 
-echo "refusing to start a collector: no service-scoped staged authorization, phase-D authorization, or bounded-seed authorization matched" >&2
+echo "refusing to start a collector: no service-scoped staged authorization, phase-D/Phase-E authorization, or bounded-seed authorization matched" >&2
 exit 64
