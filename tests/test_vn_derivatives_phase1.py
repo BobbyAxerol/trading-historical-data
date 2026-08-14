@@ -1,6 +1,7 @@
 import json
 import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -122,6 +123,23 @@ class TestVNDerivativePhase1(EnvCase):
         self.assertIn("41I1F8000:krx", summary["dnse_1d_symbols_with_data"])
         loaded_summary = json.loads(json_path.read_text())
         self.assertEqual(loaded_summary["status"], "ok")
+
+    def test_probe_records_a_bounded_provider_timeout_and_completes(self):
+        def stalled_fetcher(_request: ProbeRequest) -> pd.DataFrame:
+            time.sleep(1)
+            return pd.DataFrame()
+
+        summary = run_provider_probe(
+            contracts=["VN30F2508"],
+            fetchers={"kbs": stalled_fetcher, "dnse": stalled_fetcher},
+            window_days=10,
+            request_timeout_seconds=0.01,
+        )
+
+        probe = pd.read_parquet(Path(summary["parquet_path"]))
+        self.assertEqual(len(probe), 8)
+        self.assertEqual(summary["status"], "blocked")
+        self.assertTrue(probe["error"].fillna("").str.contains("provider request deadline exceeded").all())
 
 
 def _restore_env(name: str, value: str | None) -> None:

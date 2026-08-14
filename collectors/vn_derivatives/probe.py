@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import json
+import signal
+import threading
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterable
+from typing import Callable, Iterable, Iterator
 
 import pandas as pd
 
 from collectors.common.env import state_root
+from collectors.common.logging import setup_logging
 from collectors.common.manifest import utc_now_iso
 from collectors.providers import dnse_derivatives, kbs_derivatives
 from collectors.vn_derivatives.instruments import build_initial_instrument_dimension
@@ -27,6 +31,7 @@ PROBE_CONTRACTS = [
     "VN30F2508",
 ]
 PROBE_RESOLUTIONS = ["1m", "1d"]
+PROBE_REQUEST_TIMEOUT_SECONDS = 40.0
 PROBE_COLUMNS = [
     "canonical_symbol",
     "provider",
@@ -59,6 +64,32 @@ class ProbeRequest:
 
 
 ProviderFetcher = Callable[[ProbeRequest], pd.DataFrame]
+
+
+class ProviderProbeDeadlineExceeded(BaseException):
+    """A hard deadline that third-party retry wrappers must not retry."""
+
+
+@contextmanager
+def _request_deadline(seconds: float) -> Iterator[None]:
+    """Bound one external probe call on Linux without leaving worker threads behind."""
+    if seconds <= 0:
+        raise ValueError("request_timeout_seconds must be positive")
+    if threading.current_thread() is not threading.main_thread() or not hasattr(signal, "setitimer"):
+        yield
+        return
+
+    def _raise_deadline(_signum: int, _frame: object) -> None:
+        raise ProviderProbeDeadlineExceeded(f"provider request deadline exceeded after {seconds:g}s")
+
+    previous_handler = signal.getsignal(signal.SIGALRM)
+    signal.signal(signal.SIGALRM, _raise_deadline)
+    previous_timer = signal.setitimer(signal.ITIMER_REAL, seconds)
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, *previous_timer)
+        signal.signal(signal.SIGALRM, previous_handler)
 
 
 def _probe_window(symbol: str, *, window_days: int) -> tuple[pd.Timestamp, pd.Timestamp]:
@@ -199,18 +230,61 @@ def run_provider_probe(
     providers: Iterable[str] | None = None,
     fetchers: dict[str, ProviderFetcher] | None = None,
     version: str = "v1",
+    request_timeout_seconds: float = PROBE_REQUEST_TIMEOUT_SECONDS,
 ) -> dict[str, object]:
+    if request_timeout_seconds <= 0:
+        raise ValueError("request_timeout_seconds must be positive")
     build_initial_instrument_dimension(version=version)
+    logger = setup_logging("vn30_contract_source_probe")
     active_fetchers = fetchers or _default_fetchers()
     rows = []
-    for request in _requests(contracts or PROBE_CONTRACTS, window_days=window_days, providers=providers):
+    planned = _requests(contracts or PROBE_CONTRACTS, window_days=window_days, providers=providers)
+    for request_number, request in enumerate(planned, start=1):
         max_days = 7 if request.provider == "kbs" and request.resolution == "1m" else 5 if request.provider == "dnse" and request.resolution == "1m" else 365
+        logger.info(
+            "vn30_contract_probe_request_start request=%s/%s provider=%s symbol=%s resolution=%s",
+            request_number,
+            len(planned),
+            request.provider,
+            request.provider_symbol,
+            request.resolution,
+        )
         try:
             fetcher = active_fetchers[request.provider]
-            df = fetcher(request)
+            with _request_deadline(request_timeout_seconds):
+                df = fetcher(request)
             rows.append(_result_row(request, df=df, max_safe_request_days=max_days))
+            logger.info(
+                "vn30_contract_probe_request_done request=%s/%s provider=%s symbol=%s resolution=%s rows=%s",
+                request_number,
+                len(planned),
+                request.provider,
+                request.provider_symbol,
+                request.resolution,
+                len(df),
+            )
+        except ProviderProbeDeadlineExceeded as exc:
+            rows.append(_result_row(request, error=str(exc), max_safe_request_days=max_days))
+            logger.warning(
+                "vn30_contract_probe_request_timeout request=%s/%s provider=%s symbol=%s resolution=%s error=%s",
+                request_number,
+                len(planned),
+                request.provider,
+                request.provider_symbol,
+                request.resolution,
+                exc,
+            )
         except Exception as exc:
             rows.append(_result_row(request, error=_format_exception(exc), max_safe_request_days=max_days))
+            logger.warning(
+                "vn30_contract_probe_request_failed request=%s/%s provider=%s symbol=%s resolution=%s error=%s",
+                request_number,
+                len(planned),
+                request.provider,
+                request.provider_symbol,
+                request.resolution,
+                _format_exception(exc),
+            )
 
     result = pd.DataFrame(rows, columns=PROBE_COLUMNS)
     parquet_path, json_path = probe_output_paths(version)
