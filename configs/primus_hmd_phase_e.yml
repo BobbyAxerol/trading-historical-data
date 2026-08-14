@@ -38,6 +38,13 @@ phase_e_approval:
         - vnstock_vci_daily
         - vndirect_dchart_continuous_alias_daily_existing_canonical_input
       validation: per-symbol raw Parquet schema/OHLC/numeric/negative/duplicate/source audit followed by matrix rebuild; listing and exchange-calendar absence remain explicit
+    phase-e-vn-daily-matrix-rebuild:
+      dataset_id: vn_daily_matrix
+      command: ["python", "-m", "collectors.vn_daily_matrix"]
+      sources:
+        - canonical_vn_equity_1d_parquet
+        - canonical_vn30f1m_continuous_first_input
+      validation: derived-only rebuild from canonical storage; preserves the configured VN30F1M auxiliary column and performs no provider request or raw-data write
     phase-e-vn30f1m-vndirect-1m:
       dataset_id: vn30f1m_vndirect_dchart_1m
       command: ["python", "-m", "collectors.vn_derivatives", "sync-vndirect", "--resolution", "1m", "--mode", "once", "--start", "2017-08-10", "--window-days", "31", "--min-window-days", "7", "--require-source-proof", "--audit-phase-e", "--json"]

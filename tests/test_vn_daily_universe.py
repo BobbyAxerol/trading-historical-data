@@ -5,7 +5,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 import pandas as pd
 
@@ -172,6 +172,7 @@ class TestVNDailyUniverse(EnvCase):
                         main()
         run_symbol.assert_called_once()
         build_matrix.assert_called_once()
+        self.assertEqual(build_matrix.call_args.kwargs, {"logger": ANY})
         build_report.assert_called_once()
 
     def test_matrix_builder_includes_vn30f1m_auxiliary_from_1m(self):

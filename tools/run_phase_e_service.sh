@@ -17,6 +17,9 @@ case "$1" in
   phase-e-vn-daily-universe-1d)
     hmd_approval="PRIMUS_HMD_PHASE_E_VN_DAILY_UNIVERSE_1D_APPROVED"
     ;;
+  phase-e-vn-daily-matrix-rebuild)
+    hmd_approval="PRIMUS_HMD_PHASE_E_VN_DAILY_MATRIX_REBUILD_APPROVED"
+    ;;
   phase-e-vn30f1m-vndirect-1m)
     hmd_approval="PRIMUS_HMD_PHASE_E_VN30F1M_VNDIRECT_1M_APPROVED"
     ;;

@@ -216,6 +216,9 @@ PHASE_E_COMMANDS = {
         "--backfill-start", "2016-01-01", "--force-history", "--resume-success-after", "2026-08-14T05:25:00+00:00",
         "--audit-phase-e", "--fail-on-symbol-error",
     ],
+    "PRIMUS_HMD_PHASE_E_VN_DAILY_MATRIX_REBUILD_APPROVED": [
+        "python", "-m", "collectors.vn_daily_matrix",
+    ],
     "PRIMUS_HMD_PHASE_E_VN30F1M_VNDIRECT_1M_APPROVED": [
         "python", "-m", "collectors.vn_derivatives", "sync-vndirect", "--resolution", "1m",
         "--mode", "once", "--start", "2017-08-10", "--window-days", "31",

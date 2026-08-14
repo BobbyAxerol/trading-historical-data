@@ -248,6 +248,11 @@ if [ "${PRIMUS_HMD_PHASE_E_VN_DAILY_UNIVERSE_1D_APPROVED:-}" = "approved" ] \
   exec "$@"
 fi
 
+if [ "${PRIMUS_HMD_PHASE_E_VN_DAILY_MATRIX_REBUILD_APPROVED:-}" = "approved" ] \
+  && [ "$*" = "python -m collectors.vn_daily_matrix" ]; then
+  exec "$@"
+fi
+
 if [ "${PRIMUS_HMD_PHASE_E_VN30F1M_VNDIRECT_1M_APPROVED:-}" = "approved" ] \
   && [ "$*" = "python -m collectors.vn_derivatives sync-vndirect --resolution 1m --mode once --start 2017-08-10 --window-days 31 --min-window-days 7 --require-source-proof --audit-phase-e --json" ]; then
   exec "$@"

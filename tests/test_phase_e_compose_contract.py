@@ -11,6 +11,7 @@ PHASE_E_APPROVALS = {
     "phase-e-binance-usdm-core-perpetual-1m": "PRIMUS_HMD_PHASE_E_BINANCE_USDM_CORE_PERPETUAL_1M_APPROVED",
     "phase-e-binance-orderbook-history-1h": "PRIMUS_HMD_PHASE_E_BINANCE_ORDERBOOK_HISTORY_1H_APPROVED",
     "phase-e-vn-daily-universe-1d": "PRIMUS_HMD_PHASE_E_VN_DAILY_UNIVERSE_1D_APPROVED",
+    "phase-e-vn-daily-matrix-rebuild": "PRIMUS_HMD_PHASE_E_VN_DAILY_MATRIX_REBUILD_APPROVED",
     "phase-e-vn30f1m-vndirect-1m": "PRIMUS_HMD_PHASE_E_VN30F1M_VNDIRECT_1M_APPROVED",
     "phase-e-vn30-contract-source-probe": "PRIMUS_HMD_PHASE_E_VN30_CONTRACT_SOURCE_PROBE_APPROVED",
 }

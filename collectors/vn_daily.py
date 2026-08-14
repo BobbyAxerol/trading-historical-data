@@ -449,7 +449,11 @@ def main() -> None:
                     heartbeat.beat(status="error", error=f"universe_report_failed: {exc}")
                     failures.append(f"universe_report: {type(exc).__name__}: {exc}")
                 try:
-                    build_matrix(symbols=[s.strip().upper() for s in symbols], logger=logger)
+                    # The matrix is a canonical shared output, not merely a
+                    # pivot of the symbols requested in this collector pass.
+                    # Let the builder load the configured external universe
+                    # too, notably the continuous-first VN30F1M benchmark.
+                    build_matrix(logger=logger)
                 except Exception as exc:
                     logger.exception("VN daily matrix build failed")
                     heartbeat.beat(status="error", error=f"matrix_build_failed: {exc}")

@@ -235,6 +235,25 @@ services:
       STATE_ROOT: /app/state
       LOG_ROOT: /app/logs
 
+  phase-e-vn-daily-matrix-rebuild:
+    <<: *get-data-service
+    # Derived-only repair for the canonical matrix.  It is separately gated
+    # so correcting a matrix/auxiliary projection never replays raw-provider
+    # requests or touches raw Parquet history.
+    profiles: ["phase-e"]
+    restart: "no"
+    pids_limit: 128
+    cpus: 0.50
+    mem_limit: 768m
+    command: ["python", "-m", "collectors.vn_daily_matrix"]
+    environment:
+      <<: *collector-gate-environment
+      PRIMUS_HMD_PHASE_E_VN_DAILY_MATRIX_REBUILD_APPROVED: ${PRIMUS_HMD_PHASE_E_VN_DAILY_MATRIX_REBUILD_APPROVED:-}
+      TZ: Asia/Ho_Chi_Minh
+      DATA_ROOT: /app/storage
+      STATE_ROOT: /app/state
+      LOG_ROOT: /app/logs
+
   phase-e-vn30f1m-vndirect-1m:
     <<: *get-data-service
     # The only historical VNDIRECT 1m writer: it embeds source proof, scans

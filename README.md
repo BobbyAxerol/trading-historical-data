@@ -218,6 +218,7 @@ Các service chạy bằng `docker compose` và có `restart: unless-stopped`.
 | `phase-e-vn30f1m-vndirect-1m` | `collectors.vn_derivatives` | One-shot source-proof + bounded VNDIRECT 1m backfill; profile `phase-e`, never starts by default |
 | `vn30f1m-vndirect-1m` | `collectors.vn_derivatives` | Explicit 1m VNDIRECT tail, only after the Phase E one-shot audit passes |
 | `phase-e-vn-daily-universe-1d` | `collectors.vn_daily` | One-shot configured VN raw daily historical rebuild, then universe report + matrix; an interrupted approved run resumes only symbols with a recorded post-run success checkpoint. Explicit VCI no-data responses are retained as source evidence, while HTTP/schema/rate-limit errors still fail the gate. |
+| `phase-e-vn-daily-matrix-rebuild` | `collectors.vn_daily_matrix` | Derived-only, exact-gated rebuild from canonical VN raw Parquet and continuous-first `VN30F1M`; it makes no provider call and does not alter raw history. |
 | `phase-e-binance-usdm-core-perpetual-1m` | `collectors.binance_usdm_perpetual_1m` | One-shot ETH/SOL/BNB/DOGE USD-M archive rebuild with source-listing-aware audit |
 | `phase-e-binance-orderbook-history-1h` | `collectors.binance_orderbook_snapshot_1h` | One-shot retained-horizon Vision + REST history for BTC perpetual/current/next quarterlies |
 | `phase-e-vn30-contract-source-probe` | `collectors.vn_derivatives` | Non-publishing KBS/DNSE representative proof; it is not a contract backfill approval |
