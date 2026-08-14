@@ -69,10 +69,13 @@ def _result_summary(result: DChartFetchResult) -> dict[str, object]:
     return {
         "status": result.status,
         "row_count": result.row_count,
-        "requested_start": result.requested_start,
-        "requested_end": result.requested_end,
-        "first_bar": result.first_bar,
-        "last_bar": result.last_bar,
+        "requested_start": result.requested_start.isoformat() if result.requested_start is not None else None,
+        "requested_end": result.requested_end.isoformat() if result.requested_end is not None else None,
+        # This summary is embedded in the minute-sync manifest when source
+        # proof is required.  Keep it natively JSON serializable: JsonState
+        # deliberately does not use a lossy default encoder.
+        "first_bar": result.first_bar.isoformat() if result.first_bar is not None else None,
+        "last_bar": result.last_bar.isoformat() if result.last_bar is not None else None,
         "http_status": result.http_status,
         "error": result.error,
     }

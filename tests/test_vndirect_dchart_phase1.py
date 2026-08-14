@@ -182,6 +182,10 @@ class TestVndirectProbeGate(EnvCase):
             payload = run_vndirect_probe(VndirectProbeOptions(fail_on_gate=True))
 
         self.assertEqual(payload["production_gate"], "PASS")
+        self.assertIsInstance(payload["recent_1m"]["first_bar"], str)
+        # The proof is embedded in the VNDIRECT 1m sync JsonState manifest.
+        # It must therefore work with the strict standard encoder as well.
+        json.dumps(payload, sort_keys=True)
         self.assertTrue((Path(os.environ["STATE_ROOT"]) / "vn_derivatives" / "vndirect_dchart_probe.json").exists())
 
     def test_probe_fails_and_writes_report_without_positive_daily(self):
