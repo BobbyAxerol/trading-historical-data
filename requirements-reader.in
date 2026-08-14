@@ -2,5 +2,5 @@
 # Keep collector/provider SDKs out of this lock unless the public reader grows
 # an explicit dependency on them.
 duckdb==1.5.5
-pandas==2.2.3
-pyarrow>=15,<21
+pandas==2.3.3
+pyarrow==24.0.0
