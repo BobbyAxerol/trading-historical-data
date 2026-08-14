@@ -363,6 +363,37 @@ Status: complete for the owner-approved non-Deribit scope at
   matrix replacement remain blocked until positive usable source coverage and
   a new exact gate are recorded.
 
+### 2026-08-14 UTC — Scoped Non-Deribit Consumer Cutover
+
+Status: complete. The owner explicitly approved consumer use of the current
+non-Deribit data root after Phase E acceptance. This is a reader release only:
+it does not start a collector, historical backfill, source probe, or Deribit
+request.
+
+- Commit `8009cd2` assigns distinct release identities to VN raw 1m, daily,
+  concrete-contract, and continuous loaders. This prevents an accepted
+  continuous series from accidentally authorizing a raw or concrete-contract
+  endpoint that has not passed its own gate. The focused reader suite passed
+  23 tests.
+- The locally tagged reader release
+  `primus-historical-market-data-non-deribit-consumer-v0.1.0rc3` was built as
+  a code-only wheel. Its SHA-256 is
+  `3b2a41b87ff834912556bb3039bf3e3c148bd859a1ced9ee4f52a3c658ca5663`.
+- The canonical runtime manifest was atomically promoted to `status=pass`.
+  Its SHA-256 is
+  `fa0fb54e4006247eb9576907f12decf1a50c44619e143163a03d2dd86561b738`.
+  It declares exactly `binance_perpetual_spot_quarterly`,
+  `binance_metrics_orderbook`, `vn_stock_daily`,
+  `vn_derivatives_continuous`, and `vn_daily_matrix`.
+- End-to-end Bobby smoke reads passed for Binance perpetual/spot/quarterly,
+  metrics, order book, VN daily, `VN30F1M` continuous 1m, and the VN daily
+  matrix. The reader-group smoke under `thanhvuong` read `DOGEUSDT` and was
+  correctly rejected for unapproved `VnStock1m`.
+- Deribit, Binance options/daily matrix, VN raw equity 1m, raw VN futures
+  1m, and concrete VN contract 1m/1d remain outside this release and fail
+  closed. The reader group cannot write canonical storage; Bobby's Alpha
+  environment is private.
+
 ## Active Job: VN30F1M VNDIRECT DChart Single-Source Upgrade
 
 Source guide: `VN30_FUTURES_FREE_DATA_UPGRADE_PLAN_V2.md`
