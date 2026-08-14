@@ -238,6 +238,11 @@ if [ "${PRIMUS_HMD_PHASE_E_BINANCE_USDM_CORE_PERPETUAL_1M_APPROVED:-}" = "approv
   exec "$@"
 fi
 
+if [ "${PRIMUS_HMD_PHASE_E_BINANCE_DAILY_MATRIX_APPROVED:-}" = "approved" ] \
+  && [ "$*" = "python -m collectors.binance_daily_matrix --mode once --backfill-start 2020-01-01 --top-n 400 --overlap-days 5 --min-history-days 365 --phase-e-audit" ]; then
+  exec "$@"
+fi
+
 if [ "${PRIMUS_HMD_PHASE_E_BINANCE_ORDERBOOK_HISTORY_1H_APPROVED:-}" = "approved" ] \
   && [ "$*" = "python -m collectors.binance_orderbook_snapshot_1h --mode once --symbols BTCUSDT,BTCUSDT_260925,BTCUSDT_261225 --lookback-days 2500 --phase-e-audit --fail-on-symbol-error" ]; then
   exec "$@"

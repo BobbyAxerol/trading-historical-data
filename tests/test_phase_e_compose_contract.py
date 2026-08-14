@@ -9,6 +9,7 @@ from collectors.production_preflight import REPO_ROOT
 
 PHASE_E_APPROVALS = {
     "phase-e-binance-usdm-core-perpetual-1m": "PRIMUS_HMD_PHASE_E_BINANCE_USDM_CORE_PERPETUAL_1M_APPROVED",
+    "phase-e-binance-daily-matrix": "PRIMUS_HMD_PHASE_E_BINANCE_DAILY_MATRIX_APPROVED",
     "phase-e-binance-orderbook-history-1h": "PRIMUS_HMD_PHASE_E_BINANCE_ORDERBOOK_HISTORY_1H_APPROVED",
     "phase-e-vn-daily-universe-1d": "PRIMUS_HMD_PHASE_E_VN_DAILY_UNIVERSE_1D_APPROVED",
     "phase-e-vn-daily-matrix-rebuild": "PRIMUS_HMD_PHASE_E_VN_DAILY_MATRIX_REBUILD_APPROVED",

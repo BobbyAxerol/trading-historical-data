@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import math
 import os
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import requests
 
@@ -410,6 +412,232 @@ def _atomic_write_matrix(df: pd.DataFrame, path) -> None:
     os.replace(tmp, path)
 
 
+def _sha256_file(path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _build_matrix_audit_report(
+    matrix_dir,
+    *,
+    universe_state: dict[str, Any],
+    backfill_start: pd.Timestamp,
+    closed_end: pd.Timestamp,
+    top_n: int,
+    min_history_days: int,
+) -> dict[str, Any]:
+    """Validate the five persisted matrix features without inventing coverage.
+
+    A missing history before an instrument's first direct Binance candle is
+    valid listing evidence.  Once an OHLC candle exists, however, all OHLC
+    values and every intervening UTC day through the closed-day tail must be
+    present.  The collector writes this report before a consumer manifest can
+    declare the matrix.
+    """
+
+    errors: list[str] = []
+    matrices: dict[str, pd.DataFrame] = {}
+    files: dict[str, dict[str, Any]] = {}
+    backfill_start = pd.Timestamp(backfill_start).normalize()
+    closed_end = pd.Timestamp(closed_end).normalize()
+
+    for feature in FEATURES:
+        path = matrix_dir / f"{feature}.parquet"
+        file_info: dict[str, Any] = {"path": str(path), "exists": path.exists()}
+        if not path.exists():
+            errors.append(f"missing feature file: {feature}")
+            files[feature] = file_info
+            continue
+        try:
+            frame = pd.read_parquet(path, engine="pyarrow")
+        except Exception as exc:
+            errors.append(f"cannot read {feature}: {type(exc).__name__}: {exc}")
+            files[feature] = file_info
+            continue
+
+        converted_index = pd.to_datetime(frame.index, errors="coerce")
+        invalid_index_count = int(pd.isna(converted_index).sum())
+        frame = frame.copy()
+        frame.index = pd.DatetimeIndex(converted_index)
+        if invalid_index_count:
+            errors.append(f"{feature} has {invalid_index_count} invalid timestamp(s)")
+        if frame.index.has_duplicates:
+            errors.append(f"{feature} has duplicate timestamps")
+        if not frame.index.is_monotonic_increasing:
+            errors.append(f"{feature} timestamps are not monotonic")
+        non_numeric_columns = [str(column) for column in frame.columns if not pd.api.types.is_numeric_dtype(frame[column])]
+        if non_numeric_columns:
+            errors.append(f"{feature} has non-numeric columns: {non_numeric_columns[:5]}")
+        try:
+            infinite_count = int(np.isinf(frame.to_numpy(dtype="float64", na_value=np.nan)).sum())
+        except (TypeError, ValueError):
+            infinite_count = -1
+        if infinite_count > 0:
+            errors.append(f"{feature} has {infinite_count} infinite value(s)")
+        if frame.empty:
+            errors.append(f"{feature} is empty")
+
+        matrices[feature] = frame
+        file_info.update(
+            {
+                "sha256": _sha256_file(path),
+                "rows": int(len(frame)),
+                "columns": int(len(frame.columns)),
+                "first_time": frame.index.min().isoformat() if not frame.empty else None,
+                "last_time": frame.index.max().isoformat() if not frame.empty else None,
+                "invalid_index_count": invalid_index_count,
+                "infinite_count": infinite_count,
+            }
+        )
+        files[feature] = file_info
+
+    base = matrices.get("open")
+    if base is not None:
+        for feature, frame in matrices.items():
+            if not frame.index.equals(base.index):
+                errors.append(f"{feature} index differs from open")
+            if list(frame.columns) != list(base.columns):
+                errors.append(f"{feature} columns differ from open")
+
+    policy = universe_state.get("universe_policy") if isinstance(universe_state.get("universe_policy"), dict) else {}
+    active_symbols = [str(symbol).upper() for symbol in universe_state.get("active_symbols", [])]
+    tracked_symbols = [str(symbol).upper() for symbol in universe_state.get("symbols", [])]
+    expected_policy = {
+        "top_n": top_n,
+        "contractType": "PERPETUAL",
+        "underlyingType": "COIN",
+        "quoteAsset": "USDT",
+        "marginAsset": "USDT",
+        "min_history_days": min_history_days,
+    }
+    for key, expected in expected_policy.items():
+        if policy.get(key) != expected:
+            errors.append(f"universe policy {key}={policy.get(key)!r}, expected {expected!r}")
+    if not active_symbols:
+        errors.append("universe has no active symbols")
+    if len(active_symbols) != len(set(active_symbols)):
+        errors.append("universe active_symbols contains duplicates")
+    if tracked_symbols != active_symbols:
+        errors.append("universe tracked symbols differ from active symbols")
+    if any(not symbol.endswith("USDT") for symbol in active_symbols):
+        errors.append("universe contains a non-USDT symbol")
+    if base is not None and list(base.columns) != active_symbols:
+        errors.append("matrix columns differ from the persisted eligible active universe")
+
+    quality: dict[str, Any] = {
+        "incomplete_ohlc_count": 0,
+        "negative_price_count": 0,
+        "ohlc_bound_error_count": 0,
+        "negative_volume_count": 0,
+        "zero_volume_count": 0,
+        "continuity_gap_count": 0,
+        "missing_tail_symbol_count": 0,
+        "continuity_gap_examples": [],
+        "head_after_backfill_symbol_count": 0,
+    }
+    if all(feature in matrices for feature in FEATURES):
+        open_frame = matrices["open"]
+        high_frame = matrices["high"]
+        low_frame = matrices["low"]
+        close_frame = matrices["close"]
+        volume_frame = matrices["volume"]
+        complete_ohlc = open_frame.notna() & high_frame.notna() & low_frame.notna() & close_frame.notna()
+        observed_ohlc = open_frame.notna() | high_frame.notna() | low_frame.notna() | close_frame.notna()
+        incomplete = observed_ohlc & ~complete_ohlc
+        quality["incomplete_ohlc_count"] = int(incomplete.to_numpy().sum())
+        quality["negative_price_count"] = int(
+            ((open_frame < 0) | (high_frame < 0) | (low_frame < 0) | (close_frame < 0)).to_numpy().sum()
+        )
+        invalid_bounds = complete_ohlc & (
+            (high_frame < open_frame)
+            | (high_frame < close_frame)
+            | (high_frame < low_frame)
+            | (low_frame > open_frame)
+            | (low_frame > close_frame)
+            | (low_frame > high_frame)
+        )
+        quality["ohlc_bound_error_count"] = int(invalid_bounds.to_numpy().sum())
+        quality["negative_volume_count"] = int((volume_frame < 0).to_numpy().sum())
+        quality["zero_volume_count"] = int((volume_frame == 0).to_numpy().sum())
+
+        for symbol in open_frame.columns:
+            observed_dates = complete_ohlc.index[complete_ohlc[symbol]]
+            if observed_dates.empty:
+                errors.append(f"{symbol} has no complete OHLC history")
+                continue
+            first = pd.Timestamp(observed_dates.min()).normalize()
+            last = pd.Timestamp(observed_dates.max()).normalize()
+            if first > backfill_start:
+                quality["head_after_backfill_symbol_count"] += 1
+            tail_lag_days = int((closed_end - last).days)
+            if tail_lag_days != 0:
+                quality["missing_tail_symbol_count"] += 1
+                if quality["missing_tail_symbol_count"] <= 10:
+                    quality.setdefault("missing_tail_examples", []).append(
+                        {"symbol": str(symbol), "last_time": last.isoformat(), "tail_lag_days": tail_lag_days}
+                    )
+            gaps = observed_dates[1:] - observed_dates[:-1]
+            gap_positions = np.flatnonzero(gaps > pd.Timedelta(days=1))
+            quality["continuity_gap_count"] += int(len(gap_positions))
+            for position in gap_positions[: max(0, 20 - len(quality["continuity_gap_examples"]))]:
+                quality["continuity_gap_examples"].append(
+                    {
+                        "symbol": str(symbol),
+                        "after": pd.Timestamp(observed_dates[position]).isoformat(),
+                        "before": pd.Timestamp(observed_dates[position + 1]).isoformat(),
+                        "gap_days": int(gaps[position] / pd.Timedelta(days=1)),
+                    }
+                )
+
+        for key in ("incomplete_ohlc_count", "negative_price_count", "ohlc_bound_error_count", "negative_volume_count", "continuity_gap_count", "missing_tail_symbol_count"):
+            if quality[key]:
+                errors.append(f"quality {key}={quality[key]}")
+
+    return {
+        "dataset": DATASET,
+        "phase": "phase_e_supplemental",
+        "status": "pass" if not errors else "fail",
+        "audited_at": utc_now_iso(),
+        "backfill_start": backfill_start.isoformat(),
+        "closed_daily_end": closed_end.isoformat(),
+        "files": files,
+        "universe": {
+            "state_updated_at": universe_state.get("updated_at"),
+            "tracked_symbol_count": len(tracked_symbols),
+            "active_symbol_count": len(active_symbols),
+            "matrix_column_count": int(len(base.columns)) if base is not None else 0,
+            "policy": policy,
+        },
+        "quality": quality,
+        "errors": errors,
+    }
+
+
+def _run_phase_e_audit(
+    matrix_dir,
+    *,
+    backfill_start: pd.Timestamp,
+    closed_end: pd.Timestamp,
+    top_n: int,
+    min_history_days: int,
+) -> dict[str, Any]:
+    report = _build_matrix_audit_report(
+        matrix_dir,
+        universe_state=JsonState("binance_daily_matrix_symbols.json").read(),
+        backfill_start=backfill_start,
+        closed_end=closed_end,
+        top_n=top_n,
+        min_history_days=min_history_days,
+    )
+    JsonState("audits/binance_daily_matrix_phase_e.json").write(report)
+    if report["status"] != "pass":
+        raise RuntimeError("Binance daily matrix audit failed: " + "; ".join(report["errors"][:5]))
+    return report
+
+
 def _symbol_fetch_start(
     existing_df: pd.DataFrame,
     symbol: str,
@@ -524,12 +752,13 @@ def run_pipeline(
     top_n: int = 400,
     overlap_days: int = DEFAULT_OVERLAP_DAYS,
     min_history_days: int = DEFAULT_MIN_HISTORY_DAYS,
-) -> None:
+    phase_e_audit: bool = False,
+) -> dict[str, Any] | None:
     # 1. Update/get master symbols list
     symbols = update_master_symbol_list(logger, top_n=top_n, min_history_days=min_history_days)
     if not symbols:
         logger.warning("No symbols to fetch.")
-        return
+        return None
 
     # Define matrix directories & file paths
     matrix_dir = data_root() / "crypto" / "binance_daily_matrix"
@@ -552,7 +781,7 @@ def run_pipeline(
 
     if backfill_start > end:
         logger.info("No closed daily candles to fetch: backfill_start=%s end=%s", backfill_start, end)
-        return
+        return None
     
     # 3. Fetch data for each symbol
     dfs = []
@@ -587,7 +816,17 @@ def run_pipeline(
 
     if not dfs:
         logger.info("No new daily data fetched.")
-        return
+        if phase_e_audit:
+            report = _run_phase_e_audit(
+                matrix_dir,
+                backfill_start=backfill_start,
+                closed_end=end,
+                top_n=top_n,
+                min_history_days=min_history_days,
+            )
+            logger.info("Binance daily matrix audit passed: files=%s universe=%s", len(report["files"]), report["universe"]["active_symbol_count"])
+            return report
+        return None
 
     # 4. Concatenate and Pivot
     all_df = pd.concat(dfs, ignore_index=True)
@@ -625,6 +864,18 @@ def run_pipeline(
             
             logger.info("Wrote matrix %s: shape=%s", path.name, combined.shape)
 
+    if phase_e_audit:
+        report = _run_phase_e_audit(
+            matrix_dir,
+            backfill_start=backfill_start,
+            closed_end=end,
+            top_n=top_n,
+            min_history_days=min_history_days,
+        )
+        logger.info("Binance daily matrix audit passed: files=%s universe=%s", len(report["files"]), report["universe"]["active_symbol_count"])
+        return report
+    return None
+
 
 def should_run_utc(schedule_hhmm: str, last_run_date: str | None) -> bool:
     now = datetime.now(timezone.utc)
@@ -643,6 +894,7 @@ def main() -> None:
     parser.add_argument("--top-n", type=int, default=400)
     parser.add_argument("--overlap-days", type=int, default=DEFAULT_OVERLAP_DAYS)
     parser.add_argument("--min-history-days", type=int, default=DEFAULT_MIN_HISTORY_DAYS)
+    parser.add_argument("--phase-e-audit", action="store_true", help="Write and enforce the strict five-feature Phase E audit.")
     args = parser.parse_args()
 
     logger = setup_logging(DATASET)
@@ -660,6 +912,7 @@ def main() -> None:
                         top_n=args.top_n,
                         overlap_days=args.overlap_days,
                         min_history_days=args.min_history_days,
+                        phase_e_audit=args.phase_e_audit,
                     )
                     heartbeat.beat(status="success")
                     logger.info("Daily matrix pipeline finished successfully.")
@@ -680,11 +933,14 @@ def main() -> None:
                 top_n=args.top_n,
                 overlap_days=args.overlap_days,
                 min_history_days=args.min_history_days,
+                phase_e_audit=args.phase_e_audit,
             )
             heartbeat.beat(status="success")
         except Exception as exc:
             logger.exception("Matrix pipeline failed")
             heartbeat.beat(status="error", error=str(exc))
+            if args.mode == "once":
+                raise
         break
 
 

@@ -8,7 +8,7 @@ phase_e_approval:
   status: approved
   approved_by: BobbyAxerol
   approved_at: "2026-08-14T00:00:00+00:00"
-  scope: "Compatibility-safe non-Deribit data expansion: configured core USD-M perpetual 1m symbols, retained Binance order-book archive horizon, configured VN equity daily universe plus matrix, VNDIRECT VN30F1M continuous-alias 1m source-proof/backfill, next-quarter/live tails, and a non-publishing VN contract source proof. No old-VPS import, consumer cutover, destructive operation, unproven VN contract backfill, or Deribit call."
+  scope: "Compatibility-safe non-Deribit data expansion: configured core USD-M perpetual 1m symbols, clean-VPS Binance USD-M daily matrix, retained Binance order-book archive horizon, configured VN equity daily universe plus matrix, VNDIRECT VN30F1M continuous-alias 1m source-proof/backfill, next-quarter/live tails, and a non-publishing VN contract source proof. No old-VPS import, destructive operation, unproven VN contract backfill, or Deribit call."
   runtime_profile:
     max_concurrent_historical_jobs: 1
     cpus: 1.0
@@ -24,6 +24,13 @@ phase_e_approval:
         - binance_vision_usdm_daily_bridge
         - binance_usdm_rest_bounded_bridge
       validation: strict streaming schema/OHLC/numeric/negative/duplicate/continuity/tail audit from the first source listing bar; a pre-listing interval remains documented source absence
+    phase-e-binance-daily-matrix:
+      dataset_id: binance_daily_matrix
+      command: ["python", "-m", "collectors.binance_daily_matrix", "--mode", "once", "--backfill-start", "2020-01-01", "--top-n", "400", "--overlap-days", "5", "--min-history-days", "365", "--phase-e-audit"]
+      sources:
+        - binance_usdm_exchange_info_and_24h_ticker_universe
+        - binance_usdm_rest_daily_klines
+      validation: atomic Parquet writes for open/high/low/close/volume followed by a durable exact-universe, schema, OHLC, negative, continuity, and closed-day-tail audit; pre-listing history is source absence, never fabricated
     phase-e-binance-orderbook-history-1h:
       dataset_id: crypto_binance_orderbook_snapshot_1h
       command: ["python", "-m", "collectors.binance_orderbook_snapshot_1h", "--mode", "once", "--symbols", "BTCUSDT,BTCUSDT_260925,BTCUSDT_261225", "--lookback-days", "2500", "--phase-e-audit", "--fail-on-symbol-error"]

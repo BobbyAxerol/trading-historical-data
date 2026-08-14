@@ -206,6 +206,11 @@ PHASE_E_COMMANDS = {
         "--daily-bridge-days", "35", "--rest-bridge-days", "35", "--rest-window-minutes",
         "10080", "--phase-label", "e", "--allow-later-start",
     ],
+    "PRIMUS_HMD_PHASE_E_BINANCE_DAILY_MATRIX_APPROVED": [
+        "python", "-m", "collectors.binance_daily_matrix", "--mode", "once",
+        "--backfill-start", "2020-01-01", "--top-n", "400", "--overlap-days", "5",
+        "--min-history-days", "365", "--phase-e-audit",
+    ],
     "PRIMUS_HMD_PHASE_E_BINANCE_ORDERBOOK_HISTORY_1H_APPROVED": [
         "python", "-m", "collectors.binance_orderbook_snapshot_1h", "--mode", "once",
         "--symbols", "BTCUSDT,BTCUSDT_260925,BTCUSDT_261225", "--lookback-days", "2500",

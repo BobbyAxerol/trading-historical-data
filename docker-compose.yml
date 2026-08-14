@@ -197,6 +197,24 @@ services:
       STATE_ROOT: /app/state
       LOG_ROOT: /app/logs
 
+  phase-e-binance-daily-matrix:
+    <<: *get-data-service
+    # Clean-VPS, source-derived wide daily matrix.  It is a one-shot only and
+    # writes a strict five-feature/universe/continuity audit before exit.
+    profiles: ["phase-e"]
+    restart: "no"
+    pids_limit: 256
+    cpus: 1.0
+    mem_limit: 1536m
+    command: ["python", "-m", "collectors.binance_daily_matrix", "--mode", "once", "--backfill-start", "2020-01-01", "--top-n", "400", "--overlap-days", "5", "--min-history-days", "365", "--phase-e-audit"]
+    environment:
+      <<: *collector-gate-environment
+      PRIMUS_HMD_PHASE_E_BINANCE_DAILY_MATRIX_APPROVED: ${PRIMUS_HMD_PHASE_E_BINANCE_DAILY_MATRIX_APPROVED:-}
+      TZ: UTC
+      DATA_ROOT: /app/storage
+      STATE_ROOT: /app/state
+      LOG_ROOT: /app/logs
+
   phase-e-binance-orderbook-history-1h:
     <<: *get-data-service
     # Retain the full currently documented 2,500-day Vision horizon for the
