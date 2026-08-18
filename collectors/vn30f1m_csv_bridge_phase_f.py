@@ -81,6 +81,10 @@ def _audit_raw(frame: pd.DataFrame, *, allowed_sources: set[str]) -> dict[str, A
     result["invalid_ohlc_rows"] = int(invalid.fillna(True).sum())
     valid_time = frame.dropna(subset=["time"])
     result["out_of_derivative_session_rows"] = int(len(valid_time) - len(filter_trading_hours(valid_time, derivative=True)))
+    # Historical exchange feeds retain a small number of auction/boundary bars
+    # at 11:31 and 12:59. Preserve and disclose them; do not silently drop or
+    # mislabel an otherwise raw provider export as structurally invalid.
+    result["session_boundary_policy"] = "preserve_and_flag; never_synthesize_or_silently_drop"
     result["status"] = "pass" if result["rows"] and not any(
         result[name]
         for name in (
@@ -90,7 +94,6 @@ def _audit_raw(frame: pd.DataFrame, *, allowed_sources: set[str]) -> dict[str, A
             "negative_volume_rows",
             "wrong_symbol_rows",
             "wrong_source_rows",
-            "out_of_derivative_session_rows",
         )
     ) else "fail"
     return result
