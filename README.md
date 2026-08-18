@@ -37,7 +37,7 @@ Hiện storage chính dùng **Parquet**. Sau phase cleanup, `storage/` không c�
 | VN Equity Daily raw | `1d` | Universe VN curated khoảng 300 symbols | Provider VN daily, lưu partition theo symbol/year | Hằng ngày `16:30 Asia/Ho_Chi_Minh` | `VnStockDaily`, `load_data("vn_stock_daily")` |
 | VN Daily Matrix | `1d` | VN equity universe + auxiliary `VN30F1M` benchmark column | Build từ canonical raw Parquet | Chạy builder khi cần sau raw daily update | `VNDailyMatrix`, `load_data("vn_daily_matrix", feature=...)` |
 | VN Equity Intraday | `1m` | VN stock symbols trong config | Provider VN intraday | Hằng ngày `16:30 Asia/Ho_Chi_Minh` | `VnStock1m`, `load_data("vn_stock_1m")` |
-| VN Futures Intraday | `1m` | `VN30F1M` và symbols futures configured | DNSE/VN provider | Hằng ngày `16:30 Asia/Ho_Chi_Minh` | `VnFutures1m`, `load_data("vn_futures_1m")` |
+| VN Futures Intraday raw alias | `1m` | `VN30F1M` legacy provider alias | DNSE signed `/price/ohlc`; Phase F proof/backfill then raw CSV bridge | Exact-gated only; no default tail | `VnFutures1m`, `load_data("vn_futures_1m")` after Phase F release |
 | VN30 Futures Contracts | `1m`, `1d` | Concrete contracts `VN30FYYMM` | KBS/DNSE source proof first; no canonical Phase E contract publish until that proof is accepted | Not enabled yet | `VnDerivativesContracts1m`, `VnDerivativesContractsDaily`, `load_data("vn_derivatives_contracts_1m")` |
 | VN30 Futures Continuous Alias | `1m`, `1d` | `VN30F1M` | VNDIRECT DChart provider continuous alias; 1m has a separate Phase E source proof/backfill gate | Daily tail + 1m tail after its gate passes | `VnDerivativesContinuous1m`, `VnDerivativesContinuousDaily`, `load_data("vn30f1m_continuous_1m")` |
 
@@ -61,6 +61,28 @@ historical jobs. Matching live tails use `tools/run_phase_e_tail.sh`. Concrete
 VN contract backfill and any contract-derived replacement of the alias remain
 blocked until the source-proof artifact has positive usable coverage and a new
 exact gate is recorded. Deribit is not part of Phase E.
+
+### Controlled Phase F DNSE raw-alias rebuild
+
+Phase F is distinct from the VNDIRECT continuous-alias dataset. It rebuilds
+the raw DNSE provider alias in `storage/vn/futures/1m` for the legacy
+`VnFutures1m` API, then bridges the owner-provided raw CSV history. Its exact
+policy is [`configs/primus_hmd_phase_f.yml`](configs/primus_hmd_phase_f.yml).
+
+Run the proof first; it is non-publishing. Only a durable `pass` authorizes
+the bounded backfill, then the separately staged raw CSV bridge:
+
+```bash
+tools/run_phase_f_service.sh phase-f-vn30f1m-dnse-probe
+tools/run_phase_f_service.sh phase-f-vn30f1m-dnse-backfill
+tools/stage_vn30f1m_phase_f_inputs.sh
+tools/run_phase_f_service.sh phase-f-vn30f1m-csv-bridge
+```
+
+The bridge mounts `/input` read-only from the dedicated runtime root. It
+stores raw OHLCV only; the adjusted CSV is checksum/provenance evidence and
+is never made canonical. Neither service publishes the reader manifest or
+deletes either CSV input.
 
 ## Storage Layout
 
@@ -222,6 +244,9 @@ Các service chạy bằng `docker compose` và có `restart: unless-stopped`.
 | `phase-e-binance-usdm-core-perpetual-1m` | `collectors.binance_usdm_perpetual_1m` | One-shot ETH/SOL/BNB/DOGE USD-M archive rebuild with source-listing-aware audit |
 | `phase-e-binance-orderbook-history-1h` | `collectors.binance_orderbook_snapshot_1h` | One-shot retained-horizon Vision + REST history for BTC perpetual/current/next quarterlies |
 | `phase-e-vn30-contract-source-probe` | `collectors.vn_derivatives` | Non-publishing KBS/DNSE representative proof; it is not a contract backfill approval |
+| `phase-f-vn30f1m-dnse-probe` | `collectors.vn30f1m_dnse_phase_f` | One historical signed-DNSE 1m proof; writes evidence only |
+| `phase-f-vn30f1m-dnse-backfill` | `collectors.vn30f1m_dnse_phase_f` | Sequential 5-day DNSE legacy-alias rebuild with raw-storage audit |
+| `phase-f-vn30f1m-csv-bridge` | `collectors.vn30f1m_csv_bridge_phase_f` | Read-only staged raw CSV bridge; adjusted file remains evidence only |
 | `crypto-1m-core-live`, `binance-usdm-quarterly-next-1m`, `binance-orderbook-expanded-1h` | scoped collectors | Phase E tails, each independently approved and never a default-universe expansion; the expanded orderbook tail retains the approved 2,500-day archive horizon while using REST only |
 | `vn-derivatives-probe` | `collectors.vn_derivatives` | Probe KBS/DNSE individual VN30 futures contracts; bootstrap/profile only |
 | `vn-derivatives-source-probe` | `collectors.vn_derivatives` | Historical V2 multi-source proof; superseded for VN30F1M by VNDIRECT DChart |
@@ -420,7 +445,7 @@ from data_loader import (
 | `VnStock1m` | `vn_stock_1m`, `vn_equity_1m` | Long OHLCV |
 | `VnStockDaily` | `vn_stock_daily`, `vn_equity_1d`, `vn_stock_1d` | Long OHLCV |
 | `VNDailyMatrix` | `vn_daily_matrix` | Matrix feature hoặc OHLCV dict/frame |
-| `VnFutures1m` | `vn_futures_1m` | Long OHLCV |
+| `VnFutures1m` | `vn_futures_1m` | DNSE legacy-alias raw OHLCV; intentionally fail-closed until Phase F audit and release promotion |
 | `VnDerivativesContracts1m` | `vn_derivatives_contracts_1m`, `vn30_contracts_1m` | Long OHLCV concrete VN30 futures contracts |
 | `VnDerivativesContractsDaily` | `vn_derivatives_contracts_1d`, `vn30_contracts_1d` | Long OHLCV concrete VN30 futures contracts |
 | `VnDerivativesContinuous1m` | `vn_derivatives_continuous_1m`, `vn30_continuous_1m`, `vn30f1m_continuous_1m` | Long OHLCV rebuilt continuous VN30 futures |

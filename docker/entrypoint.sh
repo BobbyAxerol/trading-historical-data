@@ -268,6 +268,25 @@ if [ "${PRIMUS_HMD_PHASE_E_VN30_CONTRACT_SOURCE_PROBE_APPROVED:-}" = "approved" 
   exec "$@"
 fi
 
+# Phase F is a separately owner-approved DNSE legacy-alias rebuild.  Its
+# source proof cannot publish Parquet, while its backfill cannot run until the
+# persisted proof is accepted by the collector itself.  Keep both argv vectors
+# literal so no broad DNSE collector invocation becomes implicitly approved.
+if [ "${PRIMUS_HMD_PHASE_F_VN30F1M_DNSE_PROBE_APPROVED:-}" = "approved" ] \
+  && [ "$*" = "python -m collectors.vn30f1m_dnse_phase_f --mode probe --symbols VN30F1M --probe-start 2025-01-06 --probe-end 2025-01-10 --json" ]; then
+  exec "$@"
+fi
+
+if [ "${PRIMUS_HMD_PHASE_F_VN30F1M_DNSE_BACKFILL_APPROVED:-}" = "approved" ] \
+  && [ "$*" = "python -m collectors.vn30f1m_dnse_phase_f --mode backfill --symbols VN30F1M --backfill-start 2025-01-01 --backfill-end 2026-08-18 --window-days 5 --require-probe --audit-phase-f --json" ]; then
+  exec "$@"
+fi
+
+if [ "${PRIMUS_HMD_PHASE_F_VN30F1M_CSV_BRIDGE_APPROVED:-}" = "approved" ] \
+  && [ "$*" = "python -m collectors.vn30f1m_csv_bridge_phase_f --raw-path /input/vn30f1m_raw_1m.csv --adjusted-path /input/vn30f1m_1m.csv --start 2018-01-02 --end 2024-12-31 --require-dnse-audit --json" ]; then
+  exec "$@"
+fi
+
 if [ "${PRIMUS_HMD_STAGED_CRYPTO_CORE_1M_APPROVED:-}" = "approved" ] \
   && [ "$*" = "python -m collectors.crypto_1m --mode live --symbols ETHUSDT,SOLUSDT,BNBUSDT,DOGEUSDT" ]; then
   exec "$@"

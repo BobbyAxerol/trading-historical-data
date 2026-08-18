@@ -1,0 +1,40 @@
+# Owner-approved Phase F DNSE legacy-alias rebuild.  This is deliberately
+# separate from the VNDIRECT continuous-alias service: it writes the raw
+# legacy ``vn/futures/1m`` layout used by VnFutures1m only after a source proof.
+schema_version: 1
+
+phase_f_approval:
+  status: approved
+  approved_by: BobbyAxerol
+  approved_at: "2026-08-18T00:00:00+00:00"
+  scope: "DNSE-signed VN30F1M legacy-alias source proof and bounded 1m rebuild for the 2025-01-01 through 2026-08-18 bridge, followed only after a passing DNSE audit by an owner-provided raw CSV bridge for 2018-01-02 through 2024-12-31. No old-VPS import, consumer release promotion, destructive cleanup, contract reconstruction, or Deribit call."
+  runtime_profile:
+    max_concurrent_historical_jobs: 1
+    cpus: 0.50
+    memory_mib: 768
+    pids: 128
+    restart: "no"
+  services:
+    phase-f-vn30f1m-dnse-probe:
+      dataset_id: vn_futures_1m_source_proof_only
+      command: ["python", "-m", "collectors.vn30f1m_dnse_phase_f", "--mode", "probe", "--symbols", "VN30F1M", "--probe-start", "2025-01-06", "--probe-end", "2025-01-10", "--json"]
+      sources:
+        - dnse_price_ohlc_signed_derivative_alias
+      validation: "One historical 1m window only; no Parquet write. Persist source/error/schema/OHLC/session evidence at state/audits/vn30f1m_dnse_phase_f_probe.json. An empty response or source error blocks the backfill."
+    phase-f-vn30f1m-dnse-backfill:
+      dataset_id: vn_futures_1m
+      command: ["python", "-m", "collectors.vn30f1m_dnse_phase_f", "--mode", "backfill", "--symbols", "VN30F1M", "--backfill-start", "2025-01-01", "--backfill-end", "2026-08-18", "--window-days", "5", "--require-probe", "--audit-phase-f", "--json"]
+      sources:
+        - dnse_price_ohlc_signed_derivative_alias
+      validation: "Sequential five-calendar-day windows, atomic month Parquet append/dedupe on (symbol,time), and strict source/schema/OHLC/numeric/negative/session audit. Any missing expected trading date blocks reader promotion; direct source gaps remain evidence and are never synthesized."
+    phase-f-vn30f1m-csv-bridge:
+      dataset_id: vn_futures_1m
+      command: ["python", "-m", "collectors.vn30f1m_csv_bridge_phase_f", "--raw-path", "/input/vn30f1m_raw_1m.csv", "--adjusted-path", "/input/vn30f1m_1m.csv", "--start", "2018-01-02", "--end", "2024-12-31", "--require-dnse-audit", "--json"]
+      sources:
+        - owner_provided_vn30f1m_raw_csv
+        - owner_provided_vn30f1m_adjusted_csv_evidence_only
+      validation: "Requires passing DNSE audit. Raw OHLCV only is normalized and atomically written; adjusted CSV is checksum/provenance evidence only. The bridge verifies raw stored row count before it may be considered for a later consumer release. It does not delete either input or promote the manifest."
+
+deribit:
+  status: disabled_by_owner
+  reason: "Explicitly excluded from this approval."

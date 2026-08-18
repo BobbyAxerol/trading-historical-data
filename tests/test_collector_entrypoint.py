@@ -251,6 +251,22 @@ PHASE_E_TAIL_COMMANDS = {
         "--overlap-minutes", "10", "--sleep", "60",
     ],
 }
+PHASE_F_COMMANDS = {
+    "PRIMUS_HMD_PHASE_F_VN30F1M_DNSE_PROBE_APPROVED": [
+        "python", "-m", "collectors.vn30f1m_dnse_phase_f", "--mode", "probe", "--symbols", "VN30F1M",
+        "--probe-start", "2025-01-06", "--probe-end", "2025-01-10", "--json",
+    ],
+    "PRIMUS_HMD_PHASE_F_VN30F1M_DNSE_BACKFILL_APPROVED": [
+        "python", "-m", "collectors.vn30f1m_dnse_phase_f", "--mode", "backfill", "--symbols", "VN30F1M",
+        "--backfill-start", "2025-01-01", "--backfill-end", "2026-08-18", "--window-days", "5",
+        "--require-probe", "--audit-phase-f", "--json",
+    ],
+    "PRIMUS_HMD_PHASE_F_VN30F1M_CSV_BRIDGE_APPROVED": [
+        "python", "-m", "collectors.vn30f1m_csv_bridge_phase_f", "--raw-path", "/input/vn30f1m_raw_1m.csv",
+        "--adjusted-path", "/input/vn30f1m_1m.csv", "--start", "2018-01-02", "--end", "2024-12-31",
+        "--require-dnse-audit", "--json",
+    ],
+}
 
 
 class TestCollectorEntrypoint(unittest.TestCase):
@@ -273,6 +289,7 @@ class TestCollectorEntrypoint(unittest.TestCase):
                 *STAGED_TAIL_COMMANDS,
                 *PHASE_E_COMMANDS,
                 *PHASE_E_TAIL_COMMANDS,
+                *PHASE_F_COMMANDS,
             ]:
                 env.pop(name, None)
             env.update(environment or {})
@@ -454,6 +471,19 @@ class TestCollectorEntrypoint(unittest.TestCase):
                 changed[-1] = "unexpected"
                 rejected = self.run_entrypoint(*changed, environment={approval_name: "approved"})
                 self.assertEqual(rejected.returncode, 64)
+
+    def test_phase_f_approvals_accept_only_the_reviewed_commands(self) -> None:
+        for approval_name, command in PHASE_F_COMMANDS.items():
+            with self.subTest(approval_name=approval_name):
+                permitted = self.run_entrypoint(*command, environment={approval_name: "approved"})
+                self.assertEqual(permitted.returncode, 0)
+                self.assertEqual(permitted.stdout, f"fake-python:{' '.join(command[1:])}\n")
+
+                rejected_extra = self.run_entrypoint(*command, "--unreviewed", environment={approval_name: "approved"})
+                self.assertEqual(rejected_extra.returncode, 64)
+
+                wrong_approval = self.run_entrypoint(*command, environment={PHASE_D_APPROVAL: "approved"})
+                self.assertEqual(wrong_approval.returncode, 64)
 
 
 if __name__ == "__main__":

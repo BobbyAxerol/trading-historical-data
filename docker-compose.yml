@@ -308,6 +308,67 @@ services:
       STATE_ROOT: /app/state
       LOG_ROOT: /app/logs
 
+  phase-f-vn30f1m-dnse-probe:
+    <<: *get-data-service
+    # DNSE alias proof is deliberately non-publishing.  The result decides
+    # whether the separately gated historical raw-futures rebuild may start.
+    profiles: ["phase-f"]
+    restart: "no"
+    pids_limit: 128
+    cpus: 0.50
+    mem_limit: 768m
+    command: ["python", "-m", "collectors.vn30f1m_dnse_phase_f", "--mode", "probe", "--symbols", "VN30F1M", "--probe-start", "2025-01-06", "--probe-end", "2025-01-10", "--json"]
+    environment:
+      <<: *collector-gate-environment
+      PRIMUS_HMD_PHASE_F_VN30F1M_DNSE_PROBE_APPROVED: ${PRIMUS_HMD_PHASE_F_VN30F1M_DNSE_PROBE_APPROVED:-}
+      TZ: Asia/Ho_Chi_Minh
+      DATA_ROOT: /app/storage
+      STATE_ROOT: /app/state
+      LOG_ROOT: /app/logs
+
+  phase-f-vn30f1m-dnse-backfill:
+    <<: *get-data-service
+    # One sequential 5-day-window job.  It requires durable proof evidence,
+    # keeps source gaps explicit, and never promotes a reader release itself.
+    profiles: ["phase-f"]
+    restart: "no"
+    pids_limit: 128
+    cpus: 0.50
+    mem_limit: 768m
+    command: ["python", "-m", "collectors.vn30f1m_dnse_phase_f", "--mode", "backfill", "--symbols", "VN30F1M", "--backfill-start", "2025-01-01", "--backfill-end", "2026-08-18", "--window-days", "5", "--require-probe", "--audit-phase-f", "--json"]
+    environment:
+      <<: *collector-gate-environment
+      PRIMUS_HMD_PHASE_F_VN30F1M_DNSE_BACKFILL_APPROVED: ${PRIMUS_HMD_PHASE_F_VN30F1M_DNSE_BACKFILL_APPROVED:-}
+      TZ: Asia/Ho_Chi_Minh
+      DATA_ROOT: /app/storage
+      STATE_ROOT: /app/state
+      LOG_ROOT: /app/logs
+
+  phase-f-vn30f1m-csv-bridge:
+    <<: *get-data-service
+    # Inputs are staged under the dedicated runtime root, never copied into an
+    # image or mounted from the source checkout.  The container sees them
+    # read-only and cannot delete either original input.
+    profiles: ["phase-f"]
+    restart: "no"
+    pids_limit: 128
+    cpus: 0.50
+    mem_limit: 768m
+    command: ["python", "-m", "collectors.vn30f1m_csv_bridge_phase_f", "--raw-path", "/input/vn30f1m_raw_1m.csv", "--adjusted-path", "/input/vn30f1m_1m.csv", "--start", "2018-01-02", "--end", "2024-12-31", "--require-dnse-audit", "--json"]
+    environment:
+      <<: *collector-gate-environment
+      PRIMUS_HMD_PHASE_F_VN30F1M_CSV_BRIDGE_APPROVED: ${PRIMUS_HMD_PHASE_F_VN30F1M_CSV_BRIDGE_APPROVED:-}
+      TZ: Asia/Ho_Chi_Minh
+      DATA_ROOT: /app/storage
+      STATE_ROOT: /app/state
+      LOG_ROOT: /app/logs
+    volumes:
+      - ${PRIMUS_HMD_RUNTIME_ROOT:?PRIMUS_HMD_RUNTIME_ROOT is required}/storage:/app/storage
+      - ${PRIMUS_HMD_RUNTIME_ROOT:?PRIMUS_HMD_RUNTIME_ROOT is required}/state:/app/state
+      - ${PRIMUS_HMD_RUNTIME_ROOT:?PRIMUS_HMD_RUNTIME_ROOT is required}/logs:/app/logs
+      - ${PRIMUS_HMD_RUNTIME_ROOT:?PRIMUS_HMD_RUNTIME_ROOT is required}/releases:/app/releases:ro
+      - ${PRIMUS_HMD_RUNTIME_ROOT:?PRIMUS_HMD_RUNTIME_ROOT is required}/state/migration_inputs:/input:ro
+
   binance-usdm-quarterly-1m:
     <<: *get-data-service
     # Explicit current contract and REST tail only: no archive listing or

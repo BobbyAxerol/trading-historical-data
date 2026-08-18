@@ -431,6 +431,37 @@ arbitrary collector or a Deribit request.
   Binance options, and the remaining unaccepted VN loader families remain
   fail-closed.
 
+## Active Job: VN30F1M DNSE Raw-Alias Rebuild And Historical Bridge (Phase F)
+
+Status: owner-approved implementation gate added on 2026-08-18; source call
+is blocked until the protected compose secret file contains both DNSE
+credentials. This does not replace the accepted VNDIRECT continuous-alias
+dataset.
+
+### Phase F direction
+
+The project now has two explicitly separate VN30F1M meanings:
+
+- `VnDerivativesContinuous1m`: existing VNDIRECT continuous alias, retained
+  unchanged under `storage/vn/futures/continuous/1m`.
+- `VnFutures1m`: DNSE provider alias raw OHLCV under
+  `storage/vn/futures/1m`, to be published only after Phase F proof,
+  backfill, CSV bridge, reconciliation, and a later reader-release promotion.
+
+Phase F uses three literal services declared in
+`configs/primus_hmd_phase_f.yml`:
+
+1. `phase-f-vn30f1m-dnse-probe`: one 2025 historical window, no Parquet write.
+2. `phase-f-vn30f1m-dnse-backfill`: sequential five-day DNSE windows from
+   2025-01-01 through 2026-08-18, then strict storage audit.
+3. `phase-f-vn30f1m-csv-bridge`: only after the DNSE audit passes, stage the
+   owner-provided inputs under the runtime root and import raw 2018-01-02 to
+   2024-12-31; adjusted values remain noncanonical evidence.
+
+The Phase F runner refuses concurrent Phase E/F historical jobs. A probe
+error, empty proof, source failure, invalid OHLCV, or a missing expected
+trading date blocks the next step. No source data is invented or filled.
+
 ## Active Job: VN30F1M VNDIRECT DChart Single-Source Upgrade
 
 Source guide: `VN30_FUTURES_FREE_DATA_UPGRADE_PLAN_V2.md`
@@ -442,14 +473,15 @@ Branch: `dev`
 
 ### Current Direction
 
-The source guide was updated to a single-source design. The active implementation now uses only:
+The source guide was updated to a single-source design for the continuous
+alias API. The active implementation for `VnDerivativesContinuous1m` uses only:
 
 - provider: `vndirect_dchart`;
 - symbol: `VN30F1M`;
 - endpoint: `https://dchart-api.vndirect.com.vn/dchart/history`;
 - continuous alias only, not individual contracts.
 
-The following providers are out of scope for this task:
+The following providers are out of scope for this continuous-alias task:
 
 - KBS;
 - DNSE;
@@ -457,7 +489,7 @@ The following providers are out of scope for this task:
 - TradingView;
 - XNO / `xnoapi`.
 
-Existing KBS/DNSE/Vietstock/TradingView code may remain as historical scaffolding, but it must not be used by the active DChart service or promoted by this task.
+Existing KBS/DNSE/Vietstock/TradingView code may remain as historical scaffolding, but it must not be used by the active DChart service or promoted by this task. Phase F is a separate raw-alias scope and does not alter that rule.
 
 ### Phase 1 — Provider And Hard-Gated Live Probe
 

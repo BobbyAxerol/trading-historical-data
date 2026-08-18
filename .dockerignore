@@ -24,3 +24,7 @@ dnse_test/
 vnstock_1m_data/
 option_data/
 
+# Owner-provided VN30F1M migration inputs are read only by the later dedicated
+# migration gate.  They must never be copied into a collector image.
+vn30f1m_1m.csv
+vn30f1m_raw_1m.csv
