@@ -262,9 +262,9 @@ PHASE_F_COMMANDS = {
         "--require-probe", "--audit-phase-f", "--json",
     ],
     "PRIMUS_HMD_PHASE_F_VN30F1M_CSV_BRIDGE_APPROVED": [
-        "python", "-m", "collectors.vn30f1m_csv_bridge_phase_f", "--raw-path", "/input/vn30f1m_raw_1m.csv",
-        "--adjusted-path", "/input/vn30f1m_1m.csv", "--start", "2018-01-02", "--end", "2024-12-31",
-        "--require-dnse-audit", "--json",
+        "python", "-m", "collectors.vn30f1m_csv_bridge_phase_f", "--base-raw-path", "/input/vn30f1m_raw_1m.csv",
+        "--extended-raw-path", "/input/vn30f1m_raw_1m_from_2024.csv", "--adjusted-path", "/input/vn30f1m_1m.csv",
+        "--start", "2018-01-02", "--end", "2026-08-18", "--json",
     ],
 }
 

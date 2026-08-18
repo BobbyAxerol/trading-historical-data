@@ -22,7 +22,7 @@ if [[ ! "$hmd_collector_uid" =~ ^[0-9]+$ || ! "$hmd_collector_gid" =~ ^[0-9]+$ ]
 fi
 
 sudo -n install -d -o "$hmd_collector_uid" -g "$hmd_collector_gid" -m 0750 "$hmd_runtime_dir"
-for hmd_name in vn30f1m_raw_1m.csv vn30f1m_1m.csv; do
+for hmd_name in vn30f1m_raw_1m.csv vn30f1m_raw_1m_from_2024.csv vn30f1m_1m.csv; do
   hmd_source="${hmd_repo_root}/${hmd_name}"
   hmd_target="${hmd_runtime_dir}/${hmd_name}"
   if [[ ! -f "$hmd_source" ]]; then

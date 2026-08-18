@@ -19,11 +19,11 @@ from collectors.common.calendar_vn import filter_trading_hours
 from collectors.common.env import load_environment
 from collectors.common.manifest import JsonState, Manifest, utc_now_iso
 from collectors.common.storage import PartitionedParquetStore
-from collectors.vn30f1m_dnse_phase_f import AUDIT_STATE as DNSE_AUDIT_STATE
 
 
 SYMBOL = "VN30F1M"
-RAW_SOURCE = "legacy_csv_raw"
+BASE_RAW_SOURCE = "legacy_csv_raw_2018"
+EXTENDED_RAW_SOURCE = "legacy_csv_raw_from_2024"
 BRIDGE_AUDIT_STATE = "audits/vn30f1m_csv_bridge_phase_f.json"
 CANONICAL_COLUMNS = ["time", "symbol", "open", "high", "low", "close", "volume", "source", "ingested_at"]
 
@@ -60,7 +60,7 @@ def _normalise_csv(path: Path, *, source: str, start: pd.Timestamp, end: pd.Time
     return work.sort_values("time").reset_index(drop=True)
 
 
-def _audit_raw(frame: pd.DataFrame) -> dict[str, Any]:
+def _audit_raw(frame: pd.DataFrame, *, allowed_sources: set[str]) -> dict[str, Any]:
     result: dict[str, Any] = {
         "rows": int(len(frame)),
         "duplicate_symbol_time_rows": int(frame.duplicated(["symbol", "time"], keep=False).sum()),
@@ -68,7 +68,7 @@ def _audit_raw(frame: pd.DataFrame) -> dict[str, Any]:
         "invalid_ohlc_rows": 0,
         "negative_volume_rows": int((frame["volume"] < 0).fillna(False).sum()),
         "wrong_symbol_rows": int((frame["symbol"].astype(str).str.upper() != SYMBOL).sum()),
-        "wrong_source_rows": int((frame["source"].astype(str) != RAW_SOURCE).sum()),
+        "wrong_source_rows": int((~frame["source"].astype(str).isin(allowed_sources)).sum()),
         "out_of_derivative_session_rows": 0,
         "first_time": str(frame["time"].min()) if not frame.empty else None,
         "last_time": str(frame["time"].max()) if not frame.empty else None,
@@ -116,29 +116,29 @@ def _adjusted_evidence(raw: pd.DataFrame, adjusted: pd.DataFrame) -> dict[str, A
     }
 
 
-def _require_dnse_audit() -> None:
-    audit = JsonState(DNSE_AUDIT_STATE).read()
-    if audit.get("status") != "pass" or str(audit.get("symbol", "")).upper() != SYMBOL:
-        raise RuntimeError("CSV bridge requires a passing Phase F DNSE storage audit")
-
-
 def bridge(
     *,
-    raw_path: Path,
+    base_raw_path: Path,
+    extended_raw_path: Path,
     adjusted_path: Path,
     start: str,
     end: str,
-    require_dnse_audit: bool,
 ) -> dict[str, Any]:
-    if require_dnse_audit:
-        _require_dnse_audit()
     start_ts = pd.Timestamp(start).normalize()
     end_ts = pd.Timestamp(end).normalize() + pd.Timedelta(days=1)
-    raw = _normalise_csv(raw_path, source=RAW_SOURCE, start=start_ts, end=end_ts)
+    base_raw = _normalise_csv(base_raw_path, source=BASE_RAW_SOURCE, start=start_ts, end=end_ts)
+    extended_raw = _normalise_csv(extended_raw_path, source=EXTENDED_RAW_SOURCE, start=start_ts, end=end_ts)
     adjusted = _normalise_csv(adjusted_path, source="adjusted_reference", start=start_ts, end=end_ts)
-    raw_audit = _audit_raw(raw)
+    base_audit = _audit_raw(base_raw, allowed_sources={BASE_RAW_SOURCE})
+    extended_audit = _audit_raw(extended_raw, allowed_sources={EXTENDED_RAW_SOURCE})
+    overlap = base_raw.merge(extended_raw, on="time", suffixes=("_base", "_extended"))
+    conflict_counts = {column: int((overlap[f"{column}_base"] != overlap[f"{column}_extended"]).sum()) for column in ("open", "high", "low", "close", "volume")}
+    # Historical raw file is the stable authority when timestamps overlap.
+    # The newer export fills only missing timestamps and extends through today.
+    raw = pd.concat([extended_raw, base_raw], ignore_index=True).drop_duplicates(["symbol", "time"], keep="last").sort_values("time").reset_index(drop=True)
+    raw_audit = _audit_raw(raw, allowed_sources={BASE_RAW_SOURCE, EXTENDED_RAW_SOURCE})
     if raw_audit["status"] != "pass":
-        raise RuntimeError(f"raw VN30F1M CSV failed structural audit: {raw_audit}")
+        raise RuntimeError(f"VN30F1M CSV inputs failed structural audit: {raw_audit}")
 
     store = PartitionedParquetStore(["vn", "futures", "1m"], partition="month")
     result = store.append(
@@ -158,19 +158,26 @@ def bridge(
     )
     stored["time"] = pd.to_datetime(stored["time"], errors="coerce")
     stored_segment = stored[(stored["time"] >= start_ts) & (stored["time"] < end_ts)]
-    stored_raw = stored_segment[stored_segment["source"] == RAW_SOURCE]
+    stored_raw = stored_segment[stored_segment["source"].isin({BASE_RAW_SOURCE, EXTENDED_RAW_SOURCE})]
     payload: dict[str, Any] = {
         "status": "pass" if len(stored_raw) == len(raw) else "blocked",
         "dataset_id": "vn_futures_1m",
         "symbol": SYMBOL,
-        "raw_path_name": raw_path.name,
-        "raw_sha256": _sha256(raw_path),
+        "base_raw_path_name": base_raw_path.name,
+        "base_raw_sha256": _sha256(base_raw_path),
+        "extended_raw_path_name": extended_raw_path.name,
+        "extended_raw_sha256": _sha256(extended_raw_path),
         "adjusted_path_name": adjusted_path.name,
         "adjusted_sha256": _sha256(adjusted_path),
         "requested_start": start_ts.isoformat(),
         "requested_end": end_ts.isoformat(),
         "raw_audit": raw_audit,
-        "adjusted_evidence": _adjusted_evidence(raw, adjusted),
+        "base_raw_audit": base_audit,
+        "extended_raw_audit": extended_audit,
+        "merge_policy": "base_raw_wins_on_overlap; extended_raw_fills_missing_and_extends",
+        "overlap_rows": int(len(overlap)),
+        "overlap_conflict_counts": conflict_counts,
+        "adjusted_evidence": _adjusted_evidence(base_raw, adjusted),
         "rows_written": int(result["rows_written"]),
         "stored_raw_rows": int(len(stored_raw)),
         "updated_at": utc_now_iso(),
@@ -180,7 +187,7 @@ def bridge(
         SYMBOL,
         latest_time=str(result.get("latest_time")),
         last_success_at=utc_now_iso(),
-        source="dnse_and_legacy_csv_raw",
+        source="legacy_csv_raw_2018_and_from_2024",
         csv_bridge_status=payload["status"],
         last_error=None if payload["status"] == "pass" else "stored raw row count does not equal audited input row count",
     )
@@ -190,19 +197,19 @@ def bridge(
 def main() -> None:
     load_environment()
     parser = argparse.ArgumentParser(description="Phase F raw VN30F1M CSV bridge")
-    parser.add_argument("--raw-path", required=True)
+    parser.add_argument("--base-raw-path", required=True)
+    parser.add_argument("--extended-raw-path", required=True)
     parser.add_argument("--adjusted-path", required=True)
     parser.add_argument("--start", default="2018-01-02")
-    parser.add_argument("--end", default="2024-12-31")
-    parser.add_argument("--require-dnse-audit", action="store_true")
+    parser.add_argument("--end", default="2026-08-18")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
     payload = bridge(
-        raw_path=Path(args.raw_path),
+        base_raw_path=Path(args.base_raw_path),
+        extended_raw_path=Path(args.extended_raw_path),
         adjusted_path=Path(args.adjusted_path),
         start=args.start,
         end=args.end,
-        require_dnse_audit=args.require_dnse_audit,
     )
     if args.json:
         print(json.dumps(payload, sort_keys=True, default=str))

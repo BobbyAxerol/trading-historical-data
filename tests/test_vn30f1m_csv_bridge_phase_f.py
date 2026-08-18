@@ -7,9 +7,8 @@ from pathlib import Path
 
 import pandas as pd
 
-from collectors.common.manifest import JsonState
 from collectors.vn30f1m_csv_bridge_phase_f import BRIDGE_AUDIT_STATE, SYMBOL, bridge
-from collectors.vn30f1m_dnse_phase_f import AUDIT_STATE as DNSE_AUDIT_STATE
+from collectors.common.manifest import JsonState
 
 
 class TestVN30F1MCSVBridgePhaseF(unittest.TestCase):
@@ -21,6 +20,7 @@ class TestVN30F1MCSVBridgePhaseF(unittest.TestCase):
         os.environ["STATE_ROOT"] = str(self.root / "state")
         os.environ["LOG_ROOT"] = str(self.root / "logs")
         self.raw = self.root / "vn30f1m_raw_1m.csv"
+        self.extended = self.root / "vn30f1m_raw_1m_from_2024.csv"
         self.adjusted = self.root / "vn30f1m_1m.csv"
         raw = pd.DataFrame(
             {
@@ -38,6 +38,10 @@ class TestVN30F1MCSVBridgePhaseF(unittest.TestCase):
         adjusted = raw.copy()
         adjusted["close"] = [1100.5, 1101.0]
         adjusted.to_csv(self.adjusted, index=False)
+        extended = raw.iloc[[1]].copy()
+        extended.loc[:, "close"] = 1201.1
+        extended = pd.concat([extended, raw.iloc[[0]].assign(datetime="2024-05-02 09:00:00")], ignore_index=True)
+        extended.to_csv(self.extended, index=False)
 
     def tearDown(self) -> None:
         for name, value in self.previous.items():
@@ -47,31 +51,24 @@ class TestVN30F1MCSVBridgePhaseF(unittest.TestCase):
                 os.environ[name] = value
         self.temp.cleanup()
 
-    def test_bridge_requires_passing_dnse_audit(self) -> None:
-        with self.assertRaisesRegex(RuntimeError, "DNSE storage audit"):
-            bridge(
-                raw_path=self.raw,
-                adjusted_path=self.adjusted,
-                start="2024-01-02",
-                end="2024-01-02",
-                require_dnse_audit=True,
-            )
-
-    def test_bridge_writes_only_raw_and_keeps_adjusted_as_evidence(self) -> None:
-        JsonState(DNSE_AUDIT_STATE).write({"status": "pass", "symbol": SYMBOL})
+    def test_bridge_keeps_base_raw_on_overlap_and_extends_history(self) -> None:
         result = bridge(
-            raw_path=self.raw,
+            base_raw_path=self.raw,
+            extended_raw_path=self.extended,
             adjusted_path=self.adjusted,
             start="2024-01-02",
-            end="2024-01-02",
-            require_dnse_audit=True,
+            end="2024-05-02",
         )
         self.assertEqual(result["status"], "pass")
-        self.assertEqual(result["stored_raw_rows"], 2)
+        self.assertEqual(result["stored_raw_rows"], 3)
+        self.assertEqual(result["overlap_rows"], 1)
+        self.assertEqual(result["overlap_conflict_counts"]["close"], 1)
         self.assertEqual(result["adjusted_evidence"]["shared_rows_with_any_ohlc_difference"], 2)
         part = self.root / "storage" / "vn" / "futures" / "1m" / "symbol=VN30F1M" / "year=2024" / "month=01" / "part.parquet"
         stored = pd.read_parquet(part)
-        self.assertEqual(set(stored["source"]), {"legacy_csv_raw"})
+        self.assertEqual(set(stored["source"]), {"legacy_csv_raw_2018"})
+        later = self.root / "storage" / "vn" / "futures" / "1m" / "symbol=VN30F1M" / "year=2024" / "month=05" / "part.parquet"
+        self.assertEqual(set(pd.read_parquet(later)["source"]), {"legacy_csv_raw_from_2024"})
         self.assertNotIn("value", stored.columns)
         self.assertEqual(JsonState(BRIDGE_AUDIT_STATE).read()["status"], "pass")
 

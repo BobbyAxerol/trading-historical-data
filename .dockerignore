@@ -28,3 +28,4 @@ option_data/
 # migration gate.  They must never be copied into a collector image.
 vn30f1m_1m.csv
 vn30f1m_raw_1m.csv
+vn30f1m_raw_1m_from_2024.csv
