@@ -287,6 +287,16 @@ if [ "${PRIMUS_HMD_PHASE_F_VN30F1M_CSV_BRIDGE_APPROVED:-}" = "approved" ] \
   exec "$@"
 fi
 
+if [ "${PRIMUS_HMD_PHASE_G_BINANCE_FUTURES_METRICS_5M_ETHUSDT_APPROVED:-}" = "approved" ] \
+  && [ "$*" = "python -m collectors.binance_futures_metrics_5m --mode once --symbols ETHUSDT --start-date 2020-01-01 --max-workers 2 --no-legacy --rest-tail-days 7 --rest-overlap-hours 24 --audit-phase-g" ]; then
+  exec "$@"
+fi
+
+if [ "${PRIMUS_HMD_STAGED_BINANCE_FUTURES_METRICS_5M_ETHUSDT_APPROVED:-}" = "approved" ] \
+  && [ "$*" = "python -m collectors.binance_futures_metrics_5m --mode live --symbols ETHUSDT --no-legacy --no-vision --rest-tail-days 1 --rest-overlap-hours 1 --no-validate --sleep 21600" ]; then
+  exec "$@"
+fi
+
 if [ "${PRIMUS_HMD_STAGED_CRYPTO_CORE_1M_APPROVED:-}" = "approved" ] \
   && [ "$*" = "python -m collectors.crypto_1m --mode live --symbols ETHUSDT,SOLUSDT,BNBUSDT,DOGEUSDT" ]; then
   exec "$@"

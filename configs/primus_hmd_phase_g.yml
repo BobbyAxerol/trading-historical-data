@@ -1,0 +1,31 @@
+# Owner-approved ETHUSDT futures-metrics expansion, intentionally identical
+# in source and audit discipline to the completed BTCUSDT Phase D rebuild.
+schema_version: 1
+
+phase_g_approval:
+  status: approved
+  approved_by: BobbyAxerol
+  approved_at: "2026-08-19T00:00:00+00:00"
+  scope: "ETHUSDT USD-M perpetual futures metrics 5m historical rebuild from 2020-01-01, then an independent bounded REST tail. No other symbol expansion, no options/Deribit request, no destructive operation."
+  runtime_profile:
+    max_concurrent_historical_jobs: 1
+    cpus: 1.0
+    memory_mib: 1536
+    pids: 256
+    restart: "no"
+  services:
+    phase-g-binance-futures-metrics-5m-ethusdt:
+      dataset_id: crypto_binance_futures_metrics_5m
+      command: ["python", "-m", "collectors.binance_futures_metrics_5m", "--mode", "once", "--symbols", "ETHUSDT", "--start-date", "2020-01-01", "--max-workers", "2", "--no-legacy", "--rest-tail-days", "7", "--rest-overlap-hours", "24", "--audit-phase-g"]
+      sources:
+        - binance_vision_usdm_daily_metrics
+        - binance_futures_data_rest_tail
+      validation: "Same streaming per-month schema/5-minute-bucket/numeric/negative/duplicate/continuity/partial-day/source-provenance audit as BTCUSDT. Direct source gaps remain documented and never synthetic."
+  staged_live_tails:
+    binance-futures-metrics-5m-ethusdt:
+      dataset_id: crypto_binance_futures_metrics_5m
+      command: ["python", "-m", "collectors.binance_futures_metrics_5m", "--mode", "live", "--symbols", "ETHUSDT", "--no-legacy", "--no-vision", "--rest-tail-days", "1", "--rest-overlap-hours", "1", "--no-validate", "--sleep", "21600"]
+
+deribit:
+  status: disabled_by_owner
+  reason: "Explicitly excluded from this approval."

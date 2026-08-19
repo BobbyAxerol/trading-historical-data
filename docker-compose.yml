@@ -369,6 +369,37 @@ services:
       - ${PRIMUS_HMD_RUNTIME_ROOT:?PRIMUS_HMD_RUNTIME_ROOT is required}/releases:/app/releases:ro
       - ${PRIMUS_HMD_RUNTIME_ROOT:?PRIMUS_HMD_RUNTIME_ROOT is required}/state/migration_inputs:/input:ro
 
+  phase-g-binance-futures-metrics-5m-ethusdt:
+    <<: *get-data-service
+    profiles: ["phase-g"]
+    restart: "no"
+    pids_limit: 256
+    cpus: 1.0
+    mem_limit: 1536m
+    command: ["python", "-m", "collectors.binance_futures_metrics_5m", "--mode", "once", "--symbols", "ETHUSDT", "--start-date", "2020-01-01", "--max-workers", "2", "--no-legacy", "--rest-tail-days", "7", "--rest-overlap-hours", "24", "--audit-phase-g"]
+    environment:
+      <<: *collector-gate-environment
+      PRIMUS_HMD_PHASE_G_BINANCE_FUTURES_METRICS_5M_ETHUSDT_APPROVED: ${PRIMUS_HMD_PHASE_G_BINANCE_FUTURES_METRICS_5M_ETHUSDT_APPROVED:-}
+      TZ: UTC
+      DATA_ROOT: /app/storage
+      STATE_ROOT: /app/state
+      LOG_ROOT: /app/logs
+
+  binance-futures-metrics-5m-ethusdt:
+    <<: *get-data-service
+    profiles: ["phase-g"]
+    pids_limit: 128
+    cpus: 0.50
+    mem_limit: 512m
+    command: ["python", "-m", "collectors.binance_futures_metrics_5m", "--mode", "live", "--symbols", "ETHUSDT", "--no-legacy", "--no-vision", "--rest-tail-days", "1", "--rest-overlap-hours", "1", "--no-validate", "--sleep", "21600"]
+    environment:
+      <<: *collector-gate-environment
+      PRIMUS_HMD_STAGED_BINANCE_FUTURES_METRICS_5M_ETHUSDT_APPROVED: ${PRIMUS_HMD_STAGED_BINANCE_FUTURES_METRICS_5M_ETHUSDT_APPROVED:-}
+      TZ: UTC
+      DATA_ROOT: /app/storage
+      STATE_ROOT: /app/state
+      LOG_ROOT: /app/logs
+
   binance-usdm-quarterly-1m:
     <<: *get-data-service
     # Explicit current contract and REST tail only: no archive listing or

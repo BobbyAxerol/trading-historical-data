@@ -993,12 +993,13 @@ def sync_all(args: argparse.Namespace, logger, *, run_audit: bool = True) -> dic
             if audit:
                 audits[symbol] = audit
                 JsonState(f"audits/{DATASET}_{symbol}.json").write({"dataset": DATASET, "symbol": symbol, "updated_at": utc_now_iso(), **audit})
-                if args.audit_phase_d:
-                    JsonState(f"audits/{DATASET}_{symbol}_phase_d.json").write(
+                audit_phase = "phase_d" if args.audit_phase_d else "phase_g" if args.audit_phase_g else None
+                if audit_phase:
+                    JsonState(f"audits/{DATASET}_{symbol}_{audit_phase}.json").write(
                         {
                             "dataset": DATASET,
                             "symbol": symbol,
-                            "service": "phase_d_binance_futures_metrics_5m",
+                            "service": f"{audit_phase}_binance_futures_metrics_5m",
                             "validated_at": utc_now_iso(),
                             **audit,
                         }
@@ -1010,11 +1011,12 @@ def sync_all(args: argparse.Namespace, logger, *, run_audit: bool = True) -> dic
             manifest.update_symbol(symbol, last_error=str(exc), last_failed_at=utc_now_iso())
             logger.exception("%s futures metrics sync failed", symbol)
             heartbeat.beat(status="error", symbol=symbol, error=str(exc))
-            if args.audit_phase_d:
+            if args.audit_phase_d or args.audit_phase_g:
                 phase_d_failures.append(f"{symbol}: {type(exc).__name__}: {exc}")
 
-    if args.audit_phase_d and phase_d_failures:
-        message = "Phase D Binance futures metrics validation failed: " + "; ".join(phase_d_failures)
+    if (args.audit_phase_d or args.audit_phase_g) and phase_d_failures:
+        phase_name = "Phase D" if args.audit_phase_d else "Phase G"
+        message = f"{phase_name} Binance futures metrics validation failed: " + "; ".join(phase_d_failures)
         heartbeat.beat(status="error", error=message)
         raise RuntimeError(message)
 
@@ -1037,6 +1039,7 @@ def main() -> None:
     parser.add_argument("--rest-overlap-hours", type=int, default=None)
     parser.add_argument("--no-validate", action="store_true")
     parser.add_argument("--audit-phase-d", action="store_true", help="Write a durable, fail-closed Phase D audit for the reviewed source scope.")
+    parser.add_argument("--audit-phase-g", action="store_true", help="Write a durable, fail-closed Phase G audit for the ETHUSDT expansion scope.")
     args = parser.parse_args()
 
     config = load_yaml("symbols.binance_futures_metrics.yml")
